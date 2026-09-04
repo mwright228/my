@@ -25,7 +25,7 @@ release; the upstream project does not publish an armhf binary.
 
 ## 🎯 Features & Architecture
 
-- **HAProxy L4 SNI Router:** Listens on port 443 with zero decryption. Directs Apple TLS handshakes straight to Xray Reality while routing carrier bug-host traffic into Nginx.
+- **HAProxy L4 SNI Router:** Listens on port 443 with zero decryption. Each configured Reality front SNI (default `www.apple.com`, changeable per carrier) is routed straight to Xray Reality; every other SNI — your domain, carrier bug-hosts, mismatched hosts — falls through to Nginx.
 - **Universal Bug-Host Multiplexer:** Terminates TLS on loopback (`127.0.0.1:20443`) via Nginx, accepting connections regardless of custom carrier SNI mismatches.
 - **Multi-Protocol Core (Xray-core):** Full support for VLESS-WebSocket, VLESS-HTTPUpgrade, VMess, Trojan, and XTLS-Vision Reality.
 - **Configurable Reality fronts:** Reality camouflages against any real HTTPS site, not just Apple. Add/remove SNI fronts (whatever your SIM carriers allow) with `reality-fronts` or menu option `10`; each front gets its own inbound and HAProxy route, and `link-gen` prints one Reality link per front.
@@ -37,7 +37,7 @@ release; the upstream project does not publish an armhf binary.
 - **SSH over WebSocket:** Restricted wstunnel backend for a generated secret path on ports 80 and 443, forwarding only to Dropbear. Use the generated `ws://` or `wss://` command from `link-gen`.
 - **Kernel-Level Performance:** Enables IPv4 forwarding and applies high file-descriptor limits to high-throughput services.
 - **Emergency SlowDNS Tunnel:** Built-in `dnstt` server running on port 53. DNS NS delegation for `dns.<your-domain>` is still required.
-- **Automated Self-Healing:** A weekly systemd timer renews Let's Encrypt certificates, updates GeoIP/GeoSite databases, and auto-restarts failed daemons.
+- **Automated Self-Healing:** A weekly systemd timer renews Let's Encrypt certificates (restarting Hysteria/ZivPN on real renewals so they never serve an expired cert), updates GeoIP/GeoSite databases, and revives any managed daemon that stopped running (HAProxy, Nginx, Xray, Dropbear, Squid, wstunnel, Hysteria, ZivPN, DNSTT, OpenVPN, WireGuard, BadVPN).
 - **Adaptive transport monitor:** Periodically measures installed transport reachability and records a recommendation in `/var/lib/mubx/adaptive-recommendation`.
 - **Mobile diagnostics:** `mubx-diagnose` reports public IPs, latency/loss, DNS, TCP reachability, path-MTU probes, kernel congestion control, and service health.
 - **Congestion tuning:** `mubx-tune` enables BBR and `fq` only when supported and applies conservative TCP keepalive/socket-buffer defaults.
@@ -55,7 +55,7 @@ release; the upstream project does not publish an armhf binary.
 | **109 / 2222** | TCP | SSH | Dropbear | Core SSH Tunnel |
 | **10001** | TCP | WebSocket | Xray-core | VLESS-WS Inbound |
 | **10004** | TCP | HTTPUpgrade | Xray-core | High-Throughput Streaming |
-| **10443** | TCP | Vision | Xray-core | VLESS Reality (Anti-DPI) |
+| **10443+** | TCP | Vision | Xray-core | VLESS Reality inbound (one per front) |
 | **1194 / 2200** | TCP / UDP | OpenVPN | OpenVPN | Dual-Stack VPN Tunnel |
 | **51820** | UDP | WireGuard | Kernel | WireGuard L3 Interface |
 | **53** | UDP | DNS | DNSTT | SlowDNS Sub-Resolver |
@@ -73,8 +73,16 @@ Launch the control panel anytime from your terminal by typing:
 menu
 ```
 
+Menu options cover domain & certificate (`1`), client links (`2`), user
+management (`4`/`5`), restarts (`6`), diagnostics (`8`) and Reality SNI
+fronts (`10`, or run `reality-fronts` directly for `add`/`remove`/`set`).
+
 For mobile-network troubleshooting, run:
 
 ```bash
 mubx-diagnose
 ```
+
+The weekly maintenance job runs `mubx-cron` (GeoIP/GeoSite + certificate
+renewal + service self-heal).
+

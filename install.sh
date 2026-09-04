@@ -354,8 +354,11 @@ chmod 0755 /usr/local/bin/xray
 # if this build does not.
 install -d -m 0755 /usr/local/share/xray
 for geo in geoip.dat geosite.dat; do
-  if unzip -Z1 "$download_root/xray.zip" | grep -qx "$geo"; then
-    unzip -p "$download_root/xray.zip" "$geo" > "/usr/local/share/xray/$geo"
+  # Locate the member wherever the zip puts it (some builds nest files in a
+  # per-architecture directory) and extract it if present.
+  member="$(unzip -Z1 "$download_root/xray.zip" | grep -E "(^|/)$geo$" | head -n 1 || true)"
+  if [ -n "$member" ]; then
+    unzip -p "$download_root/xray.zip" "$member" > "/usr/local/share/xray/$geo"
     chmod 0644 "/usr/local/share/xray/$geo"
   fi
 done
@@ -666,6 +669,8 @@ run systemctl enable --now mubx-adaptive.timer
 if command -v fail2ban-client >/dev/null 2>&1; then
   install -D -m 0644 configs/fail2ban-mubx.conf /etc/fail2ban/jail.d/mubx.conf
   systemctl enable --now fail2ban || true
+  fail2ban-client status dropbear >/dev/null 2>&1 ||
+    echo "[!] fail2ban 'dropbear' jail did not activate; inspect journalctl -u fail2ban." >&2
 fi
 
 install_success=1
