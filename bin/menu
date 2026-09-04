@@ -41,6 +41,7 @@ draw() {
   opt 8  "Run network diagnostics"
   opt 9  "Show transport recommendation"
   opt 10 "Reality SNI fronts"
+  opt 11 "Users & traffic"
   opt 0  "Exit"
   mubx_rule
 }
@@ -50,7 +51,9 @@ while true; do
   read -r -p "  Choose: " opt || exit 0
   case "$opt" in
     1) /usr/local/bin/set-domain ;;
-    2) read -r -p "  Bug-host [${DOMAIN:-}]: " b; /usr/local/bin/link-gen "${b:-$DOMAIN}" ;;
+    2) read -r -p "  Bug-host [${DOMAIN:-}]: " b
+       read -r -p "  User [admin]: " mu
+       /usr/local/bin/link-gen "${b:-$DOMAIN}" "${mu:-admin}" ;;
     3) cat /etc/openvpn/client/mubx-client-tcp.ovpn 2>/dev/null || echo "OpenVPN client config not found" ;;
     4) /usr/local/bin/add-user ;;
     5) /usr/local/bin/delete-user ;;
@@ -63,6 +66,7 @@ while true; do
     8) /usr/local/bin/mubx-diagnose ;;
     9) cat /var/lib/mubx/adaptive-recommendation 2>/dev/null || echo "No recommendation yet" ;;
     10) /usr/local/bin/reality-fronts ;;
+    11) /usr/local/bin/mubx-users ;;
     0|q|Q) exit 0 ;;
     *) echo "  Invalid choice: $opt"; sleep 1; continue ;;
   esac

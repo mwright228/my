@@ -573,9 +573,11 @@ load_secrets
 sed -i "s|__SSH_WS_PATH__|$SSH_WS_PATH|g" /etc/nginx/nginx.conf /etc/systemd/system/wstunnel.service
 sed -i "s|__DOMAIN__|$DOMAIN|g" /etc/nginx/nginx.conf /etc/systemd/system/dnstt.service
 sed -i "s|__DOMAIN__|$DOMAIN|g; s|__HY2_PASS__|$HY2_PASS|g" /etc/hysteria/config.yaml
-# Generate the Xray config (one Reality inbound per configured SNI front)
-# and the HAProxy SNI routing from the shared renderers.
+# Generate the Xray config (one Reality inbound per configured SNI front,
+# plus a per-user client identity for every entry in the users store) and
+# the HAProxy SNI routing from the shared renderers.
 source ./lib/reality-build.sh
+mubx_users_seed
 mubx_xray_render configs/xray.json configs/reality-inbound.json \
   /usr/local/etc/xray/config.json
 mubx_haproxy_render configs/haproxy.cfg /etc/haproxy/haproxy.cfg

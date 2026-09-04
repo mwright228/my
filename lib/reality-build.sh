@@ -19,6 +19,63 @@ REALITY_MARKER_BACKENDS='#MUBX_REALITY_BACKENDS#'
 REALITY_BASE_PORT=10443
 REALITY_MAX_FRONTS=12
 
+# Multi-user store. Overridable (MUBX_USERS_FILE) so tests can render
+# against a scratch copy. Each entry: {name, uuid, added, expiry}.
+MUBX_USERS_FILE="${MUBX_USERS_FILE:-/etc/mubx/users.json}"
+
+mubx_users_count() { # $1 store file -> number of users (0 on any error)
+  jq -r 'length' "$1" 2>/dev/null || printf '0\n'
+}
+
+# Idempotent: seed the store with the legacy single identity ("admin") so
+# pre-existing client links keep working after an upgrade.
+mubx_users_seed() {
+  [ -n "${UUID:-}" ] || return 0
+  if [ ! -f "$MUBX_USERS_FILE" ]; then
+    install -d -m 0700 "$(dirname "$MUBX_USERS_FILE")"
+    printf '[{"name":"admin","uuid":"%s","added":"%s","expiry":""}]\n' \
+      "$UUID" "$(date -u '+%Y-%m-%d')" > "$MUBX_USERS_FILE"
+    chmod 0600 "$MUBX_USERS_FILE"
+  fi
+}
+
+# Overlay the per-user client identities onto a rendered Xray config and
+# enable the stats API (policy + dokodemo api inbound + routing) so traffic
+# can be queried per user email with `xray api statsquery`. When the store
+# is absent or empty the config is left in the legacy single-identity shape.
+mubx_users_apply() { # $1 rendered config file
+  local users_json n dom
+  [ -f "$MUBX_USERS_FILE" ] || return 0
+  users_json="$(jq -c '[.[] | {name: (.name // ""), uuid: (.uuid // "")} | select(.uuid != "")]' "$MUBX_USERS_FILE" 2>/dev/null || true)"
+  n="$(mubx_users_count "$MUBX_USERS_FILE")"
+  [ "$n" -ge 1 ] || return 0
+  dom="${DOMAIN:-mubx}"
+  jq --argjson users "$users_json" --arg dom "$dom" '
+    .inbounds |= map(
+      if (.settings.clients? == null) then .
+      else
+        (.streamSettings.realitySettings? != null) as $reality |
+        .settings.clients = (
+          if .protocol == "trojan" then
+            [ $users[] | {password: .uuid, email: (.name + "@" + $dom)} ]
+          elif .protocol == "vmess" then
+            [ $users[] | {id: .uuid, alterId: 0, email: (.name + "@" + $dom)} ]
+          else
+            [ $users[] |
+              {id: .uuid, email: (.name + "@" + $dom)} +
+              (if $reality then {flow: "xtls-rprx-vision"} else {} end)
+            ]
+          end
+        )
+      end
+    )
+    | .api = {tag: "api", services: ["HandlerService", "StatsService"]}
+    | .policy = {levels: {"0": {statsUserUplink: true, statsUserDownlink: true}}}
+    | .inbounds += [{tag: "api", listen: "127.0.0.1", port: 10085, protocol: "dokodemo-door", settings: {address: "127.0.0.1", network: "tcp"}}]
+    | .routing = {rules: [{type: "field", inboundTag: ["api"], outboundTag: "direct"}]}
+  ' "$1" > "$1.mubx" && mv -f "$1.mubx" "$1"
+}
+
 # Parse a space separated list into the global FRONTS array.
 reality_fronts() { # $1 optional raw list (default: $REALITY_FRONTS or apple)
   local raw="${1:-${REALITY_FRONTS:-www.apple.com}}"
@@ -109,8 +166,13 @@ mubx_xray_render() { # $1 base_template  $2 inbound_template  $3 out
       || { rm -f "$tmpbase"; return 1; }
     i=$((i + 1))
   done
-  jq --argjson add "$extra" '.inbounds += $add' "$tmpbase" > "$out"
+  jq --argjson add "$extra" '.inbounds += $add' "$tmpbase" > "$out" || {
+    rm -f "$tmpbase"
+    return 1
+  }
   rm -f "$tmpbase"
+  # Multi-user overlay (per-user identities + stats API) when a store exists.
+  mubx_users_apply "$out" || return 1
 }
 
 # Render /etc/haproxy/haproxy.cfg: expand the two markers in the template

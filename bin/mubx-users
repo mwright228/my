@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# Manage per-user Xray identities on this server.
+#
+# Every user in the store gets their own UUID on every transport inbound
+# (VLESS-WS, VLESS-HTTPUpgrade, XHTTP, VMess, Trojan and Reality). Removing
+# a user revokes just that identity; the rest keep working. Xray's stats API
+# is enabled when the store exists, so per-user traffic can be read back.
+#
+# The store lives in /etc/mubx/users.json (override with MUBX_USERS_FILE).
+# The first entry ("admin") carries the legacy UUID from install, so older
+# shared client links keep working after an upgrade.
+#
+# Usage:
+#   mubx-users                 interactive menu
+#   mubx-users list
+#   mubx-users add <name> [days]
+#   mubx-users remove <name>
+#   mubx-users usage [name]    per-user traffic from the Xray stats API
+set -Eeuo pipefail
+
+[ "$(id -u)" -eq 0 ] || { echo "[!] Run mubx-users as root." >&2; exit 1; }
+
+source /usr/local/lib/mubx/common.sh
+source /usr/local/lib/mubx/reality-build.sh
+load_mubx_env
+
+STORE="${MUBX_USERS_FILE:-/etc/mubx/users.json}"
+TPL_DIR="$(cat /etc/mubx/install-root 2>/dev/null || true)"
+[ -d "$TPL_DIR/configs" ] || {
+  echo "[!] MUB-X templates not found under $TPL_DIR; re-run install.sh first." >&2
+  exit 1
+}
+XRAY_CFG=/usr/local/etc/xray/config.json
+
+store_require() {
+  if [ ! -f "$STORE" ]; then
+    echo "[!] No user store at $STORE; re-run install.sh to seed it." >&2
+    exit 1
+  fi
+}
+
+# Regenerate the Xray config from the current store and reload Xray.
+# Config is validated with `xray run -test` before it replaces the live one.
+reload_xray() {
+  local tmp
+  tmp="$(mktemp)"
+  if ! mubx_xray_render "$TPL_DIR/configs/xray.json" \
+      "$TPL_DIR/configs/reality-inbound.json" "$tmp"; then
+    echo "[!] Failed to render the Xray config." >&2
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! xray run -test -config "$tmp"; then
+    echo "[!] New Xray config failed validation; nothing was changed." >&2
+    rm -f "$tmp"
+    return 1
+  fi
+  cp -a "$XRAY_CFG" "$tmp.old"
+  cp -a "$tmp" "$XRAY_CFG"
+  chmod 0600 "$XRAY_CFG"
+  if ! systemctl restart xray || ! systemctl is-active --quiet xray; then
+    echo "[!] Xray restart failed; rolling back the config." >&2
+    cp -a "$tmp.old" "$XRAY_CFG"
+    systemctl restart xray || true
+    rm -f "$tmp" "$tmp.old"
+    return 1
+  fi
+  rm -f "$tmp" "$tmp.old"
+}
+
+name_ok() { [[ "$1" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]]; }
+user_exists() { [ "$(jq -r --arg n "$1" '[.[] | select(.name == $n)] | length' "$STORE" 2>/dev/null || printf 0)" -gt 0 ]; }
+
+store_write_backup() { # $1 backup path
+  cp -a "$STORE" "$1"
+}
+
+cmd_list() {
+  store_require
+  if [ "$(mubx_users_count "$STORE")" -eq 0 ]; then
+    echo "  no users configured"
+    return
+  fi
+  printf '  %-16s %-38s %-12s %s\n' "name" "uuid" "added" "expiry"
+  jq -r '.[] | [.name, .uuid, (.added // ""), (.expiry // "")] | @tsv' "$STORE" |
+    while IFS=$'\t' read -r n u a e; do
+      printf '  %-16s %-38s %-12s %s\n' "$n" "$u" "$a" "${e:-never}"
+    done
+}
+
+cmd_add() { # $1 name  $2 days (optional)
+  local name="$1" days="${2:-}" backup uuid expiry added
+  store_require
+  name_ok "$name" || { echo "[!] Bad username (lowercase, 3-32 chars, [a-z0-9_-])" >&2; return 1; }
+  user_exists "$name" && { echo "[!] User '$name' already exists." >&2; return 1; }
+  uuid="$(cat /proc/sys/kernel/random/uuid)"
+  added="$(date -u '+%Y-%m-%d')"
+  expiry=""
+  if [ -n "$days" ]; then
+    [[ "$days" =~ ^[1-9][0-9]*$ ]] || { echo "[!] Days must be a positive integer" >&2; return 1; }
+    expiry="$(date -d "+${days} days" '+%Y-%m-%d')"
+  fi
+  backup="$(mktemp)"
+  store_write_backup "$backup"
+  jq --arg n "$name" --arg u "$uuid" --arg a "$added" --arg e "$expiry" \
+    '. += [{name: $n, uuid: $u, added: $a, expiry: $e}]' "$STORE" > "$STORE.new"
+  mv -f "$STORE.new" "$STORE"
+  chmod 0600 "$STORE"
+  if ! reload_xray; then
+    mv -f "$backup" "$STORE"
+    return 1
+  fi
+  rm -f "$backup"
+  printf '  [+] %s added (uuid %s, expires %s)\n' "$name" "$uuid" "${expiry:-never}"
+}
+
+cmd_remove() { # $1 name
+  local name="$1" backup
+  store_require
+  if ! user_exists "$name"; then
+    # Idempotent: accounts created before the user store had no identity.
+    printf '  (no Xray identity for %s)\n' "$name"
+    return 0
+  fi
+  [ "$name" != "admin" ] || {
+    echo "[!] Refusing to remove 'admin' (it carries the legacy shared identity)." >&2
+    return 1
+  }
+  backup="$(mktemp)"
+  store_write_backup "$backup"
+  jq --arg n "$name" 'del(.[] | select(.name == $n))' "$STORE" > "$STORE.new"
+  mv -f "$STORE.new" "$STORE"
+  chmod 0600 "$STORE"
+  if ! reload_xray; then
+    mv -f "$backup" "$STORE"
+    return 1
+  fi
+  rm -f "$backup"
+  printf '  [-] %s removed; its UUID no longer authenticates anywhere.\n' "$name"
+}
+
+cmd_usage() { # $1 name (optional: all users)
+  store_require
+  local name="${1:-}" pattern label u e
+  if [ -z "$name" ]; then
+    jq -r '.[].name' "$STORE" | while read -r n; do cmd_usage "$n"; done
+    return
+  fi
+  user_exists "$name" || { echo "[!] User '$name' does not exist." >&2; return 1; }
+  printf '%s:\n' "$name"
+  for kind in uplink downlink; do
+    pattern="user>>>${name}@${DOMAIN:-mubx}>>>traffic>>>${kind}"
+    out="$(xray api statsquery --server=127.0.0.1:10085 --pattern="$pattern" 2>/dev/null || true)"
+    value="$(printf '%s\n' "$out" | jq -r '.. | objects | select(.name? == $pat) | .value' --arg pat "$pattern" 2>/dev/null | head -n 1 || true)"
+    printf '  %-9s %s bytes\n' "$kind" "${value:-0}"
+  done
+}
+
+interactive() {
+  local action input name days
+  while true; do
+    mubx_clear
+    printf '%sMUB-X users%s\n' "$C_BOLD" "$C_RESET"
+    mubx_rule
+    cmd_list
+    printf '\n  %sa%s  add    %sr%s  remove    %su%s  usage    %sq%s  quit\n\n' \
+      "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
+    read -r -p "  Choose: " action || break
+    case "${action,,}" in
+      a|add)
+        read -r -p "  Username: " name
+        read -r -p "  Expiry days (blank = never): " days
+        cmd_add "$name" "$days" || true
+        ;;
+      r|remove)
+        read -r -p "  Username to remove: " name
+        cmd_remove "$name" || true
+        ;;
+      u|usage) cmd_usage || true ;;
+      q|quit|0) exit 0 ;;
+    esac
+    read -r -p "  Press Enter to continue... " _ </dev/tty || true
+  done
+}
+
+cmd="${1:-interactive}"
+case "$cmd" in
+  list) cmd_list ;;
+  add) cmd_add "${2:?usage: mubx-users add <name> [days]}" "${3:-}" ;;
+  remove) cmd_remove "${2:?usage: mubx-users remove <name>}" ;;
+  usage) cmd_usage "${2:-}" ;;
+  interactive) interactive ;;
+  *) echo "Unknown command: $cmd (use list/add/remove/usage)" >&2; exit 1 ;;
+esac

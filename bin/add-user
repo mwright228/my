@@ -14,4 +14,10 @@ read -r -p "Days: " d
 EXP=$(date -d "+${d} days" +%Y-%m-%d)
 useradd -M -s /bin/false -e "$EXP" "$u"
 printf '%s:%s\n' "$u" "$p" | chpasswd
+# Issue the same identity on the Xray transports when a user store exists,
+# so this SSH user also gets their own UUID and can be revoked individually.
+if [ -x /usr/local/bin/mubx-users ] && [ -f /etc/mubx/users.json ]; then
+  /usr/local/bin/mubx-users add "$u" "$d" ||
+    echo "[!] Xray identity for $u was not created" >&2
+fi
 echo "[+] $u expires $EXP"

@@ -29,6 +29,7 @@ release; the upstream project does not publish an armhf binary.
 - **Universal Bug-Host Multiplexer:** Terminates TLS on loopback (`127.0.0.1:20443`) via Nginx, accepting connections regardless of custom carrier SNI mismatches.
 - **Multi-Protocol Core (Xray-core):** Full support for VLESS-WebSocket, VLESS-HTTPUpgrade, VMess, Trojan, and XTLS-Vision Reality.
 - **Configurable Reality fronts:** Reality camouflages against any real HTTPS site, not just Apple. Add/remove SNI fronts (whatever your SIM carriers allow) with `reality-fronts` or menu option `10`; each front gets its own inbound and HAProxy route, and `link-gen` prints one Reality link per front.
+- **Per-user identities & usage:** Every user (`mubx-users` / menu `11`, also auto-created with each SSH account) gets their own UUID across every transport — revoke one user without rekeying the rest. Xray's stats API is enabled, so per-user traffic can be read back with `mubx-users usage`. The legacy shared identity survives as the seeded `admin` user, keeping old links valid. `link-gen [bug-host] [user]` prints links for any user.
 - **Squid & SSH Ingestion:** Dropbear SSH via direct port (`2222`) and Squid HTTP CONNECT proxies (`8080` & `3128`).
 - **Mobile UDP Gaming Bridge:** Multi-port BadVPN UDPGW (`7100–7700`) instances forward low-latency UDP traffic for games and VoIP.
 - **ZivPN UDP VPN:** Password-authenticated UDP VPN server on port `5667` (amd64/arm64).
@@ -73,9 +74,10 @@ Launch the control panel anytime from your terminal by typing:
 menu
 ```
 
-Menu options cover domain & certificate (`1`), client links (`2`), user
-management (`4`/`5`), restarts (`6`), diagnostics (`8`) and Reality SNI
-fronts (`10`, or run `reality-fronts` directly for `add`/`remove`/`set`).
+Menu options cover domain & certificate (`1`), client links for any user
+(`2`), SSH user management (`4`/`5`), restarts (`6`), diagnostics (`8`),
+Reality SNI fronts (`10`, or `reality-fronts` for `add`/`remove`/`set`) and
+per-user Xray identities & traffic (`11`, or `mubx-users`).
 
 For mobile-network troubleshooting, run:
 
@@ -85,4 +87,10 @@ mubx-diagnose
 
 The weekly maintenance job runs `mubx-cron` (GeoIP/GeoSite + certificate
 renewal + service self-heal).
+
+---
+
+## 📄 License
+
+MIT — see [LICENSE](LICENSE).
 

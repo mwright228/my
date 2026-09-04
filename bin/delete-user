@@ -16,4 +16,10 @@ read -r -p "Type the username to confirm deletion: " confirmation
 [ "$confirmation" = "$username" ] || { echo "Deletion cancelled" >&2; exit 1; }
 
 userdel -r "$username"
+# Drop the matching Xray identity so the user can no longer authenticate
+# on any transport either.
+if [ -x /usr/local/bin/mubx-users ] && [ -f /etc/mubx/users.json ]; then
+  /usr/local/bin/mubx-users remove "$username" ||
+    echo "[!] Xray identity for $username was not removed" >&2
+fi
 echo "[-] Deleted $username"

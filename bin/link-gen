@@ -1,9 +1,31 @@
 #!/usr/bin/env bash
+# Usage: link-gen [bug-host] [user]
+#   bug-host defaults to the server domain; user defaults to 'admin' (the
+#   legacy shared identity). With a user store, pass any user name to print
+#   that user's links (per-user UUIDs on every transport).
 source /usr/local/lib/mubx/common.sh
 load_mubx_env
 BUG="${1:-$DOMAIN}"
+USER_NAME="${2:-admin}"
+# Resolve the per-user UUID when a store exists.
+if [ -f /etc/mubx/users.json ]; then
+  user_uuid="$(jq -r --arg n "$USER_NAME" '.[] | select(.name == $n) | .uuid' \
+    /etc/mubx/users.json 2>/dev/null || true)"
+  if [ -z "$user_uuid" ]; then
+    echo "[!] No MUB-X user named '$USER_NAME'. Users:" >&2
+    jq -r '.[].name' /etc/mubx/users.json 2>/dev/null | sed 's/^/  /' >&2 || true
+    exit 1
+  fi
+  UUID="$user_uuid"
+else
+  [ "$USER_NAME" = "admin" ] || {
+    echo "[!] No user store yet; only 'admin' (the shared identity) exists." >&2
+    exit 1
+  }
+fi
 MYIP=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null || echo "$DOMAIN")
 HY2_PASS="${HY2_PASS:?Missing Hysteria password; rerun the installer}"
+[ -n "${UUID:-}" ] || { echo "[!] Missing UUID; rerun the installer." >&2; exit 1; }
 
 mubx_clear
 printf '%sMUB-X%s · client links\n' "$C_BOLD" "$C_RESET"
@@ -11,6 +33,7 @@ mubx_rule
 mubx_kv "Gateway"    "$DOMAIN"
 mubx_kv "Public IPv4" "$MYIP"
 mubx_kv "Bug host"   "$BUG"
+mubx_kv "Identity"   "$USER_NAME"
 mubx_rule
 
 url() { printf '  %s%s%s\n' "$C_CYAN" "$1" "$C_RESET"; }
