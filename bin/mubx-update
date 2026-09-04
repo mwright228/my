@@ -122,7 +122,12 @@ backup_path /etc/haproxy/haproxy.cfg
 backup_path /etc/nginx/nginx.conf
 
 # 3) Install the refreshed scripts, libs and units. mubx-update itself is
-#    swapped at the very end (it is the script currently running).
+#    swapped at the very end (it is the script currently running). Two unit
+#    templates (dnstt, wstunnel) carry install-time placeholders that are
+#    substituted against the live secrets, exactly like install.sh does -
+#    otherwise the daemons would start with literal __DOMAIN__ /
+#    __SSH_WS_PATH__ values.
+load_mubx_env
 for f in "$ROOT"/lib/*.sh; do
   [ -f "$f" ] || continue
   install -D -m 0644 "$f" "/usr/local/lib/mubx/$(basename "$f")"
@@ -131,6 +136,8 @@ for f in "$ROOT"/systemd/*.service "$ROOT"/systemd/*.timer; do
   [ -f "$f" ] || continue
   install -m 0644 "$f" "/etc/systemd/system/$(basename "$f")"
 done
+sed -i "s|__SSH_WS_PATH__|$SSH_WS_PATH|g" /etc/systemd/system/wstunnel.service
+sed -i "s|__DOMAIN__|$DOMAIN|g" /etc/systemd/system/dnstt.service
 systemctl daemon-reload
 for f in "$ROOT"/bin/*; do
   [ -f "$f" ] || continue
@@ -139,9 +146,7 @@ for f in "$ROOT"/bin/*; do
 done
 
 # 4) Re-render the generated configs from the freshly pulled templates.
-#    Secrets are loaded from the environment file, then each candidate is
-#    validated before anything live is replaced.
-load_mubx_env
+#    Each candidate is validated before anything live is replaced.
 source ./lib/reality-build.sh
 mubx_users_seed
 tmp="$(mktemp -d)"
