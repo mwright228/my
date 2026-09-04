@@ -33,7 +33,7 @@ release; the upstream project does not publish an armhf binary.
 - **Multi-Protocol Core (Xray-core):** Full support for VLESS-WebSocket, VLESS-HTTPUpgrade, VMess, Trojan, Shadowsocks-WebSocket (per user), and XTLS-Vision Reality.
 - **Configurable Reality fronts:** Reality camouflages against any real HTTPS site, not just Apple. Add/remove SNI fronts (whatever your SIM carriers allow) with `reality-fronts` or menu option `10`; each front gets its own inbound and HAProxy route, and `link-gen` prints one Reality link per front.
 - **Per-user identities & usage:** Every user (`mubx-users` / menu `11`, also auto-created with each SSH account) gets their own UUID across every transport — revoke one user without rekeying the rest. Shadowsocks follows the same model: each user gets their own WS inbound (`127.0.0.1:10006+`) and nginx route (`/ss-<user>` on 80/443) keyed to their UUID, and user add/remove re-renders both Xray and Nginx atomically. Xray's stats API is enabled, so per-user traffic can be read back with `mubx-users usage`. The legacy shared identity survives as the seeded `admin` user, keeping old links valid. `link-gen [bug-host] [user]` prints links for any user.
-- **Squid & SSH Ingestion:** Dropbear SSH via direct port (`2222`) and Squid HTTP CONNECT proxies (`8080` & `3128`).
+- **Squid & SSH Ingestion:** Dropbear SSH via direct ports (`2222`, `109`, `53`) and Squid HTTP CONNECT proxies (`8080` & `3128`).
 - **Mobile UDP Gaming Bridge:** Multi-port BadVPN UDPGW (`7100–7700`) instances forward low-latency UDP traffic for games and VoIP.
 - **ZivPN UDP VPN:** Password-authenticated UDP VPN server on port `5667` (amd64/arm64).
 - **Hysteria 2:** Installed from a pinned upstream release and configured with the issued certificate.
@@ -54,7 +54,7 @@ release; the upstream project does not publish an armhf binary.
 | **80** | TCP | HTTP / WebSocket | Nginx → Xray | Non-TLS VLESS-WS, plain payloads & ACME |
 | **20443** | TCP | TLS | Nginx | Local SSL Termination |
 | **8080 / 3128** | TCP | HTTP | Squid | Injector CONNECT Proxy |
-| **109 / 2222** | TCP | SSH | Dropbear | Core SSH Tunnel |
+| **53 / 109 / 2222** | TCP | SSH | Dropbear | Core SSH Tunnel |
 | **10001** | TCP | WebSocket | Xray-core | VLESS-WS Inbound |
 | **10004** | TCP | HTTPUpgrade | Xray-core | High-Throughput Streaming |
 | **10006+** | TCP | WebSocket | Xray-core | Shadowsocks WS Inbound (one per user) |

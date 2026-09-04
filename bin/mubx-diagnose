@@ -68,7 +68,7 @@ mubx_group_close
 
 # --- TCP reachability (connect to TARGET) -----------------------------------
 mubx_group_open "TCP reachability (connect to $TARGET)"
-for spec in "haproxy TLS|443" "nginx HTTP|80" "dropbear SSH|2222" "dropbear SSH alt|109" "openvpn TCP|1194"; do
+for spec in "haproxy TLS|443" "nginx HTTP|80" "dropbear SSH|2222" "dropbear SSH alt|109" "dropbear SSH 53|53" "openvpn TCP|1194"; do
   name="${spec%%|*}"; port="${spec##*|}"
   if timeout 4 bash -c ":</dev/tcp/$TARGET/$port" 2>/dev/null; then
     mubx_card "  $name" "$(printf '%s%s:%s open%s' "$C_GREEN" "$TARGET" "$port" "$C_RESET")"

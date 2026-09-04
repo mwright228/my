@@ -41,7 +41,7 @@ printf '\n'
 mubx_box_line '┌' '┐'
 mubx_put "$(printf '  %sProtocols & ports on this server%s' "$C_BOLD" "$C_RESET")"
 mubx_box_line '├' '┤'
-mubx_kvrow "SSH Dropbear"  "109, 2222 (TCP)"
+mubx_kvrow "SSH Dropbear"  "109, 2222, 53 (TCP)"
 mubx_kvrow "SSH over WS"   "443 wss / 80 ws"
 mubx_kvrow "Squid CONNECT" "8080, 3128"
 mubx_kvrow "OpenVPN"       "1194 (TCP), 2200 (UDP)"

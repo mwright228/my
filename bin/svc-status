@@ -136,7 +136,7 @@ row "OpenVPN UDP (2200)"  openvpn-server@udp udp 2200
 row "WireGuard (51820)"   wg-quick@wg0   udp 51820
 row "Hysteria 2 (4433)"   hysteria       udp 4433
 row "ZivPN UDP VPN (5667)" zivpn         udp 5667
-row "Dropbear SSH (109, 2222)" dropbear  tcp 2222
+row "Dropbear SSH (109, 2222, 53)" dropbear  tcp 2222
 group_close
 
 # --- Web / proxy layer ------------------------------------------------------

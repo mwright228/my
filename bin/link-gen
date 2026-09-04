@@ -120,10 +120,10 @@ sub "Trojan WebSocket"
 block "trojan://${UUID}@${BUG}:443?security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&path=%2Ftrojan-ws#MUBX-Trojan"
 
 # --- 4. SSH & injectors ---------------------------------------------------
-card dropbear "Dropbear SSH" "(2222 / 109)"
+card dropbear "Dropbear SSH" "(2222 / 109 / 53)"
 sub "Direct"
 block "${MYIP}:2222"
-note "  alternate port: ${MYIP}:109"
+note "  alternate ports: ${MYIP}:109, ${MYIP}:53"
 card wstunnel "SSH over WebSocket" "(80 / 443)"
 sub "TLS (wss)"
 block "ssh -o ProxyCommand='wstunnel client -L stdio://%h:%p wss://${DOMAIN}${SSH_WS_PATH}' user@${DOMAIN}"
