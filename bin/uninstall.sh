@@ -19,7 +19,7 @@ esac
 for svc in nginx haproxy xray dropbear squid \
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0 \
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 badvpn@7500 badvpn@7600 badvpn@7700 \
-  dnstt hysteria zivpn mubx-cron.timer; do
+  dnstt hysteria zivpn mubx-cron.timer mubx-adaptive.timer; do
   systemctl disable --now "$svc" 2>/dev/null || true
 done
 restore_path() {
@@ -49,7 +49,8 @@ for backup in /etc/mubx/backup/usr/local/go-*; do
   restore_path "${backup#/etc/mubx/backup}"
 done
 for path in /usr/local/bin/menu /usr/local/bin/link-gen /usr/local/bin/add-user \
-  /usr/local/bin/delete-user \
+  /usr/local/bin/delete-user /usr/local/bin/mubx-diagnose \
+  /usr/local/bin/mubx-tune /usr/local/bin/mubx-adaptive \
   /usr/local/bin/mubx-probe /usr/local/bin/set-domain /usr/local/bin/mubx-cron \
   /usr/local/bin/generate-secrets /usr/local/bin/uninstall.sh; do
   restore_path "$path"
@@ -71,6 +72,7 @@ else
   iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 fi
 restore_path /etc/sysctl.d/99-mubx-forwarding.conf
+restore_path /etc/sysctl.d/99-mubx-network.conf
 for path in /etc/telecom-engine.env /usr/local/etc/xray/domain \
   /etc/hysteria/config.yaml /etc/dnstt/dnstt.priv /etc/dnstt/dnstt.pub \
   /etc/zivpn/config.json /etc/zivpn/zivpn.crt /etc/zivpn/zivpn.key; do

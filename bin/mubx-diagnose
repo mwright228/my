@@ -1,0 +1,58 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+TARGET="${1:-${DOMAIN:-1.1.1.1}}"
+ENDPOINTS=("1.1.1.1" "8.8.8.8" "9.9.9.9")
+
+echo "MUB-X network diagnostics"
+echo "Timestamp: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+echo "Target: $TARGET"
+printf 'IPv4: '; curl -4 --fail --silent --max-time 5 https://api.ipify.org || echo unavailable
+printf 'IPv6: '; curl -6 --fail --silent --max-time 5 https://api64.ipify.org || echo unavailable
+printf 'Congestion control: '; cat /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || echo unavailable
+printf 'Default qdisc: '; cat /proc/sys/net/core/default_qdisc 2>/dev/null || echo unavailable
+printf 'Default route: '; ip route show default 2>/dev/null | head -n 1 || echo unavailable
+
+echo
+echo "ICMP latency/loss:"
+for endpoint in "${ENDPOINTS[@]}"; do
+  ping -n -c 5 -W 2 "$endpoint" 2>/dev/null |
+    awk -v host="$endpoint" '/packet loss/ {loss=$6} /round-trip|rtt/ {rtt=$4} END {printf "%s loss=%s latency=%s\n", host, loss, rtt}'
+done
+
+echo
+echo "DNS reachability:"
+for endpoint in "${ENDPOINTS[@]}"; do
+  if timeout 5 getent hosts "$endpoint" >/dev/null 2>&1; then
+    echo "$endpoint reachable"
+  else
+    echo "$endpoint unavailable"
+  fi
+done
+
+echo
+echo "TCP reachability:"
+for port in 443 80 1194 2200 2222 4433 51820; do
+  if timeout 4 bash -c ":</dev/tcp/$TARGET/$port" 2>/dev/null; then
+    echo "$TARGET:$port open"
+  else
+    echo "$TARGET:$port unavailable"
+  fi
+done
+
+echo
+echo "Path MTU probes:"
+for size in 1280 1360 1420 1472; do
+  if ping -n -c 1 -W 2 -M do -s "$((size - 28))" "$TARGET" >/dev/null 2>&1; then
+    echo "MTU $size: pass"
+  else
+    echo "MTU $size: fail"
+  fi
+done
+
+echo
+echo "MUB-X services:"
+for service in haproxy nginx xray hysteria dnstt dropbear squid wg-quick@wg0; do
+  systemctl is-active --quiet "$service" 2>/dev/null &&
+    echo "$service: active" || echo "$service: inactive"
+done

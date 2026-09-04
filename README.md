@@ -34,6 +34,9 @@ release; the upstream project does not publish an armhf binary.
 - **Kernel-Level Performance:** Enables IPv4 forwarding and applies high file-descriptor limits to high-throughput services.
 - **Emergency SlowDNS Tunnel:** Built-in `dnstt` server running on port 53. DNS NS delegation for `dns.<your-domain>` is still required.
 - **Automated Self-Healing:** A weekly systemd timer renews Let's Encrypt certificates, updates GeoIP/GeoSite databases, and auto-restarts failed daemons.
+- **Adaptive transport monitor:** Periodically measures installed transport reachability and records a recommendation in `/var/lib/mubx/adaptive-recommendation`.
+- **Mobile diagnostics:** `mubx-diagnose` reports public IPs, latency/loss, DNS, TCP reachability, path-MTU probes, kernel congestion control, and service health.
+- **Congestion tuning:** `mubx-tune` enables BBR and `fq` only when supported and applies conservative TCP keepalive/socket-buffer defaults.
 
 ---
 
@@ -42,7 +45,7 @@ release; the upstream project does not publish an armhf binary.
 | Port | Transport | Protocol | Service | Role |
 | :--- | :--- | :--- | :--- | :--- |
 | **443** | TCP | TLS / SNI | HAProxy | Public L4 Entrypoint |
-| **80** | TCP | HTTP | Nginx | Plain Payloads & ACME |
+| **80** | TCP | HTTP / WebSocket | Nginx → Xray | Non-TLS VLESS-WS, plain payloads & ACME |
 | **20443** | TCP | TLS | Nginx | Local SSL Termination |
 | **8080 / 3128** | TCP | HTTP | Squid | Injector CONNECT Proxy |
 | **2222** | TCP | SSH | Dropbear | Core SSH Tunnel |
@@ -63,4 +66,10 @@ Launch the control panel anytime from your terminal by typing:
 
 ```bash
 menu
+```
+
+For mobile-network troubleshooting, run:
+
+```bash
+mubx-diagnose
 ```

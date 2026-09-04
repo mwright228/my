@@ -228,7 +228,7 @@ cd "$INSTALL_ROOT"
 for service in apache2 nginx haproxy xray \
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0 \
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 badvpn@7500 badvpn@7600 badvpn@7700 \
-  dnstt zivpn hysteria mubx-cron.timer; do
+  dnstt zivpn hysteria mubx-cron.timer mubx-adaptive.timer; do
   systemctl is-active --quiet "$service" && services_was_active["$service"]=1 ||
     services_was_active["$service"]=0
   systemctl is-enabled --quiet "$service" && services_was_enabled["$service"]=1 ||
@@ -255,6 +255,7 @@ backup_file /etc/haproxy/haproxy.cfg
 backup_file /etc/nginx/nginx.conf
 backup_file /etc/telecom-engine.env
 backup_file /etc/sysctl.d/99-mubx-forwarding.conf
+backup_file /etc/sysctl.d/99-mubx-network.conf
 for path in /etc/hysteria/config.yaml /etc/dnstt/dnstt.priv /etc/dnstt/dnstt.pub \
   /etc/zivpn/config.json /etc/openvpn/server/tcp.conf \
   /etc/openvpn/server/udp.conf /etc/openvpn/certs/server.ext \
@@ -594,6 +595,9 @@ run systemctl enable hysteria
 run systemctl restart hysteria
 systemctl is-active --quiet hysteria || die "hysteria failed to start; inspect journalctl -u hysteria."
 run systemctl enable --now mubx-cron.timer
+run /usr/local/bin/mubx-tune
+run systemctl daemon-reload
+run systemctl enable --now mubx-adaptive.timer
 
 install_success=1
 echo "[+] Core online. Type 'menu'."

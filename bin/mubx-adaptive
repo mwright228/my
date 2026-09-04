@@ -1,0 +1,36 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+if [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+  load_mubx_env || true
+fi
+STATE_FILE=/var/lib/mubx/adaptive-recommendation
+install -d -m 0755 "$(dirname "$STATE_FILE")"
+declare -A scores=(
+  [wireguard]=0 [hysteria]=0 [tuic]=0 [openvpn-udp]=0
+  [xray-reality]=0 [xray-websocket]=0 [dnstt]=0
+)
+
+measure() {
+  local name="$1" host="$2" port="$3" start elapsed
+  start="$(date +%s%N)"
+  if timeout 5 bash -c ":</dev/tcp/$host/$port" 2>/dev/null; then
+    elapsed="$(( ($(date +%s%N) - start) / 1000000 ))"
+    scores["$name"]=$((100000 - elapsed))
+  fi
+}
+
+measure wireguard "${DOMAIN:-127.0.0.1}" 51820
+measure hysteria "${DOMAIN:-127.0.0.1}" 4433
+measure openvpn-udp "${DOMAIN:-127.0.0.1}" 2200
+measure xray-reality "${DOMAIN:-127.0.0.1}" 443
+measure xray-websocket "${DOMAIN:-127.0.0.1}" 443
+measure dnstt "${DOMAIN:-127.0.0.1}" 53
+
+best=dnstt
+for name in "${!scores[@]}"; do
+  [ "${scores[$name]}" -gt "${scores[$best]}" ] && best="$name"
+done
+printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$best" > "$STATE_FILE"
+echo "Recommended transport: $best"

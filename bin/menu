@@ -16,6 +16,8 @@ echo "  [4] Add User"
 echo "  [5] Delete User"
 echo "  [6] Restart Services"
 echo "  [7] Show Ports"
+echo "  [8] Network Diagnostics"
+echo "  [9] Adaptive Recommendation"
 echo "  [0] Exit"
 read -p "Select: " opt
 case $opt in
@@ -25,4 +27,6 @@ case $opt in
   5) /usr/local/bin/delete-user ;;
   6) systemctl restart haproxy nginx xray dropbear squid; echo "[*] Restarted" ;;
   7) ss -tulnp | grep -E ':(443|80|2222|8080|3128|10001|10443)' ;;
+  8) /usr/local/bin/mubx-diagnose ;;
+  9) cat /var/lib/mubx/adaptive-recommendation 2>/dev/null || echo "No recommendation yet" ;;
   0) exit 0 ;; esac

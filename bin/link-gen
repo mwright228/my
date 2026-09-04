@@ -40,6 +40,8 @@ fi
 echo -e "\n${C_BOLD}${C_ORANGE}─── [3] XRAY CORE PROXIES (PORT 443) ───${C_RESET}"
 echo -e "${C_AMBER}▶ VLESS-WebSocket:${C_RESET}"
 echo -e "${C_WHITE}vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-ws#MUBX-VLESS-WS${C_RESET}"
+echo -e "${C_AMBER}▶ VLESS-WebSocket (non-TLS):${C_RESET}"
+echo -e "${C_WHITE}vless://${UUID}@${BUG}:80?encryption=none&security=none&type=ws&host=${DOMAIN}&path=%2Fvless-ws#MUBX-VLESS-WS-80${C_RESET}"
 echo -e "${C_AMBER}▶ VLESS-Reality Vision (Apple Camouflage):${C_RESET}"
 echo -e "${C_WHITE}vless://${UUID}@${DOMAIN}:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.apple.com&pbk=${REALITY_PUBKEY}&sid=${SHORT_ID}&spx=%2F&type=tcp#MUBX-Reality${C_RESET}"
 echo -e "${C_AMBER}▶ VMess-WebSocket:${C_RESET}"
