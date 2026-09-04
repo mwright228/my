@@ -19,7 +19,7 @@ esac
 for svc in nginx haproxy xray dropbear squid \
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0 \
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 badvpn@7500 badvpn@7600 badvpn@7700 \
-  dnstt hysteria zivpn mubx-cron.timer mubx-adaptive.timer; do
+  dnstt hysteria zivpn wstunnel mubx-cron.timer mubx-adaptive.timer; do
   systemctl disable --now "$svc" 2>/dev/null || true
 done
 restore_path() {
@@ -33,13 +33,14 @@ restore_path() {
   fi
 }
 for path in /etc/systemd/system/badvpn@.service /etc/systemd/system/dnstt.service \
+  /etc/systemd/system/wstunnel.service \
   /etc/systemd/system/hysteria.service /etc/systemd/system/zivpn.service \
   /etc/systemd/system/mubx-cron.service /etc/systemd/system/mubx-cron.timer \
   /etc/systemd/system/xray.service; do
   restore_path "$path"
 done
 systemctl daemon-reload
-for path in /usr/local/bin/xray /usr/local/bin/hysteria /usr/local/bin/zivpn \
+for path in /usr/local/bin/xray /usr/local/bin/hysteria /usr/local/bin/wstunnel /usr/local/bin/zivpn \
   /usr/local/bin/dnstt-server /usr/local/bin/dnstt-client /usr/local/bin/badvpn-udpgw \
   /usr/local/go; do
   restore_path "$path"

@@ -53,6 +53,9 @@ echo -e "${C_WHITE}trojan://${UUID}@${BUG}:443?security=tls&type=ws&host=${DOMAI
 # 4. SSH & Injectors
 echo -e "\n${C_BOLD}${C_ORANGE}─── [4] SSH & INJECTOR PAYLOADS (HTTP CUSTOM / NETMOD) ───${C_RESET}"
 echo -e "${C_CYAN}▶ Direct Dropbear SSH:${C_RESET} ${MYIP}:2222 | UDPGW: 7300"
+echo -e "${C_CYAN}▶ Dropbear SSH alternate port:${C_RESET} ${MYIP}:109"
+echo -e "${C_CYAN}▶ SSH over WebSocket:${C_RESET} ssh -o ProxyCommand='wstunnel client -L stdio://%h:%p wss://${DOMAIN}${SSH_WS_PATH}' user@${DOMAIN}"
+echo -e "${C_CYAN}▶ SSH over WebSocket (non-TLS):${C_RESET} ssh -o ProxyCommand='wstunnel client -L stdio://%h:%p ws://${DOMAIN}${SSH_WS_PATH}' user@${DOMAIN}"
 echo -e "${C_CYAN}▶ Squid HTTP Proxy   :${C_RESET} ${MYIP}:8080 or 3128"
 echo -e "  ${C_YELLOW}Payload:${C_RESET} CONNECT [host_port] HTTP/1.1[crlf]Host: ${BUG}[crlf]Connection: Keep-Alive[crlf][crlf]"
 

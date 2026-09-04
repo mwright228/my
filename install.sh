@@ -5,6 +5,7 @@ REPO_URL="${MUBX_REPO_URL:-https://github.com/mwright228/my.git}"
 INSTALL_ROOT="${MUBX_INSTALL_ROOT:-/root/mub-x}"
 XRAY_VERSION="v26.3.27"
 HYSTERIA_VERSION="v2.12.2"
+WSTUNNEL_VERSION="v10.7.1"
 GEOIP_VERSION="202608050239"
 GEOIP_SHA256="c67bd077eb102cec74fab759b73d17f99275f56af10a87c14d9fd983508f5ce1"
 GEOSITE_VERSION="20260904020013"
@@ -23,7 +24,7 @@ load_secrets() {
   local key value
   while IFS='=' read -r key value; do
     case "$key" in
-      DOMAIN|UUID|REALITY_PRIVKEY|REALITY_PUBKEY|SHORT_ID|HY2_PASS|ZIVPN_PASS)
+      DOMAIN|UUID|REALITY_PRIVKEY|REALITY_PUBKEY|SHORT_ID|HY2_PASS|ZIVPN_PASS|SSH_WS_PATH)
         value="${value#\"}"
         value="${value%\"}"
         [[ "$value" != *$'\n'* ]] || die "Invalid secret value for $key."
@@ -33,7 +34,7 @@ load_secrets() {
       *) die "Unexpected key in /etc/telecom-engine.env: $key" ;;
     esac
   done < /etc/telecom-engine.env
-  for key in DOMAIN UUID REALITY_PRIVKEY REALITY_PUBKEY SHORT_ID HY2_PASS ZIVPN_PASS; do
+  for key in DOMAIN UUID REALITY_PRIVKEY REALITY_PUBKEY SHORT_ID HY2_PASS ZIVPN_PASS SSH_WS_PATH; do
     [ -n "${!key:-}" ] || die "Missing $key in /etc/telecom-engine.env."
   done
 }
@@ -228,7 +229,7 @@ cd "$INSTALL_ROOT"
 for service in apache2 nginx haproxy xray \
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0 \
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 badvpn@7500 badvpn@7600 badvpn@7700 \
-  dnstt zivpn hysteria mubx-cron.timer mubx-adaptive.timer; do
+  dnstt zivpn hysteria wstunnel mubx-cron.timer mubx-adaptive.timer; do
   systemctl is-active --quiet "$service" && services_was_active["$service"]=1 ||
     services_was_active["$service"]=0
   systemctl is-enabled --quiet "$service" && services_was_enabled["$service"]=1 ||
@@ -281,7 +282,7 @@ backup_file /usr/local/etc/xray/config.json
 backup_file /usr/local/share/xray/geoip.dat
 backup_file /usr/local/share/xray/geosite.dat
 backup_file /usr/local/go
-for file in xray hysteria zivpn dnstt-server dnstt-client badvpn-udpgw; do
+for file in xray hysteria wstunnel zivpn dnstt-server dnstt-client badvpn-udpgw; do
   backup_file "/usr/local/bin/$file"
 done
 install -m 0755 bin/* /usr/local/bin/
@@ -314,6 +315,11 @@ case "$(dpkg --print-architecture)" in
     HYSTERIA_SHA256="274a0de7e2d145aa03fac017a7c7e9a995620f4eaf8db41656d37eddf2764f03"
     ;;
 esac
+case "$(dpkg --print-architecture)" in
+  amd64) WSTUNNEL_ASSET="wstunnel_10.7.1_linux_amd64.tar.gz"; WSTUNNEL_SHA256="fa842ed53fbb14b1c69cd98829f9895d7f8a6b0d562c57c1175851a52cea9ea2" ;;
+  arm64) WSTUNNEL_ASSET="wstunnel_10.7.1_linux_arm64.tar.gz"; WSTUNNEL_SHA256="99f9506d01d1b4073254609600ec5056dab8dc58aec75c32f6eb0508335a8fd2" ;;
+  armhf) WSTUNNEL_ASSET="wstunnel_10.7.1_linux_armv6.tar.gz"; WSTUNNEL_SHA256="f72ec22fc060dfbd54a4591d35ff3929035f26f1401473e7faf8ce254800b9af2" ;;
+esac
 download_root="$(mktemp -d /tmp/mubx-download.XXXXXX)"
 download_verified \
   "https://github.com/XTLS/Xray-core/releases/download/$XRAY_VERSION/$XRAY_ASSET" \
@@ -325,6 +331,11 @@ download_verified \
   "https://github.com/HyNetworks/hysteria/releases/download/app/$HYSTERIA_VERSION/$HYSTERIA_ASSET" \
   "$HYSTERIA_SHA256" /usr/local/bin/hysteria
 chmod 0755 /usr/local/bin/hysteria
+download_verified \
+  "https://github.com/erebe/wstunnel/releases/download/$WSTUNNEL_VERSION/$WSTUNNEL_ASSET" \
+  "$WSTUNNEL_SHA256" "$download_root/wstunnel.tar.gz"
+tar -xzf "$download_root/wstunnel.tar.gz" -C "$download_root"
+install -m 0755 "$download_root/wstunnel" /usr/local/bin/wstunnel
 
 run certbot certonly --standalone --keep-until-expiring --non-interactive --agree-tos \
   --register-unsafely-without-email -d "$DOMAIN"
@@ -521,6 +532,7 @@ run /usr/local/bin/generate-secrets
 sed -i "s/^DOMAIN=.*/DOMAIN=\"$DOMAIN\"/; s|__DOMAIN__|$DOMAIN|g" /etc/telecom-engine.env
 install -m 0600 configs/xray.json /usr/local/etc/xray/config.json
 load_secrets
+sed -i "s|__SSH_WS_PATH__|$SSH_WS_PATH|g" /etc/nginx/nginx.conf /etc/systemd/system/wstunnel.service
 sed -i "s|__DOMAIN__|$DOMAIN|g; s|__UUID__|$UUID|g; s|__SHORT_ID__|$SHORT_ID|g; s|__REALITY_PRIVKEY__|$REALITY_PRIVKEY|g" \
   /usr/local/etc/xray/config.json /etc/nginx/nginx.conf /etc/haproxy/haproxy.cfg \
   /etc/systemd/system/dnstt.service
@@ -564,7 +576,7 @@ nginx -t
 haproxy -c -f /etc/haproxy/haproxy.cfg
 xray run -test -config /usr/local/etc/xray/config.json
 run systemctl daemon-reload
-for svc in nginx haproxy xray dropbear squid; do
+for svc in nginx haproxy xray dropbear squid wstunnel; do
   run systemctl enable "$svc"
   run systemctl restart "$svc"
   systemctl is-active --quiet "$svc" || die "$svc failed to start; inspect journalctl -u $svc."
@@ -586,6 +598,9 @@ done
 run systemctl enable dnstt
 run systemctl restart dnstt
 systemctl is-active --quiet dnstt || die "dnstt failed to start; inspect journalctl -u dnstt."
+run systemctl enable wstunnel
+run systemctl restart wstunnel
+systemctl is-active --quiet wstunnel || die "wstunnel failed to start; inspect journalctl -u wstunnel."
 if [ "$ZIVPN_ENABLED" -eq 1 ]; then
   run systemctl enable zivpn
   run systemctl restart zivpn

@@ -1,0 +1,15 @@
+[Unit]
+Description=MUB-X SSH over WebSocket tunnel
+After=network-online.target dropbear.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/wstunnel server ws://127.0.0.1:18080 --restrict-to 127.0.0.1:2222 --restrict-http-upgrade-path-prefix __SSH_WS_PATH__
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=true
+PrivateTmp=true
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

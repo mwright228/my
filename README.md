@@ -31,6 +31,7 @@ release; the upstream project does not publish an armhf binary.
 - **ZivPN UDP VPN:** Password-authenticated UDP VPN server on port `5667` (amd64/arm64).
 - **Hysteria 2:** Installed from a pinned upstream release and configured with the issued certificate.
 - **DNSTT:** Built from a pinned upstream commit; requires DNS NS delegation for `dns.<your-domain>`.
+- **SSH over WebSocket:** Restricted wstunnel backend for a generated secret path on ports 80 and 443, forwarding only to Dropbear. Use the generated `ws://` or `wss://` command from `link-gen`.
 - **Kernel-Level Performance:** Enables IPv4 forwarding and applies high file-descriptor limits to high-throughput services.
 - **Emergency SlowDNS Tunnel:** Built-in `dnstt` server running on port 53. DNS NS delegation for `dns.<your-domain>` is still required.
 - **Automated Self-Healing:** A weekly systemd timer renews Let's Encrypt certificates, updates GeoIP/GeoSite databases, and auto-restarts failed daemons.
@@ -48,7 +49,7 @@ release; the upstream project does not publish an armhf binary.
 | **80** | TCP | HTTP / WebSocket | Nginx → Xray | Non-TLS VLESS-WS, plain payloads & ACME |
 | **20443** | TCP | TLS | Nginx | Local SSL Termination |
 | **8080 / 3128** | TCP | HTTP | Squid | Injector CONNECT Proxy |
-| **2222** | TCP | SSH | Dropbear | Core SSH Tunnel |
+| **109 / 2222** | TCP | SSH | Dropbear | Core SSH Tunnel |
 | **10001** | TCP | WebSocket | Xray-core | VLESS-WS Inbound |
 | **10004** | TCP | HTTPUpgrade | Xray-core | High-Throughput Streaming |
 | **10443** | TCP | Vision | Xray-core | VLESS Reality (Anti-DPI) |
@@ -56,6 +57,7 @@ release; the upstream project does not publish an armhf binary.
 | **51820** | UDP | WireGuard | Kernel | WireGuard L3 Interface |
 | **53** | UDP | DNS | DNSTT | SlowDNS Sub-Resolver |
 | **4433** | UDP | Hysteria 2 | Hysteria | High-performance UDP tunnel |
+| **80 / 443** | TCP | WebSocket | wstunnel → Dropbear | SSH over WebSocket |
 | **7100–7700** | UDP | UDPGW | BadVPN | Mobile Gaming Packet Bridge |
 
 ---
