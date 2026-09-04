@@ -67,6 +67,9 @@ else
   if [ -n "$WAN_IF" ]; then
     iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o "$WAN_IF" -j MASQUERADE 2>/dev/null || true
     iptables -t nat -D POSTROUTING -s 10.9.0.0/24 -o "$WAN_IF" -j MASQUERADE 2>/dev/null || true
+    iptables -t nat -D PREROUTING -i "$WAN_IF" -p udp \
+      -m multiport --dports 6000:7099,7701:19999 \
+      -j DNAT --to-destination :5667 2>/dev/null || true
     iptables -t nat -D PREROUTING -i "$WAN_IF" -p udp --dport 6000:19999 \
       -j DNAT --to-destination :5667 2>/dev/null || true
   fi

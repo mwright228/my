@@ -1,36 +1,97 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# MUB-X adaptive transport health probe.
+#
+# Records which installed transport the operator should recommend, based on
+# what this host can actually verify:
+#   * TCP transports -> real connect latency to the public endpoint.
+#   * UDP transports -> local listener health. A generic client cannot
+#     complete WireGuard / QUIC / DNSTT handshakes, so remote UDP
+#     reachability is intentionally not guessed here.
+#
+# The old implementation measured every transport with a TCP connect, which
+# can never succeed against UDP-only services, so WireGuard, Hysteria,
+# OpenVPN-UDP and DNSTT always scored zero and the recommendation was
+# meaningless (it usually fell back to DNSTT).
 set -Eeuo pipefail
 
+DOMAIN=
 if [ -r /usr/local/lib/mubx/common.sh ]; then
   source /usr/local/lib/mubx/common.sh
-  load_mubx_env || true
+  load_mubx_env 2>/dev/null || true
 fi
+
 STATE_FILE=/var/lib/mubx/adaptive-recommendation
 install -d -m 0755 "$(dirname "$STATE_FILE")"
-declare -A scores=(
-  [wireguard]=0 [hysteria]=0 [tuic]=0 [openvpn-udp]=0
-  [xray-reality]=0 [xray-websocket]=0 [dnstt]=0
-)
 
-measure() {
-  local name="$1" host="$2" port="$3" start elapsed
+listener_up() { # $1 tcp|udp  $2 port
+  local proto="$1" port="$2"
+  ss -H -l"${proto:0:1}"n "sport = :$port" 2>/dev/null | grep -q .
+}
+
+tcp_latency_ms() { # $1 host  $2 port ; echoes latency in ms, or nothing
+  local host="$1" port="$2" start now
   start="$(date +%s%N)"
   if timeout 5 bash -c ":</dev/tcp/$host/$port" 2>/dev/null; then
-    elapsed="$(( ($(date +%s%N) - start) / 1000000 ))"
-    scores["$name"]=$((100000 - elapsed))
+    now="$(date +%s%N)"
+    echo "$(( (now - start) / 1000000 ))"
   fi
 }
 
-measure wireguard "${DOMAIN:-127.0.0.1}" 51820
-measure hysteria "${DOMAIN:-127.0.0.1}" 4433
-measure openvpn-udp "${DOMAIN:-127.0.0.1}" 2200
-measure xray-reality "${DOMAIN:-127.0.0.1}" 443
-measure xray-websocket "${DOMAIN:-127.0.0.1}" 443
-measure dnstt "${DOMAIN:-127.0.0.1}" 53
+HOST="${DOMAIN:-127.0.0.1}"
 
-best=dnstt
-for name in "${!scores[@]}"; do
-  [ "${scores[$name]}" -gt "${scores[$best]}" ] && best="$name"
+# Preference order: breaks ties between transports with equal scores and
+# ranks UDP transports, whose latency cannot be measured generically.
+ORDER=(xray-websocket xray-reality wireguard hysteria openvpn-udp dnstt)
+
+declare -A score=()
+declare -A detail=()
+
+# --- TCP transports: measured through the public name/address ---
+if lat="$(tcp_latency_ms "$HOST" 443)"; then
+  if [ -n "$lat" ]; then
+    for name in xray-websocket xray-reality; do
+      score["$name"]=$((100000 - lat))
+      detail["$name"]="${lat}ms TCP connect"
+    done
+  fi
+fi
+
+# --- UDP transports: local listener health only ---
+if listener_up udp 51820; then
+  score[wireguard]=50000
+  detail[wireguard]="listener up (UDP 51820)"
+fi
+if listener_up udp 4433; then
+  score[hysteria]=50000
+  detail[hysteria]="listener up (UDP 4433)"
+fi
+if listener_up udp 2200; then
+  score[openvpn-udp]=50000
+  detail[openvpn-udp]="listener up (UDP 2200)"
+fi
+if listener_up udp 53; then
+  score[dnstt]=50000
+  detail[dnstt]="listener up (UDP 53)"
+fi
+
+best="none"
+best_score=-1
+for name in "${ORDER[@]}"; do
+  s="${score[$name]:-0}"
+  if [ "$s" -gt "$best_score" ]; then
+    best="$name"
+    best_score="$s"
+  fi
 done
-printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$best" > "$STATE_FILE"
-echo "Recommended transport: $best"
+
+stamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+{
+  printf '%s %s\n' "$stamp" "$best"
+  if [ "$best" != "none" ]; then
+    printf '  %s (%s)\n' "$best" "${detail[$best]:-}"
+  else
+    printf '  no transport is currently healthy\n'
+  fi
+} > "$STATE_FILE"
+
+printf 'Recommended transport: %s\n' "$best"

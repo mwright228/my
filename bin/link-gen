@@ -2,85 +2,79 @@
 source /usr/local/lib/mubx/common.sh
 load_mubx_env
 BUG="${1:-$DOMAIN}"
-MYIP=$(curl -4 -s ifconfig.me 2>/dev/null || echo "$DOMAIN")
+MYIP=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null || echo "$DOMAIN")
 HY2_PASS="${HY2_PASS:?Missing Hysteria password; rerun the installer}"
 
-C_RESET='\033[0m'
-C_BOLD='\033[1m'
-C_AMBER='\033[38;5;214m'
-C_ORANGE='\033[38;5;208m'
-C_DIM='\033[38;5;242m'
-C_WHITE='\033[38;5;255m'
-C_GREEN='\033[38;5;48m'
-C_CYAN='\033[38;5;51m'
-C_YELLOW='\033[38;5;226m'
+mubx_clear
+printf '%sMUB-X%s · client links\n' "$C_BOLD" "$C_RESET"
+mubx_rule
+mubx_kv "Gateway"    "$DOMAIN"
+mubx_kv "Public IPv4" "$MYIP"
+mubx_kv "Bug host"   "$BUG"
+mubx_rule
 
-clear
-echo -e "${C_AMBER}╔══════════════════════════════════════════════════════════════════╗${C_RESET}"
-echo -e "${C_AMBER}║${C_RESET} ${C_BOLD}${C_ORANGE}MUB-X FULL SPECTRUM PROTOCOL & INJECTOR SUITE${C_RESET}                 ${C_AMBER}║${C_RESET}"
-echo -e "${C_AMBER}╚══════════════════════════════════════════════════════════════════╝${C_RESET}"
-echo -e " ${C_BOLD}Domain Gateway :${C_RESET} ${C_WHITE}${DOMAIN}${C_RESET}"
-echo -e " ${C_BOLD}Public IPv4    :${C_RESET} ${C_WHITE}${MYIP}${C_RESET}"
-echo -e " ${C_BOLD}Injected Host  :${C_RESET} ${C_GREEN}${BUG}${C_RESET}"
-echo -e "${C_DIM}──────────────────────────────────────────────────────────────────${C_RESET}"
+url() { printf '  %s%s%s\n' "$C_CYAN" "$1" "$C_RESET"; }
+kv()  { printf '  %s%-12s%s %s\n' "$C_DIM" "$1:" "$C_RESET" "$2"; }
 
-# 1. Hysteria 2
-echo -e "\n${C_BOLD}${C_ORANGE}─── [1] HYSTERIA 2 // BRUTAL UDP CORE (PORT 4433) ───${C_RESET}"
-echo -e "${C_CYAN}hysteria2://${HY2_PASS}@${DOMAIN}:4433/?sni=${DOMAIN}&insecure=1#MUBX-Hysteria2${C_RESET}"
+# --- 1. Hysteria 2 --------------------------------------------------------
+mubx_title "[1] Hysteria 2  (UDP 4433)"
+url "hysteria2://${HY2_PASS}@${DOMAIN}:4433/?sni=${DOMAIN}&insecure=1#MUBX-Hysteria2"
 
-# 2. ZivPN
+# --- 2. ZivPN -------------------------------------------------------------
 if command -v zivpn >/dev/null 2>&1 && [ -n "${ZIVPN_PASS:-}" ]; then
-  echo -e "\n${C_BOLD}${C_ORANGE}─── [2] ZIVPN UDP VPN (PORT 5667) ───${C_RESET}"
-  echo -e "  • ${C_WHITE}Host / IP   :${C_RESET} ${DOMAIN} (${MYIP})"
-  echo -e "  • ${C_WHITE}UDP Port    :${C_RESET} 5667"
-  echo -e "  • ${C_WHITE}Password    :${C_RESET} ${ZIVPN_PASS}"
+  mubx_title "[2] ZivPN UDP VPN  (UDP 5667)"
+  kv "Host / IP" "$DOMAIN ($MYIP)"
+  kv "Password"  "$ZIVPN_PASS"
 fi
 
-# 3. Xray Proxies
-echo -e "\n${C_BOLD}${C_ORANGE}─── [3] XRAY CORE PROXIES (PORT 443) ───${C_RESET}"
-echo -e "${C_AMBER}▶ VLESS-WebSocket:${C_RESET}"
-echo -e "${C_WHITE}vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-ws#MUBX-VLESS-WS${C_RESET}"
-echo -e "${C_AMBER}▶ VLESS-WebSocket (non-TLS):${C_RESET}"
-echo -e "${C_WHITE}vless://${UUID}@${BUG}:80?encryption=none&security=none&type=ws&host=${DOMAIN}&path=%2Fvless-ws#MUBX-VLESS-WS-80${C_RESET}"
-echo -e "${C_AMBER}▶ VLESS-Reality Vision (Apple Camouflage):${C_RESET}"
-echo -e "${C_WHITE}vless://${UUID}@${DOMAIN}:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.apple.com&pbk=${REALITY_PUBKEY}&sid=${SHORT_ID}&spx=%2F&type=tcp#MUBX-Reality${C_RESET}"
-echo -e "${C_AMBER}▶ VMess-WebSocket:${C_RESET}"
+# --- 3. Xray transports ---------------------------------------------------
+mubx_title "[3] Xray transports  (TCP 443)"
+printf '  %sVLESS-WS%s\n' "$C_BOLD" "$C_RESET"
+url "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-ws#MUBX-VLESS-WS"
+printf '  %sVLESS-WS (non-TLS, port 80)%s\n' "$C_BOLD" "$C_RESET"
+url "vless://${UUID}@${BUG}:80?encryption=none&security=none&type=ws&host=${DOMAIN}&path=%2Fvless-ws#MUBX-VLESS-WS-80"
+printf '  %sVLESS-Reality (Vision, Apple camouflage)%s\n' "$C_BOLD" "$C_RESET"
+url "vless://${UUID}@${DOMAIN}:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.apple.com&pbk=${REALITY_PUBKEY}&sid=${SHORT_ID}&spx=%2F&type=tcp#MUBX-Reality"
+printf '  %sVMess-WS%s\n' "$C_BOLD" "$C_RESET"
 VJ="{\"v\":\"2\",\"ps\":\"MUBX-VMess\",\"add\":\"${BUG}\",\"port\":\"443\",\"id\":\"${UUID}\",\"aid\":\"0\",\"net\":\"ws\",\"path\":\"/vmess-ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"tls\":\"tls\",\"sni\":\"${BUG}\"}"
-echo -e "${C_WHITE}vmess://$(echo -n "$VJ" | base64 -w 0)${C_RESET}"
-echo -e "${C_AMBER}▶ Trojan-WebSocket:${C_RESET}"
-echo -e "${C_WHITE}trojan://${UUID}@${BUG}:443?security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&path=%2Ftrojan-ws#MUBX-Trojan${C_RESET}"
+url "vmess://$(echo -n "$VJ" | base64 -w 0)"
+printf '  %sTrojan-WS%s\n' "$C_BOLD" "$C_RESET"
+url "trojan://${UUID}@${BUG}:443?security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&path=%2Ftrojan-ws#MUBX-Trojan"
 
-# 4. SSH & Injectors
-echo -e "\n${C_BOLD}${C_ORANGE}─── [4] SSH & INJECTOR PAYLOADS (HTTP CUSTOM / NETMOD) ───${C_RESET}"
-echo -e "${C_CYAN}▶ Direct Dropbear SSH:${C_RESET} ${MYIP}:2222 | UDPGW: 7300"
-echo -e "${C_CYAN}▶ Dropbear SSH alternate port:${C_RESET} ${MYIP}:109"
-echo -e "${C_CYAN}▶ SSH over WebSocket:${C_RESET} ssh -o ProxyCommand='wstunnel client -L stdio://%h:%p wss://${DOMAIN}${SSH_WS_PATH}' user@${DOMAIN}"
-echo -e "${C_CYAN}▶ SSH over WebSocket (non-TLS):${C_RESET} ssh -o ProxyCommand='wstunnel client -L stdio://%h:%p ws://${DOMAIN}${SSH_WS_PATH}' user@${DOMAIN}"
-echo -e "${C_CYAN}▶ Squid HTTP Proxy   :${C_RESET} ${MYIP}:8080 or 3128"
-echo -e "  ${C_YELLOW}Payload:${C_RESET} CONNECT [host_port] HTTP/1.1[crlf]Host: ${BUG}[crlf]Connection: Keep-Alive[crlf][crlf]"
+# --- 4. SSH & injectors ---------------------------------------------------
+mubx_title "[4] SSH & injector payloads"
+kv "Dropbear SSH"     "$MYIP:2222 (UDPGW 7300)"
+kv "SSH alternate"    "$MYIP:109"
+printf '  %sSSH over WebSocket%s\n' "$C_BOLD" "$C_RESET"
+url "ssh -o ProxyCommand='wstunnel client -L stdio://%h:%p wss://${DOMAIN}${SSH_WS_PATH}' user@${DOMAIN}"
+url "ssh -o ProxyCommand='wstunnel client -L stdio://%h:%p ws://${DOMAIN}${SSH_WS_PATH}' user@${DOMAIN}"
+kv "Squid HTTP proxy" "$MYIP:8080 or 3128"
+printf '  %sPayload:%s  CONNECT [host_port] HTTP/1.1[crlf]Host: %s[crlf]Connection: Keep-Alive[crlf][crlf]\n' \
+  "$C_BOLD" "$C_RESET" "$BUG"
 
-# 5. WireGuard
-echo -e "\n${C_BOLD}${C_ORANGE}─── [5] WIREGUARD L3 KERNEL VPN (PORT 51820) ───${C_RESET}"
+# --- 5. WireGuard ---------------------------------------------------------
+mubx_title "[5] WireGuard  (UDP 51820)"
 WG_CONF=/etc/wireguard/mubx-client.conf
 if [ -f "$WG_CONF" ]; then
-    echo -e "${C_GREEN}[✓] WireGuard Client Profile Found. Scan QR Code:${C_RESET}"
-    qrencode -t ansiutf8 < "$WG_CONF"
+  printf '  %s●%s Client profile found; scan the QR code:\n' "$C_GREEN" "$C_RESET"
+  qrencode -t ansiutf8 < "$WG_CONF"
 elif systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
-    echo -e "${C_GREEN}[✓] WireGuard is active on port 51820. Client profile: /etc/wireguard/mubx-client.conf${C_RESET}"
+  printf '  %s●%s WireGuard active on 51820. Profile: %s\n' "$C_GREEN" "$C_RESET" "$WG_CONF"
 else
-    echo -e "${C_DIM}WireGuard is installed but inactive. Check: systemctl status wg-quick@wg0${C_RESET}"
+  printf '  %s○%s WireGuard installed but inactive (systemctl status wg-quick@wg0)\n' "$C_RED" "$C_RESET"
 fi
 
-# 6. OpenVPN
-echo -e "\n${C_BOLD}${C_ORANGE}─── [6] OPENVPN PROFILES ───${C_RESET}"
-echo -e "  • ${C_WHITE}TCP (1194):${C_RESET} $(ls /root/*tcp*.ovpn /etc/openvpn/*tcp*.ovpn 2>/dev/null | head -n 1 || echo 'Active on :1194')"
-echo -e "  • ${C_WHITE}UDP (2200):${C_RESET} $(ls /root/*udp*.ovpn /etc/openvpn/*udp*.ovpn 2>/dev/null | head -n 1 || echo 'Active on :2200')"
+# --- 6. OpenVPN -----------------------------------------------------------
+mubx_title "[6] OpenVPN profiles"
+kv "TCP (1194)" "/etc/openvpn/client/mubx-client-tcp.ovpn"
+kv "UDP (2200)" "/etc/openvpn/client/mubx-client-udp.ovpn"
 
-# 7. SlowDNS
-echo -e "\n${C_BOLD}${C_ORANGE}─── [7] SLOWDNS / DNSTT EMERGENCY TUNNEL (PORT 53) ───${C_RESET}"
+# --- 7. SlowDNS / DNSTT ---------------------------------------------------
+mubx_title "[7] SlowDNS / DNSTT  (UDP 53)"
 DNSTT_PUB=$(cat /etc/dnstt/dnstt.pub 2>/dev/null || echo "NOT_FOUND")
-echo -e "  • ${C_WHITE}NS Domain:${C_RESET} dns.${DOMAIN}"
-echo -e "  • ${C_WHITE}Pubkey   :${C_RESET} ${DNSTT_PUB}"
-echo -e "  • ${C_WHITE}Client   :${C_RESET} dnstt-client -udp 1.1.1.1:53 -pubkey ${DNSTT_PUB} dns.${DOMAIN} 127.0.0.1:2222"
+kv "NS domain" "dns.$DOMAIN"
+kv "Pubkey"    "$DNSTT_PUB"
+printf '  %sClient:%s\n' "$C_BOLD" "$C_RESET"
+url "dnstt-client -udp 1.1.1.1:53 -pubkey ${DNSTT_PUB} dns.${DOMAIN} 127.0.0.1:2222"
 
-echo -e "\n${C_DIM}──────────────────────────────────────────────────────────────────${C_RESET}\n"
+mubx_rule

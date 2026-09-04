@@ -1,5 +1,12 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# MUB-X network & service diagnostics.
 set -Eeuo pipefail
+
+DOMAIN=
+if [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+  load_mubx_env 2>/dev/null || true
+fi
 
 TARGET="${1:-${DOMAIN:-1.1.1.1}}"
 ENDPOINTS=("1.1.1.1" "8.8.8.8" "9.9.9.9")
@@ -17,7 +24,9 @@ echo
 echo "ICMP latency/loss:"
 for endpoint in "${ENDPOINTS[@]}"; do
   ping -n -c 5 -W 2 "$endpoint" 2>/dev/null |
-    awk -v host="$endpoint" '/packet loss/ {loss=$6} /round-trip|rtt/ {rtt=$4} END {printf "%s loss=%s latency=%s\n", host, loss, rtt}'
+    awk -v host="$endpoint" \
+      '/packet loss/ {loss=$6} /^rtt/ {split($4, a, "/"); avg=a[2]} \
+       END {printf "%s loss=%s avg=%s\n", host, loss, (avg=="" ? "n/a" : avg)}'
 done
 
 echo
@@ -30,18 +39,33 @@ for endpoint in "${ENDPOINTS[@]}"; do
   fi
 done
 
+# TCP transports are probed with a connect; UDP transports would always
+# "fail" a TCP probe (they have no TCP listener), so their health is
+# reported from the local listener table instead.
 echo
-echo "TCP reachability:"
-for port in 443 80 1194 2200 2222 4433 51820; do
+echo "TCP reachability (connect to $TARGET):"
+for spec in "haproxy TLS|443" "nginx HTTP|80" "dropbear SSH|2222" "dropbear SSH alt|109" "openvpn TCP|1194"; do
+  name="${spec%%|*}"; port="${spec##*|}"
   if timeout 4 bash -c ":</dev/tcp/$TARGET/$port" 2>/dev/null; then
-    echo "$TARGET:$port open"
+    printf '  %-18s %s:%s open\n' "$name" "$TARGET" "$port"
   else
-    echo "$TARGET:$port unavailable"
+    printf '  %-18s %s:%s unavailable\n' "$name" "$TARGET" "$port"
   fi
 done
 
 echo
-echo "Path MTU probes:"
+echo "UDP listeners (local check):"
+for spec in "openvpn UDP|2200" "hysteria 2|4433" "wireguard|51820" "dnstt|53" "zivpn|5667" "badvpn udpgw|7100" "badvpn udpgw|7500" "badvpn udpgw|7700"; do
+  name="${spec%%|*}"; port="${spec##*|}"
+  if ss -H -uln "sport = :$port" 2>/dev/null | grep -q .; then
+    printf '  %-18s %s listening\n' "$name" "$port"
+  else
+    printf '  %-18s %s not listening\n' "$name" "$port"
+  fi
+done
+
+echo
+echo "Path MTU probes (to $TARGET):"
 for size in 1280 1360 1420 1472; do
   if ping -n -c 1 -W 2 -M do -s "$((size - 28))" "$TARGET" >/dev/null 2>&1; then
     echo "MTU $size: pass"

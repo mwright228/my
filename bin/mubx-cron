@@ -66,7 +66,11 @@ test -s "$tmpdir/geoip.dat" && test -s "$tmpdir/geosite.dat"
 [ "$(sha256sum "$tmpdir/geoip.dat" | awk '{print $1}')" = "$GEOIP_SHA256" ]
 [ "$(sha256sum "$tmpdir/geosite.dat" | awk '{print $1}')" = "$GEOSITE_SHA256" ]
 systemctl stop nginx haproxy
-certbot renew --quiet
+# Hysteria 2 and ZivPN read the Let's Encrypt certificate at startup and are
+# not part of the restart dance below, so restart them only when certbot
+# actually renewed a certificate (the deploy hook fires on real renewals).
+renew_hook='for s in hysteria zivpn; do systemctl is-active --quiet "$s" 2>/dev/null && systemctl restart "$s"; done; exit 0'
+certbot renew --quiet --deploy-hook "$renew_hook"
 cleanup
 mv -f "$tmpdir/geoip.dat" /usr/local/share/xray/geoip.dat
 mv -f "$tmpdir/geosite.dat" /usr/local/share/xray/geosite.dat

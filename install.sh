@@ -6,10 +6,6 @@ INSTALL_ROOT="${MUBX_INSTALL_ROOT:-/root/mub-x}"
 XRAY_VERSION="v26.3.27"
 HYSTERIA_VERSION="v2.12.2"
 WSTUNNEL_VERSION="v10.7.1"
-GEOIP_VERSION="202608050239"
-GEOIP_SHA256="c67bd077eb102cec74fab759b73d17f99275f56af10a87c14d9fd983508f5ce1"
-GEOSITE_VERSION="20260904020013"
-GEOSITE_SHA256="f82f26c015f9726c763d96a5f658e5b31b285dc094a985e718051e421f350ed6"
 
 die() { printf '[!] %s\n' "$*" >&2; exit 1; }
 require_root() { [ "$(id -u)" -eq 0 ] || die "Run this installer as root."; }
@@ -569,10 +565,20 @@ if [ "$ZIVPN_ENABLED" -eq 1 ]; then
   ln -sfn "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" /etc/zivpn/zivpn.crt
   ln -sfn "/etc/letsencrypt/live/$DOMAIN/privkey.pem" /etc/zivpn/zivpn.key
   sed -i "s|__ZIVPN_PASS__|$ZIVPN_PASS|g" /etc/zivpn/config.json
-  iptables -t nat -C PREROUTING -i "$WAN_IF" -p udp --dport 6000:19999 \
-    -j DNAT --to-destination :5667 2>/dev/null ||
-    iptables -t nat -A PREROUTING -i "$WAN_IF" -p udp --dport 6000:19999 \
+  # Route a wide UDP range to ZivPN so carrier port filters are less
+  # effective, but keep the BadVPN UDPGW bridge ports (7100-7700) out of
+  # the DNAT set: without the exclusion every packet to the public IP on
+  # 7100-7700 would be swallowed by ZivPN and the gaming bridge would die.
+  # Also drop any legacy 6000:19999 rule left by older installs.
+  iptables -t nat -D PREROUTING -i "$WAN_IF" -p udp --dport 6000:19999 \
+    -j DNAT --to-destination :5667 2>/dev/null || true
+  if ! iptables -t nat -C PREROUTING -i "$WAN_IF" -p udp \
+    -m multiport --dports 6000:7099,7701:19999 \
+    -j DNAT --to-destination :5667 2>/dev/null; then
+    iptables -t nat -A PREROUTING -i "$WAN_IF" -p udp \
+      -m multiport --dports 6000:7099,7701:19999 \
       -j DNAT --to-destination :5667
+  fi
   iptables-save > /etc/iptables/rules.v4
 fi
 
