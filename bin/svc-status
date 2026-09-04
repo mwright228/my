@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# MUB-X service status: one verdict per protocol / transport, not just per
+# systemd unit. Xray transports are enumerated from the live config so every
+# inbound (incl. each Reality SNI front) is listed individually; UDP-only
+# daemons are checked via their listener, TCP ones via their unit + socket.
+set -Eeuo pipefail
+
+source /usr/local/lib/mubx/common.sh
+DOMAIN=
+load_mubx_env 2>/dev/null || true
+
+XRAY_CONF=/usr/local/etc/xray/config.json
+[ -f "$XRAY_CONF" ] || { echo "[!] Run install.sh first"; exit 1; }
+
+# verdict: unit active (and, when given, listener on proto/port)
+# returns 0 online, 1 offline; caller formats the text.
+check() { # $1 unit  $2 protocol(tcp|udp)  $3 port (empty = unit-only)
+  local unit="$1" proto="$2" port="${3:-}"
+  systemctl is-active --quiet "$unit" 2>/dev/null || return 1
+  if [ -n "$port" ]; then
+    ss -H -"${proto}"ln "sport = :$port" 2>/dev/null | grep -q . || return 1
+  fi
+  return 0
+}
+
+# One status row, colon aligned like a service listing.
+row() { # $1 label  $2 unit  $3 tcp|udp  $4 port
+  local label="$1" unit="$2" proto="$3" port="${4:-}"
+  local text name
+  name="$(printf '%-34s' "$label")"
+  if check "$unit" "$proto" "$port"; then
+    text="${C_GREEN}Running (No Error)${C_RESET}"
+  else
+    text="${C_RED}Not Running (Error)${C_RESET}"
+  fi
+  printf '» Service %s : %s\n' "$name" "$text"
+}
+
+header() { # $1 section title
+  printf '\n%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n' "$C_DIM" "$C_RESET"
+  printf '%s» %s «%s\n' "$C_BOLD" "$1" "$C_RESET"
+  printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n' "$C_DIM" "$C_RESET"
+}
+
+mubx_clear
+printf '%sMUB-X%s · Service Information · %s%s%s\n' \
+  "$C_BOLD" "$C_RESET" "$C_CYAN" "${DOMAIN:-UNCONFIGURED}" "$C_RESET"
+
+# --- Xray transports ---------------------------------------------------
+header "Xray transports"
+# reality fronts come back in config order (10443+n); map port -> SNI front.
+read -r -a _fronts <<< "${REALITY_FRONTS:-}"
+while IFS=$'\t' read -r tag proto port; do
+  [ -n "$tag" ] || continue
+  case "$tag" in
+    socks-local|api) continue ;;
+    vless-ws)      label="Xray VLESS WebSocket (WS)" ;;
+    vmess-ws)      label="Xray VMess WebSocket (WS)" ;;
+    trojan-ws)     label="Xray Trojan WebSocket (WS)" ;;
+    vless-httpupgrade) label="Xray VLESS HTTPUpgrade" ;;
+    vless-xhttp)   label="Xray VLESS xHTTP" ;;
+    reality-*)
+      idx=$((port - 10442))   # 10443 -> front #1
+      sni="${_fronts[$((idx - 1))]:-sni-$idx}"
+      label="Xray Reality ($sni)" ;;
+    *)             label="Xray ${tag}" ;;
+  esac
+  row "$label" xray tcp "$port"
+done < <(jq -r '.inbounds[] | select(.tag != "socks-local" and .tag != "api") | [.tag, (.protocol // "-"), (.port // 0)] | @tsv' "$XRAY_CONF" 2>/dev/null)
+
+# --- BadVPN UDPGW ------------------------------------------------------
+header "BadVPN UDPGW ports"
+for p in 7100 7200 7300 7400 7500 7600 7700; do
+  row "BadVPN UDPGW $p" "badvpn@$p" udp "$p"
+done
+
+# --- VPN & tunnel services ---------------------------------------------
+header "VPN & tunnel services"
+row "OpenVPN TCP (1194)"  openvpn-server@tcp tcp 1194
+row "OpenVPN UDP (2200)"  openvpn-server@udp udp 2200
+row "WireGuard (51820)"   wg-quick@wg0   udp 51820
+row "Hysteria 2 (4433)"   hysteria       udp 4433
+row "ZivPN UDP VPN (5667)" zivpn         udp 5667
+row "SlowDNS / DNSTT (53)" dnstt         udp 53
+row "Dropbear SSH (109, 2222)" dropbear  tcp 2222
+
+# --- Web / proxy layer --------------------------------------------------
+header "Proxy & web services"
+row "HAProxy TLS front (443)" haproxy tcp 443
+row "Nginx TLS terminator"    nginx   tcp 443
+row "Nginx plain HTTP (80)"   nginx   tcp 80
+row "Squid CONNECT proxy (8080, 3128)" squid tcp 8080
+row "wstunnel SSH-over-WS"    wstunnel tcp 18080
+row "fail2ban (dropbear jail)" fail2ban ""
+
+# --- Maintenance timers -------------------------------------------------
+header "Maintenance timers"
+row "mubx weekly cron"     mubx-cron.timer ""
+row "mubx adaptive probe"  mubx-adaptive.timer ""
+
+printf '\n'

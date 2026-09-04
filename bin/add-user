@@ -1,5 +1,11 @@
 #!/bin/bash
 set -euo pipefail
+if [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+  DOMAIN=
+  load_mubx_env 2>/dev/null || true
+fi
+
 read -r -p "Username: " u
 read -r -s -p "Password: " p
 printf '\n'
@@ -20,4 +26,50 @@ if [ -x /usr/local/bin/mubx-users ] && [ -f /etc/mubx/users.json ]; then
   /usr/local/bin/mubx-users add "$u" "$d" ||
     echo "[!] Xray identity for $u was not created" >&2
 fi
-echo "[+] $u expires $EXP"
+
+sep() { printf '%.0s━' $(seq 1 34); printf '\n'; }
+field() { printf '%-14s: %s\n' "$1" "$2"; }
+
+printf '\n'
+sep
+printf '   SSH / OVPN ACCOUNT CREATED\n'
+sep
+field "Domain"      "${DOMAIN:-<server domain>}"
+field "Username"    "$u"
+field "Password"    "$p"
+field "Active Days" "$d"
+field "Expires On"  "$EXP"
+sep
+printf 'Protocols & ports (this server):\n'
+printf '  %-16s: 109, 2222 (TCP)\n' "SSH Dropbear"
+printf '  %-16s: 443 (TLS) / 80 (WS)\n' "SSH over WS"
+printf '  %-16s: 8080, 3128\n' "Squid CONNECT"
+printf '  %-16s: 1194 (TCP), 2200 (UDP)\n' "OpenVPN"
+printf '  %-16s: 51820 (UDP)\n' "WireGuard"
+printf '  %-16s: 4433 (UDP)\n' "Hysteria 2"
+printf '  %-16s: 5667 (UDP)\n' "ZivPN"
+printf '  %-16s: 53 (UDP)\n' "SlowDNS DNSTT"
+printf '  %-16s: 443 (SNI: VLESS/VMess/Trojan WS,\n' "Xray"
+printf '  %-16s:      HTTPUpgrade, xHTTP; Reality per front)\n' ""
+printf '  %-16s: 7100-7700 (UDP)\n' "BADVPN UDPGW"
+sep
+if [ -n "${DOMAIN:-}" ] && [ -r /etc/dnstt/dnstt.pub ]; then
+  printf 'SlowDNS NS : dns.%s\n' "$DOMAIN"
+  printf 'SlowDNS PUB: %s\n' "$(cat /etc/dnstt/dnstt.pub)"
+  sep
+fi
+
+if [ -t 0 ]; then
+  read -r -p "  Print full client links for $u? [y/N] " ans
+  if [[ "$ans" =~ ^[yY] ]]; then
+    if [ -x /usr/local/bin/link-gen ]; then
+      /usr/local/bin/link-gen "${DOMAIN:-}" "$u"
+    else
+      echo "[!] link-gen not installed" >&2
+    fi
+  else
+    echo "  Client links: run 'link-gen [bug-host] $u' or menu option 2."
+  fi
+else
+  echo "[+] $u expires $EXP"
+fi

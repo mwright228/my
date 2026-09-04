@@ -67,7 +67,11 @@ svc_dot() {
   fi
 }
 
-# Clean-screen helper: no-op when output is not a terminal.
+# Clean-screen helper: no-op when output is not a terminal. Always returns
+# success so callers under `set -e` survive non-tty (piped/cron) runs.
 mubx_clear() {
-  [ -t 1 ] && clear
+  if [ -t 1 ]; then
+    clear || true
+  fi
+  return 0
 }

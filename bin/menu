@@ -80,7 +80,7 @@ draw() {
   opt 4  "Add SSH user"
   opt 5  "Delete SSH user"
   opt 6  "Restart services"
-  opt 7  "Show listening ports"
+  opt 7  "Service status (all protocols)"
   opt 8  "Run network diagnostics"
   opt 9  "Show transport recommendation"
   opt 10 "Reality SNI fronts"
@@ -106,7 +106,7 @@ while true; do
          badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 \
          badvpn@7500 badvpn@7600 badvpn@7700 2>/dev/null || true
        echo "  [*] Core services restarted" ;;
-    7) ss -tulnp | grep -E ':(443|80|2222|8080|3128|10001|10443)' ;;
+    7) /usr/local/bin/svc-status ;;
     8) /usr/local/bin/mubx-diagnose ;;
     9) cat /var/lib/mubx/adaptive-recommendation 2>/dev/null || echo "No recommendation yet" ;;
     10) /usr/local/bin/reality-fronts ;;
