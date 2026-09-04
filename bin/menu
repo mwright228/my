@@ -16,30 +16,35 @@ else
 fi
 STATUS_FLAG() {
   if systemctl is-active --quiet "$1" 2>/dev/null; then
-    printf '%s%sONLINE%s' "$C_GREEN" "$C_BOLD" "$C_RESET"
+    printf '%s%s● ONLINE%s' "$C_GREEN" "$C_BOLD" "$C_RESET"
   else
-    printf '%s%sOFFLINE%s' "$C_RED" "$C_BOLD" "$C_RESET"
+    printf '%s%s● OFFLINE%s' "$C_RED" "$C_BOLD" "$C_RESET"
   fi
 }
 clear
-printf '%s╭──────────────────────────────────────────────────────────────╮%s\n' "$C_BLUE" "$C_RESET"
-printf '%s│%s  %sMUB-X CONTROL CENTER%s                                  %s│%s\n' \
-  "$C_BLUE" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_BLUE" "$C_RESET"
-printf '%s╰──────────────────────────────────────────────────────────────╯%s\n' "$C_BLUE" "$C_RESET"
-printf '  %sNode%s      %s%s%s\n' "$C_DIM" "$C_RESET" "$C_CYAN" "$DOMAIN" "$C_RESET"
-printf '  %sUpdated%s    %s\n\n' "$C_DIM" "$C_RESET" "$(date '+%Y-%m-%d %H:%M:%S %Z')"
-printf '%s  SERVICE HEALTH%s\n' "$C_BOLD" "$C_RESET"
-printf '  %-14s %b    %-14s %b\n' "HAProxy" "$(STATUS_FLAG haproxy)" "Nginx" "$(STATUS_FLAG nginx)"
-printf '  %-14s %b    %-14s %b\n' "Xray" "$(STATUS_FLAG xray)" "Dropbear" "$(STATUS_FLAG dropbear)"
-printf '  %-14s %b    %-14s %b\n' "wstunnel" "$(STATUS_FLAG wstunnel)" "Squid" "$(STATUS_FLAG squid)"
-printf '  %-14s %b    %-14s %b\n\n' "Hysteria 2" "$(STATUS_FLAG hysteria)" "WireGuard" "$(STATUS_FLAG wg-quick@wg0)"
-printf '%s  OPERATIONS%s\n' "$C_BOLD" "$C_RESET"
-printf '  %s[1]%s  Domain & SSL        %s[2]%s  Generate client links\n' "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
-printf '  %s[4]%s  Add user            %s[5]%s  Delete user\n' "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
-printf '  %s[6]%s  Restart services    %s[7]%s  Inspect listening ports\n' "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
-printf '  %s[8]%s  Network diagnostics  %s[9]%s  Adaptive recommendation\n' "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
-printf '  %s[0]%s  Exit\n\n' "$C_CYAN" "$C_RESET"
-read -r -p "  Select an option [0-9]: " opt
+printf '%s╔════════════════════════════════════════════════════════════════════╗%s\n' "$C_BLUE" "$C_RESET"
+printf '%s║%s  %sMUB-X%s  %sSECURE TRANSPORT CONTROL CENTER%s                       %s║%s\n' \
+  "$C_BLUE" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_CYAN" "$C_BOLD" "$C_RESET" "$C_BLUE" "$C_RESET"
+printf '%s╠════════════════════════════════════════════════════════════════════╣%s\n' "$C_BLUE" "$C_RESET"
+printf '%s║%s  %sNODE%s     %-52s %s║%s\n' "$C_BLUE" "$C_RESET" "$C_DIM" "$C_RESET" "$DOMAIN" "$C_BLUE" "$C_RESET"
+printf '%s║%s  %sTIME%s     %-52s %s║%s\n' "$C_BLUE" "$C_RESET" "$C_DIM" "$C_RESET" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$C_BLUE" "$C_RESET"
+printf '%s╚════════════════════════════════════════════════════════════════════╝%s\n\n' "$C_BLUE" "$C_RESET"
+printf '%s┌─ SERVICE STATUS ───────────────────────────────────────────────────┐%s\n' "$C_CYAN" "$C_RESET"
+printf '  %s%-14s%b    %s%-14s%b\n' "$C_DIM" "EDGE ROUTER" "$(STATUS_FLAG haproxy)" "$C_DIM" "WEB GATEWAY" "$(STATUS_FLAG nginx)"
+printf '  %s%-14s%b    %s%-14s%b\n' "$C_DIM" "XRAY CORE" "$(STATUS_FLAG xray)" "$C_DIM" "SSH ACCESS" "$(STATUS_FLAG dropbear)"
+printf '  %s%-14s%b    %s%-14s%b\n' "$C_DIM" "WS TUNNEL" "$(STATUS_FLAG wstunnel)" "$C_DIM" "HTTP PROXY" "$(STATUS_FLAG squid)"
+printf '  %s%-14s%b    %s%-14s%b\n' "$C_DIM" "HY2 UDP" "$(STATUS_FLAG hysteria)" "$C_DIM" "WIREGUARD" "$(STATUS_FLAG wg-quick@wg0)"
+printf '%s└───────────────────────────────────────────────────────────────────┘%s\n\n' "$C_CYAN" "$C_RESET"
+printf '%s┌─ PROVISIONING ────────────────────────────────────────────────────┐%s\n' "$C_GREEN" "$C_RESET"
+printf '  %s[1]%s  Domain & SSL       %s[2]%s  Generate client links\n' "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
+printf '  %s[4]%s  Add user           %s[5]%s  Delete user\n' "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
+printf '%s└───────────────────────────────────────────────────────────────────┘%s\n' "$C_GREEN" "$C_RESET"
+printf '%s┌─ OPERATIONS ───────────────────────────────────────────────────────┐%s\n' "$C_BLUE" "$C_RESET"
+printf '  %s[6]%s  Restart services   %s[7]%s  Inspect listening ports\n' "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
+printf '  %s[8]%s  Network diagnostics %s[9]%s  Adaptive recommendation\n' "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
+printf '%s└───────────────────────────────────────────────────────────────────┘%s\n' "$C_BLUE" "$C_RESET"
+printf '  %s[0]%s  Exit to shell\n\n' "$C_CYAN" "$C_RESET"
+read -r -p "  ${C_BOLD}➜${C_RESET} Select an option [0-9]: " opt
 case "$opt" in
   1) /usr/local/bin/set-domain ;;
   2) read -p "Bug-host: " b; /usr/local/bin/link-gen "${b:-$DOMAIN}" ;;
