@@ -26,7 +26,7 @@ release; the upstream project does not publish an armhf binary.
 - **HAProxy L4 SNI Router:** Listens on port 443 with zero decryption. Directs Apple TLS handshakes straight to Xray Reality while routing carrier bug-host traffic into Nginx.
 - **Universal Bug-Host Multiplexer:** Terminates TLS on loopback (`127.0.0.1:20443`) via Nginx, accepting connections regardless of custom carrier SNI mismatches.
 - **Multi-Protocol Core (Xray-core):** Full support for VLESS-WebSocket, VLESS-HTTPUpgrade, VMess, Trojan, and XTLS-Vision Reality.
-- **Squid & SSH Ingestion:** Dropbear SSH via direct port (`2222`), WebSocket reverse proxy (`/ssh-ws`), and Squid HTTP CONNECT proxies (`8080` & `3128`).
+- **Squid & SSH Ingestion:** Dropbear SSH via direct port (`2222`) and Squid HTTP CONNECT proxies (`8080` & `3128`).
 - **Mobile UDP Gaming Bridge:** Multi-port BadVPN UDPGW (`7100–7700`) instances forward low-latency UDP traffic for games and VoIP.
 - **ZivPN UDP VPN:** Password-authenticated UDP VPN server on port `5667` (amd64/arm64).
 - **Hysteria 2:** Installed from the upstream installer and configured with the issued certificate.

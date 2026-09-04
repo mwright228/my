@@ -56,8 +56,6 @@ echo -e "\n${C_BOLD}${C_ORANGE}─── [4] SSH & INJECTOR PAYLOADS (HTTP CUSTO
 echo -e "${C_CYAN}▶ Direct Dropbear SSH:${C_RESET} ${MYIP}:2222 | UDPGW: 7300"
 echo -e "${C_CYAN}▶ Squid HTTP Proxy   :${C_RESET} ${MYIP}:8080 or 3128"
 echo -e "  ${C_YELLOW}Payload:${C_RESET} CONNECT [host_port] HTTP/1.1[crlf]Host: ${BUG}[crlf]Connection: Keep-Alive[crlf][crlf]"
-echo -e "${C_CYAN}▶ Nginx WebSocket SSH:${C_RESET} ${BUG}:443"
-echo -e "  ${C_YELLOW}Payload:${C_RESET} GET /ssh-ws HTTP/1.1[crlf]Host: ${DOMAIN}[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]"
 
 # 5. WireGuard
 echo -e "\n${C_BOLD}${C_ORANGE}─── [5] WIREGUARD L3 KERNEL VPN (PORT 51820) ───${C_RESET}"
@@ -65,8 +63,10 @@ WG_CONF=$(ls /etc/wireguard/client*.conf /etc/wireguard/wg0-client.conf 2>/dev/n
 if [ -f "$WG_CONF" ]; then
     echo -e "${C_GREEN}[✓] WireGuard Client Profile Found. Scan QR Code:${C_RESET}"
     qrencode -t ansiutf8 < "$WG_CONF"
+elif systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
+    echo -e "${C_GREEN}[✓] WireGuard is active on port 51820. Client profile: /etc/wireguard/mubx-client.conf${C_RESET}"
 else
-    echo -e "${C_DIM}WireGuard running on port 51820. Server: /etc/wireguard/wg0.conf${C_RESET}"
+    echo -e "${C_DIM}WireGuard is installed but inactive. Check: systemctl status wg-quick@wg0${C_RESET}"
 fi
 
 # 6. OpenVPN

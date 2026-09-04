@@ -7,6 +7,12 @@ INSTALL_ROOT="${MUBX_INSTALL_ROOT:-/root/mub-x}"
 die() { printf '[!] %s\n' "$*" >&2; exit 1; }
 require_root() { [ "$(id -u)" -eq 0 ] || die "Run this installer as root."; }
 run() { printf '[*] %s\n' "$*"; "$@"; }
+download_verified() {
+  local url="$1" expected="$2" output="$3"
+  curl --fail --location --proto '=https' --tlsv1.2 "$url" --output "$output"
+  [ "$(sha256sum "$output" | awk '{print $1}')" = "$expected" ] ||
+    die "Checksum verification failed for $url."
+}
 
 require_root
 [ -r /etc/os-release ] || die "Cannot detect the operating system."
@@ -45,6 +51,11 @@ run apt-get install -y ca-certificates curl certbot dnsutils lsof psmisc git jq 
 if [ ! -d "$INSTALL_ROOT/.git" ]; then
   run rm -rf "$INSTALL_ROOT"
   run git clone --depth 1 "$REPO_URL" "$INSTALL_ROOT"
+else
+  [ -z "$(git -C "$INSTALL_ROOT" status --porcelain)" ] ||
+    die "$INSTALL_ROOT has local changes; commit or remove them before upgrading."
+  run git -C "$INSTALL_ROOT" fetch --depth 1 origin main
+  run git -C "$INSTALL_ROOT" reset --hard origin/main
 fi
 cd "$INSTALL_ROOT"
 
@@ -59,14 +70,16 @@ install -m 0644 configs/nginx.conf /etc/nginx/nginx.conf
 install -m 0644 systemd/*.service /etc/systemd/system/
 printf '%s\n' "$DOMAIN" > /usr/local/etc/xray/domain
 
-curl --fail --location --proto '=https' --tlsv1.2 \
-  https://github.com/XTLS/Xray-install/raw/main/install-release.sh \
-  --output /tmp/xray-install.sh
+download_verified \
+  https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh \
+  7f70c95f6b418da8b4f4883343d602964915e28748993870fd554383afdbe555 \
+  /tmp/xray-install.sh
 run bash /tmp/xray-install.sh install
 rm -f /tmp/xray-install.sh
 
-curl --fail --location --proto '=https' --tlsv1.2 https://get.hy2.sh/ \
-  --output /tmp/hysteria-install.sh
+download_verified https://get.hy2.sh/ \
+  2cc5d1c62f132f30c07e75d972144aa5d61ef59f547a04a537e2d9ac505b4344 \
+  /tmp/hysteria-install.sh
 run bash /tmp/hysteria-install.sh
 rm -f /tmp/hysteria-install.sh
 
@@ -77,15 +90,22 @@ command -v hysteria >/dev/null 2>&1 || die "Hysteria installation did not provid
 BUILD_ROOT="$(mktemp -d)"
 trap 'rm -rf "$BUILD_ROOT"' EXIT
 
-GO_VERSION="1.25.0"
+GO_VERSION="1.26.8"
 case "$(dpkg --print-architecture)" in
   amd64) GO_ARCH="amd64" ;;
   arm64) GO_ARCH="arm64" ;;
   armhf) GO_ARCH="armv6l" ;;
 esac
-curl --fail --location --proto '=https' --tlsv1.2 \
+GO_SHA256="$(curl --fail --location --proto '=https' --tlsv1.2 \
+  'https://go.dev/dl/?mode=json' |
+  jq -r --arg file "go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" \
+    '.[] | .files[] | select(.filename == $file) | .sha256' | head -n 1)"
+[ "$GO_SHA256" != "null" ] && [ -n "$GO_SHA256" ] ||
+  die "Unable to obtain the official Go checksum."
+download_verified \
   "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" \
-  --output "$BUILD_ROOT/go.tar.gz"
+  "$GO_SHA256" \
+  "$BUILD_ROOT/go.tar.gz"
 rm -rf /usr/local/go
 tar -C /usr/local -xzf "$BUILD_ROOT/go.tar.gz"
 export PATH="/usr/local/go/bin:$PATH"
@@ -125,10 +145,76 @@ if [ ! -s /etc/openvpn/certs/ca.crt ]; then
 fi
 install -m 0644 configs/openvpn-tcp.conf /etc/openvpn/server/tcp.conf
 install -m 0644 configs/openvpn-udp.conf /etc/openvpn/server/udp.conf
+install -d -m 0700 /etc/openvpn/client
+if [ ! -s /etc/openvpn/client/mubx-client.key ]; then
+  run openssl genrsa -out /etc/openvpn/client/mubx-client.key 2048
+  run openssl req -new -key /etc/openvpn/client/mubx-client.key \
+    -subj "/CN=mubx-client" -out /etc/openvpn/client/mubx-client.csr
+  run openssl x509 -req -days 825 -CA /etc/openvpn/certs/ca.crt \
+    -CAkey /etc/openvpn/certs/ca.key -CAcreateserial \
+    -in /etc/openvpn/client/mubx-client.csr \
+    -out /etc/openvpn/client/mubx-client.crt
+fi
+cat > /etc/openvpn/client/mubx-client-tcp.ovpn <<EOF
+client
+dev tun
+proto tcp-client
+remote $DOMAIN 1194
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+remote-cert-tls server
+<ca>
+$(cat /etc/openvpn/certs/ca.crt)
+</ca>
+<cert>
+$(cat /etc/openvpn/client/mubx-client.crt)
+</cert>
+<key>
+$(cat /etc/openvpn/client/mubx-client.key)
+</key>
+EOF
+cp /etc/openvpn/client/mubx-client-tcp.ovpn /etc/openvpn/client/mubx-client-udp.ovpn
+sed -i "s/proto tcp-client/proto udp/; s/remote $DOMAIN 1194/remote $DOMAIN 2200/" \
+  /etc/openvpn/client/mubx-client-udp.ovpn
 install -d -m 0755 /etc/hysteria
 install -m 0600 configs/hysteria.yaml /etc/hysteria/config.yaml
 WAN_IF="$(ip -o route show to default | awk 'NR == 1 {print $5}')"
 [ -n "$WAN_IF" ] || die "Unable to determine the public network interface."
+install -d -m 0700 /etc/wireguard
+if [ ! -s /etc/wireguard/server.key ]; then
+  wg genkey | tee /etc/wireguard/server.key | wg pubkey > /etc/wireguard/server.pub
+  wg genkey | tee /etc/wireguard/client.key | wg pubkey > /etc/wireguard/client.pub
+fi
+WG_SERVER_PRIV="$(cat /etc/wireguard/server.key)"
+WG_SERVER_PUB="$(cat /etc/wireguard/server.pub)"
+WG_CLIENT_PRIV="$(cat /etc/wireguard/client.key)"
+cat > /etc/wireguard/wg0.conf <<EOF
+[Interface]
+Address = 10.66.66.1/24
+ListenPort = 51820
+PrivateKey = $WG_SERVER_PRIV
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o $WAN_IF -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o $WAN_IF -j MASQUERADE
+
+[Peer]
+PublicKey = $(cat /etc/wireguard/client.pub)
+AllowedIPs = 10.66.66.2/32
+EOF
+cat > /etc/wireguard/mubx-client.conf <<EOF
+[Interface]
+PrivateKey = $WG_CLIENT_PRIV
+Address = 10.66.66.2/32
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = $WG_SERVER_PUB
+Endpoint = $DOMAIN:51820
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+EOF
+chmod 0600 /etc/wireguard/*.key /etc/wireguard/*.conf
 printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-mubx-forwarding.conf
 run sysctl --system
 iptables -t nat -C POSTROUTING -s 10.8.0.0/24 -o "$WAN_IF" -j MASQUERADE 2>/dev/null ||
@@ -158,9 +244,10 @@ case "$ZIVPN_ARCH" in
   *) die "No ZivPN binary mapping for $ZIVPN_ARCH." ;;
 esac
 if [ "$ZIVPN_ENABLED" -eq 1 ]; then
-  curl --fail --location --proto '=https' --tlsv1.2 \
+  download_verified \
     "https://github.com/zahidbd2/udp-zivpn/releases/download/udp-zivpn_1.4.9/$ZIVPN_ASSET" \
-    --output /usr/local/bin/zivpn
+    df6658c195882ff2f6cefb44050e8cb2c238ceb2b6e3fbefb931698f4f0519cb \
+    /usr/local/bin/zivpn
   chmod 0755 /usr/local/bin/zivpn
   install -d -m 0700 /etc/zivpn
   install -m 0600 configs/zivpn.json /etc/zivpn/config.json
@@ -188,8 +275,14 @@ for svc in openvpn-server@tcp openvpn-server@udp; do
   run systemctl restart "$svc"
   systemctl is-active --quiet "$svc" || die "$svc failed to start; inspect journalctl -u $svc."
 done
+run systemctl enable wg-quick@wg0
+run systemctl restart wg-quick@wg0
+systemctl is-active --quiet wg-quick@wg0 ||
+  die "wg-quick@wg0 failed to start; inspect its journal."
 for port in 7100 7200 7300 7400 7500 7600 7700; do
   run systemctl enable --now "badvpn@$port.service"
+  systemctl is-active --quiet "badvpn@$port.service" ||
+    die "badvpn@$port.service failed to start; inspect its journal."
 done
 run systemctl enable dnstt
 run systemctl restart dnstt
