@@ -11,72 +11,103 @@ fi
 TARGET="${1:-${DOMAIN:-1.1.1.1}}"
 ENDPOINTS=("1.1.1.1" "8.8.8.8" "9.9.9.9")
 
-echo "MUB-X network diagnostics"
-echo "Timestamp: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-echo "Target: $TARGET"
-printf 'IPv4: '; curl -4 --fail --silent --max-time 5 https://api.ipify.org || echo unavailable
-printf 'IPv6: '; curl -6 --fail --silent --max-time 5 https://api64.ipify.org || echo unavailable
-printf 'Congestion control: '; cat /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || echo unavailable
-printf 'Default qdisc: '; cat /proc/sys/net/core/default_qdisc 2>/dev/null || echo unavailable
-printf 'Default route: '; ip route show default 2>/dev/null | head -n 1 || echo unavailable
+mubx_clear
+mubx_box_line '┌' '┐'
+mubx_put "$(printf '  %sMUB-X%s · %snetwork diagnostics%s' "$C_BOLD" "$C_RESET" "$C_CYAN" "$C_RESET")"
+mubx_box_line '├' '┤'
+mubx_kvrow "Target"    "$TARGET"
+mubx_kvrow "Timestamp" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+mubx_box_line '└' '┘'
+printf '\n'
 
-echo
-echo "ICMP latency/loss:"
-for endpoint in "${ENDPOINTS[@]}"; do
-  ping -n -c 5 -W 2 "$endpoint" 2>/dev/null |
-    awk -v host="$endpoint" \
-      '/packet loss/ {loss=$6} /^rtt/ {split($4, a, "/"); avg=a[2]} \
-       END {printf "%s loss=%s avg=%s\n", host, loss, (avg=="" ? "n/a" : avg)}'
-done
+# --- host information -------------------------------------------------------
+ipv4="$(curl -4 --fail --silent --max-time 5 https://api.ipify.org 2>/dev/null || echo unavailable)"
+ipv6="$(curl -6 --fail --silent --max-time 5 https://api64.ipify.org 2>/dev/null || echo unavailable)"
+cc="$(cat /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || echo unavailable)"
+qdisc="$(cat /proc/sys/net/core/default_qdisc 2>/dev/null || echo unavailable)"
+route="$(ip route show default 2>/dev/null | head -n 1 || echo unavailable)"
 
-echo
-echo "DNS reachability:"
+mubx_group_open "Host"
+mubx_kvrow "IPv4"      "$ipv4"
+mubx_kvrow "IPv6"      "$ipv6"
+mubx_kvrow "Congestion" "$cc"
+mubx_kvrow "Default qdisc" "$qdisc"
+mubx_put "$(printf '  %s%-12s%s %s%s%s' "$C_DIM" 'Default route:' "$C_RESET" "$C_CYAN" "${route:0:44}" "$C_RESET")"
+mubx_group_close
+
+# --- ICMP latency / loss ----------------------------------------------------
+mubx_group_open "ICMP latency & loss"
 for endpoint in "${ENDPOINTS[@]}"; do
-  if timeout 5 getent hosts "$endpoint" >/dev/null 2>&1; then
-    echo "$endpoint reachable"
+  res="$(ping -n -c 5 -W 2 "$endpoint" 2>/dev/null | \
+    awk '/packet loss/ {loss=$6} /^rtt/ {split($4, a, "/"); avg=a[2]} \
+         END {printf "%s|%s", (loss ? loss : "n/a"), (avg ? avg : "n/a")}')"
+  if [ -z "$res" ]; then
+    loss='n/a'; avg='n/a'
   else
-    echo "$endpoint unavailable"
+    loss="${res%%|*}"
+    avg="${res#*|}"
+  fi
+  if [ "$avg" != "n/a" ]; then
+    mubx_card "  $endpoint" "$(printf '%sloss %s   avg %sms%s' "$C_GREEN" "$loss" "$avg" "$C_RESET")"
+  else
+    mubx_card "  $endpoint" "$(printf '%sloss %s   avg %sms%s' "$C_RED" "$loss" "$avg" "$C_RESET")"
   fi
 done
+mubx_group_close
 
-# TCP transports are probed with a connect; UDP transports would always
-# "fail" a TCP probe (they have no TCP listener), so their health is
-# reported from the local listener table instead.
-echo
-echo "TCP reachability (connect to $TARGET):"
+# --- DNS reachability -------------------------------------------------------
+mubx_group_open "DNS reachability"
+for endpoint in "${ENDPOINTS[@]}"; do
+  if timeout 5 getent hosts "$endpoint" >/dev/null 2>&1; then
+    mubx_card "  $endpoint" "$(mubx_dot "$C_GREEN" '●' 'up')"
+  else
+    mubx_card "  $endpoint" "$(mubx_dot "$C_RED" '○' 'down')"
+  fi
+done
+mubx_group_close
+
+# --- TCP reachability (connect to TARGET) -----------------------------------
+mubx_group_open "TCP reachability (connect to $TARGET)"
 for spec in "haproxy TLS|443" "nginx HTTP|80" "dropbear SSH|2222" "dropbear SSH alt|109" "openvpn TCP|1194"; do
   name="${spec%%|*}"; port="${spec##*|}"
   if timeout 4 bash -c ":</dev/tcp/$TARGET/$port" 2>/dev/null; then
-    printf '  %-18s %s:%s open\n' "$name" "$TARGET" "$port"
+    mubx_card "  $name" "$(printf '%s%s:%s open%s' "$C_GREEN" "$TARGET" "$port" "$C_RESET")"
   else
-    printf '  %-18s %s:%s unavailable\n' "$name" "$TARGET" "$port"
+    mubx_card "  $name" "$(printf '%s%s:%s unavailable%s' "$C_RED" "$TARGET" "$port" "$C_RESET")"
   fi
 done
+mubx_group_close
 
-echo
-echo "UDP listeners (local check):"
+# --- UDP listeners (local check) --------------------------------------------
+mubx_group_open "UDP listeners (local)"
 for spec in "openvpn UDP|2200" "hysteria 2|4433" "wireguard|51820" "dnstt|53" "zivpn|5667" "badvpn udpgw|7100" "badvpn udpgw|7500" "badvpn udpgw|7700"; do
   name="${spec%%|*}"; port="${spec##*|}"
   if ss -H -uln "sport = :$port" 2>/dev/null | grep -q .; then
-    printf '  %-18s %s listening\n' "$name" "$port"
+    mubx_card "  $name" "$(printf '%s%s listening%s' "$C_GREEN" "$port" "$C_RESET")"
   else
-    printf '  %-18s %s not listening\n' "$name" "$port"
+    mubx_card "  $name" "$(printf '%s%s not listening%s' "$C_RED" "$port" "$C_RESET")"
   fi
 done
+mubx_group_close
 
-echo
-echo "Path MTU probes (to $TARGET):"
+# --- Path MTU probes ---------------------------------------------------------
+mubx_group_open "Path MTU probes (to $TARGET)"
 for size in 1280 1360 1420 1472; do
   if ping -n -c 1 -W 2 -M do -s "$((size - 28))" "$TARGET" >/dev/null 2>&1; then
-    echo "MTU $size: pass"
+    mubx_card "  MTU $size" "$(mubx_dot "$C_GREEN" '●' 'pass')"
   else
-    echo "MTU $size: fail"
+    mubx_card "  MTU $size" "$(mubx_dot "$C_RED" '○' 'fail')"
   fi
 done
+mubx_group_close
 
-echo
-echo "MUB-X services:"
+# --- MUB-X services ----------------------------------------------------------
+mubx_group_open "MUB-X services"
 for service in haproxy nginx xray hysteria dnstt dropbear squid wg-quick@wg0; do
-  systemctl is-active --quiet "$service" 2>/dev/null &&
-    echo "$service: active" || echo "$service: inactive"
+  if systemctl is-active --quiet "$service" 2>/dev/null; then
+    mubx_card "  $service" "$(mubx_dot "$C_GREEN" '●' 'up')"
+  else
+    mubx_card "  $service" "$(mubx_dot "$C_RED" '○' 'down')"
+  fi
 done
+mubx_group_close

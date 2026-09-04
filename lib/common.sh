@@ -115,3 +115,32 @@ mubx_card() { # $1 left text  $2 right text
 mubx_kvrow() { # $1 label  $2 value
   mubx_put "$(printf '  %s%-12s%s %s%s%s' "$C_DIM" "$1:" "$C_RESET" "$C_CYAN" "$2" "$C_RESET")"
 }
+
+# --- grouped card helpers -----------------------------------------------
+# One open group card: title row, divider, then rows via mubx_card/mubx_put.
+# Explanations for individual rows can be registered with mubx_hint; they
+# are printed as borderless notes when the card closes.
+mubx_group_open() { # $1 section title
+  _mubx_hints=()
+  mubx_box_line '┌' '┐'
+  mubx_put "$(printf '  %s%s%s' "$C_BOLD" "$1" "$C_RESET")"
+  mubx_box_line '├' '┤'
+}
+
+mubx_hint() { _mubx_hints+=("$1"); }
+
+mubx_group_close() {
+  mubx_box_line '└' '┘'
+  local h
+  if [ "${#_mubx_hints[@]}" -gt 0 ]; then
+    for h in "${_mubx_hints[@]}"; do
+      printf '  %s↳ %s%s\n' "$C_DIM" "${h:0:96}" "$C_RESET"
+    done
+  fi
+  printf '\n'
+}
+
+# A right-flush status made of a colored dot and a four-column word.
+mubx_dot() { # $1 color  $2 glyph  $3 word
+  printf '%s%s%s  %s%-4s%s' "$1" "$2" "$C_RESET" "$1" "$3" "$C_RESET"
+}
