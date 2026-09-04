@@ -1,0 +1,15 @@
+listen: :4433
+
+tls:
+  cert: /etc/letsencrypt/live/__DOMAIN__/fullchain.pem
+  key: /etc/letsencrypt/live/__DOMAIN__/privkey.pem
+
+auth:
+  type: password
+  password: __HY2_PASS__
+
+masquerade:
+  type: proxy
+  proxy:
+    url: https://www.apple.com/
+    rewriteHost: true

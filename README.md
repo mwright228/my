@@ -8,9 +8,10 @@ Multi Port VPS Script
 curl -fsSL https://raw.githubusercontent.com/mwright228/my/main/install.sh | bash
 ```
 
-The installer currently targets a fresh Ubuntu 22.04 LTS amd64 VPS. The domain
-must already resolve to the VPS and ports 80/443 must be reachable while the
-Let's Encrypt certificate is issued.
+The installer targets fresh Ubuntu 20.04/22.04/24.04 or Debian 11/12/13
+systemd VPS hosts on amd64, arm64, or armhf. The domain must already resolve
+to the VPS and ports 80/443 must be reachable while the Let's Encrypt
+certificate is issued.
 
 ---
 

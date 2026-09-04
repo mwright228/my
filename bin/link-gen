@@ -2,7 +2,7 @@
 source /etc/telecom-engine.env 2>/dev/null
 BUG="${1:-$DOMAIN}"
 MYIP=$(curl -4 -s ifconfig.me 2>/dev/null || echo "$DOMAIN")
-HY2_PASS="${UUID}"
+HY2_PASS="${HY2_PASS:?Missing Hysteria password; rerun the installer}"
 
 C_RESET='\033[0m'
 C_BOLD='\033[1m'

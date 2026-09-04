@@ -11,9 +11,24 @@ run() { printf '[*] %s\n' "$*"; "$@"; }
 require_root
 [ -r /etc/os-release ] || die "Cannot detect the operating system."
 . /etc/os-release
-[ "$ID" = ubuntu ] && [ "$VERSION_ID" = 22.04 ] ||
-  die "This installer targets Ubuntu 22.04 amd64."
-[ "$(dpkg --print-architecture)" = amd64 ] || die "This installer targets amd64."
+case "$ID" in
+  ubuntu)
+    case "$VERSION_ID" in 20.04|22.04|24.04) ;;
+      *) die "Supported Ubuntu releases are 20.04, 22.04, and 24.04." ;;
+    esac
+    ;;
+  debian)
+    case "$VERSION_ID" in 11|12|13) ;;
+      *) die "Supported Debian releases are 11, 12, and 13." ;;
+    esac
+    ;;
+  *) die "This installer supports Ubuntu or Debian only." ;;
+esac
+[ "$(ps -p 1 -o comm=)" = systemd ] || die "A systemd-based VPS is required."
+case "$(dpkg --print-architecture)" in
+  amd64|arm64|armhf) ;;
+  *) die "Supported architectures are amd64, arm64, and armhf." ;;
+esac
 
 read -r -p "Domain: " DOMAIN </dev/tty
 DOMAIN="${DOMAIN,,}"
@@ -49,8 +64,11 @@ curl --fail --location --proto '=https' --tlsv1.2 \
 run bash /tmp/xray-install.sh install
 rm -f /tmp/xray-install.sh
 
+run bash -c "$(curl --fail --location --proto '=https' --tlsv1.2 https://get.hy2.sh/)"
+
 run certbot certonly --standalone --non-interactive --agree-tos \
   --register-unsafely-without-email -d "$DOMAIN"
+command -v hysteria >/dev/null 2>&1 || die "Hysteria installation did not provide /usr/local/bin/hysteria."
 
 install -d -m 0700 /etc/openvpn/certs /etc/openvpn/server
 if [ ! -s /etc/openvpn/certs/ca.crt ]; then
@@ -67,6 +85,8 @@ if [ ! -s /etc/openvpn/certs/ca.crt ]; then
 fi
 install -m 0644 configs/openvpn-tcp.conf /etc/openvpn/server/tcp.conf
 install -m 0644 configs/openvpn-udp.conf /etc/openvpn/server/udp.conf
+install -d -m 0755 /etc/hysteria
+install -m 0600 configs/hysteria.yaml /etc/hysteria/config.yaml
 WAN_IF="$(ip -o route show to default | awk 'NR == 1 {print $5}')"
 [ -n "$WAN_IF" ] || die "Unable to determine the public network interface."
 printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-mubx-forwarding.conf
@@ -84,6 +104,7 @@ source /etc/telecom-engine.env
 sed -i "s|__DOMAIN__|$DOMAIN|g; s|__UUID__|$UUID|g; s|__SHORT_ID__|$SHORT_ID|g; s|__REALITY_PRIVKEY__|$REALITY_PRIVKEY|g" \
   /usr/local/etc/xray/config.json /etc/nginx/nginx.conf /etc/haproxy/haproxy.cfg \
   /etc/systemd/system/dnstt.service
+sed -i "s|__DOMAIN__|$DOMAIN|g; s|__HY2_PASS__|$HY2_PASS|g" /etc/hysteria/config.yaml
 
 nginx -t
 haproxy -c -f /etc/haproxy/haproxy.cfg
@@ -99,5 +120,9 @@ for svc in openvpn-server@tcp openvpn-server@udp; do
   run systemctl restart "$svc"
   systemctl is-active --quiet "$svc" || die "$svc failed to start; inspect journalctl -u $svc."
 done
+run systemctl daemon-reload
+run systemctl enable hysteria
+run systemctl restart hysteria
+systemctl is-active --quiet hysteria || die "hysteria failed to start; inspect journalctl -u hysteria."
 
 echo "[+] Core online. Type 'menu'."
