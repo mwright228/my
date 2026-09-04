@@ -123,8 +123,11 @@ while true; do
     0|q|Q) exit 0 ;;
     *) echo "  Invalid choice: $opt"; sleep 1; continue ;;
   esac
-  # Pause so the output of the chosen command stays readable.
+  # Pause so the output of the chosen command stays readable. Reads from
+  # stdin like every other prompt in this menu: /dev/tty is not guaranteed
+  # to be interactive in every terminal, and a hung read would leave the
+  # panel frozen after a command finishes.
   if [ -t 0 ]; then
-    read -r -p "  Press Enter to return to the menu... " _ </dev/tty || true
+    read -r -p "  Press Enter to return to the menu... " _ || true
   fi
 done
