@@ -20,7 +20,7 @@ load_secrets() {
   local key value
   while IFS='=' read -r key value; do
     case "$key" in
-      DOMAIN|UUID|REALITY_PRIVKEY|REALITY_PUBKEY|SHORT_ID|HY2_PASS|ZIVPN_PASS|SSH_WS_PATH)
+      DOMAIN|UUID|REALITY_PRIVKEY|REALITY_PUBKEY|SHORT_ID|HY2_PASS|ZIVPN_PASS|SSH_WS_PATH|REALITY_FRONTS)
         value="${value#\"}"
         value="${value%\"}"
         [[ "$value" != *$'\n'* ]] || die "Invalid secret value for $key."
@@ -30,7 +30,7 @@ load_secrets() {
       *) die "Unexpected key in /etc/telecom-engine.env: $key" ;;
     esac
   done < /etc/telecom-engine.env
-  for key in DOMAIN UUID REALITY_PRIVKEY REALITY_PUBKEY SHORT_ID HY2_PASS ZIVPN_PASS SSH_WS_PATH; do
+  for key in DOMAIN UUID REALITY_PRIVKEY REALITY_PUBKEY SHORT_ID HY2_PASS ZIVPN_PASS SSH_WS_PATH REALITY_FRONTS; do
     [ -n "${!key:-}" ] || die "Missing $key in /etc/telecom-engine.env."
   done
 }
@@ -156,11 +156,33 @@ DOMAIN="${DOMAIN,,}"
 [[ "$DOMAIN" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]] ||
   die "Enter a valid DNS hostname."
 
+# Reality fronts: which real HTTPS site(s) should the Reality tunnel
+# camouflage against? Different SIM carriers whitelist different SNIs, so
+# any number of fronts can be configured (apple.com stays the default).
+# Each front is validated for DNS + TCP/443 reachability from this host.
+reality_default="$(awk -F= '/^REALITY_FRONTS=/{gsub(/["\r]/, "", $2); print $2}' \
+  /etc/telecom-engine.env 2>/dev/null || true)"
+reality_default="${reality_default:-www.apple.com}"
+REALITY_FRONTS_IN=
+read -r -p "Reality SNI front host(s), space separated [$reality_default]: " REALITY_FRONTS_IN </dev/tty
+REALITY_FRONTS_IN="${REALITY_FRONTS_IN,,}"
+REALITY_FRONTS_IN="$(printf '%s' "$REALITY_FRONTS_IN" | tr -s ' ' | sed 's/^ //; s/ $//')"
+if [ -n "$REALITY_FRONTS_IN" ]; then
+  for front in $REALITY_FRONTS_IN; do
+    [[ "$front" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]] ||
+      die "Invalid Reality front domain: $front"
+    [ "$front" != "$DOMAIN" ] ||
+      die "A Reality front cannot be your own domain ($front)."
+    timeout 6 bash -c ":</dev/tcp/$front/443" 2>/dev/null ||
+      die "Reality front $front is not reachable on TCP 443 from this host."
+  done
+fi
+
 export DEBIAN_FRONTEND=noninteractive
 run apt-get update
 run apt-get install -y ca-certificates curl certbot dnsutils lsof psmisc git jq \
   uuid-runtime openssl nginx dropbear squid haproxy openvpn wireguard-tools \
-  iptables iptables-persistent qrencode netcat-openbsd golang-go \
+  iptables iptables-persistent qrencode netcat-openbsd fail2ban \
   build-essential cmake libnspr4-dev libnss3-dev unzip iproute2
 install -d -m 0700 /etc/mubx
 firewall_snapshot_tmp="$(mktemp /etc/mubx/firewall.XXXXXX)"
@@ -274,6 +296,7 @@ for file in bin/*; do
   backup_file "/usr/local/bin/$(basename "$file")"
 done
 backup_file /usr/local/lib/mubx/common.sh
+backup_file /usr/local/lib/mubx/reality-build.sh
 for file in systemd/*.service systemd/*.timer; do
   backup_file "/etc/systemd/system/$(basename "$file")"
 done
@@ -287,9 +310,9 @@ for file in xray hysteria wstunnel zivpn dnstt-server dnstt-client badvpn-udpgw;
 done
 install -m 0755 bin/* /usr/local/bin/
 install -D -m 0644 lib/common.sh /usr/local/lib/mubx/common.sh
+install -D -m 0644 lib/reality-build.sh /usr/local/lib/mubx/reality-build.sh
 install -m 0644 configs/dropbear /etc/default/dropbear
 install -m 0644 configs/squid.conf /etc/squid/squid.conf
-install -m 0644 configs/haproxy.cfg /etc/haproxy/haproxy.cfg
 install -m 0644 configs/nginx.conf /etc/nginx/nginx.conf
 install -m 0644 systemd/*.service /etc/systemd/system/
 install -m 0644 systemd/*.timer /etc/systemd/system/
@@ -326,6 +349,16 @@ download_verified \
   "$XRAY_SHA256" "$download_root/xray.zip"
 unzip -p "$download_root/xray.zip" xray > /usr/local/bin/xray
 chmod 0755 /usr/local/bin/xray
+# Ship geoip/geosite databases now instead of waiting for the first weekly
+# maintenance run. Newer Xray releases bundle them in the zip; skip quietly
+# if this build does not.
+install -d -m 0755 /usr/local/share/xray
+for geo in geoip.dat geosite.dat; do
+  if unzip -Z1 "$download_root/xray.zip" | grep -qx "$geo"; then
+    unzip -p "$download_root/xray.zip" "$geo" > "/usr/local/share/xray/$geo"
+    chmod 0644 "/usr/local/share/xray/$geo"
+  fi
+done
 rm -f "$download_root/xray.zip"
 download_verified \
   "https://github.com/HyNetworks/hysteria/releases/download/app/$HYSTERIA_VERSION/$HYSTERIA_ASSET" \
@@ -529,14 +562,21 @@ iptables-save > /etc/iptables/rules.v4
 printf '%s\n' "$WAN_IF" > /etc/mubx/wan-interface
 
 run /usr/local/bin/generate-secrets
+if [ -n "${REALITY_FRONTS_IN:-}" ]; then
+  sed -i "s|^REALITY_FRONTS=.*|REALITY_FRONTS=\"$REALITY_FRONTS_IN\"|" /etc/telecom-engine.env
+fi
 sed -i "s/^DOMAIN=.*/DOMAIN=\"$DOMAIN\"/; s|__DOMAIN__|$DOMAIN|g" /etc/telecom-engine.env
-install -m 0600 configs/xray.json /usr/local/etc/xray/config.json
 load_secrets
 sed -i "s|__SSH_WS_PATH__|$SSH_WS_PATH|g" /etc/nginx/nginx.conf /etc/systemd/system/wstunnel.service
-sed -i "s|__DOMAIN__|$DOMAIN|g; s|__UUID__|$UUID|g; s|__SHORT_ID__|$SHORT_ID|g; s|__REALITY_PRIVKEY__|$REALITY_PRIVKEY|g" \
-  /usr/local/etc/xray/config.json /etc/nginx/nginx.conf /etc/haproxy/haproxy.cfg \
-  /etc/systemd/system/dnstt.service
+sed -i "s|__DOMAIN__|$DOMAIN|g" /etc/nginx/nginx.conf /etc/systemd/system/dnstt.service
 sed -i "s|__DOMAIN__|$DOMAIN|g; s|__HY2_PASS__|$HY2_PASS|g" /etc/hysteria/config.yaml
+# Generate the Xray config (one Reality inbound per configured SNI front)
+# and the HAProxy SNI routing from the shared renderers.
+source ./lib/reality-build.sh
+mubx_xray_render configs/xray.json configs/reality-inbound.json \
+  /usr/local/etc/xray/config.json
+mubx_haproxy_render configs/haproxy.cfg /etc/haproxy/haproxy.cfg
+chmod 0600 /usr/local/etc/xray/config.json
 ZIVPN_ARCH="$(dpkg --print-architecture)"
 ZIVPN_ENABLED=1
 case "$ZIVPN_ARCH" in
@@ -623,6 +663,10 @@ run systemctl enable --now mubx-cron.timer
 run /usr/local/bin/mubx-tune
 run systemctl daemon-reload
 run systemctl enable --now mubx-adaptive.timer
+if command -v fail2ban-client >/dev/null 2>&1; then
+  install -D -m 0644 configs/fail2ban-mubx.conf /etc/fail2ban/jail.d/mubx.conf
+  systemctl enable --now fail2ban || true
+fi
 
 install_success=1
 echo "[+] Core online. Type 'menu'."

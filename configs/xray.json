@@ -26,16 +26,26 @@
       "port": 10001,
       "protocol": "vless",
       "settings": {
-        "clients": [{"id": "__UUID__"}],
+        "clients": [
+          {
+            "id": "__UUID__"
+          }
+        ],
         "decryption": "none"
       },
       "streamSettings": {
         "network": "ws",
-        "wsSettings": {"path": "/vless-ws"}
+        "wsSettings": {
+          "path": "/vless-ws"
+        }
       },
       "sniffing": {
         "enabled": true,
-        "destOverride": ["http", "tls", "quic"],
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
         "routeOnly": false
       }
     },
@@ -45,15 +55,26 @@
       "port": 10002,
       "protocol": "vmess",
       "settings": {
-        "clients": [{"id": "__UUID__", "alterId": 0}]
+        "clients": [
+          {
+            "id": "__UUID__",
+            "alterId": 0
+          }
+        ]
       },
       "streamSettings": {
         "network": "ws",
-        "wsSettings": {"path": "/vmess-ws"}
+        "wsSettings": {
+          "path": "/vmess-ws"
+        }
       },
       "sniffing": {
         "enabled": true,
-        "destOverride": ["http", "tls", "quic"],
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
         "routeOnly": false
       }
     },
@@ -63,15 +84,25 @@
       "port": 10003,
       "protocol": "trojan",
       "settings": {
-        "clients": [{"password": "__UUID__"}]
+        "clients": [
+          {
+            "password": "__UUID__"
+          }
+        ]
       },
       "streamSettings": {
         "network": "ws",
-        "wsSettings": {"path": "/trojan-ws"}
+        "wsSettings": {
+          "path": "/trojan-ws"
+        }
       },
       "sniffing": {
         "enabled": true,
-        "destOverride": ["http", "tls", "quic"],
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
         "routeOnly": false
       }
     },
@@ -81,16 +112,26 @@
       "port": 10004,
       "protocol": "vless",
       "settings": {
-        "clients": [{"id": "__UUID__"}],
+        "clients": [
+          {
+            "id": "__UUID__"
+          }
+        ],
         "decryption": "none"
       },
       "streamSettings": {
         "network": "httpupgrade",
-        "httpupgradeSettings": {"path": "/vless-httpupgrade"}
+        "httpupgradeSettings": {
+          "path": "/vless-httpupgrade"
+        }
       },
       "sniffing": {
         "enabled": true,
-        "destOverride": ["http", "tls", "quic"],
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
         "routeOnly": false
       }
     },
@@ -100,49 +141,27 @@
       "port": 10005,
       "protocol": "vless",
       "settings": {
-        "clients": [{"id": "__UUID__"}],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "xhttp",
-        "xhttpSettings": {"path": "/vless-xhttp", "mode": "auto"}
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": ["http", "tls", "quic"],
-        "routeOnly": false
-      }
-    },
-    {
-      "tag": "reality-tcp",
-      "listen": "127.0.0.1",
-      "port": 10443,
-      "protocol": "vless",
-      "settings": {
         "clients": [
           {
-            "id": "__UUID__",
-            "flow": "xtls-rprx-vision"
+            "id": "__UUID__"
           }
         ],
         "decryption": "none"
       },
       "streamSettings": {
-        "network": "tcp",
-        "security": "reality",
-        "realitySettings": {
-          "show": false,
-          "dest": "www.apple.com:443",
-          "xver": 0,
-          "serverNames": ["www.apple.com", "apple.com"],
-          "privateKey": "__REALITY_PRIVKEY__",
-          "shortIds": ["__SHORT_ID__"],
-          "spiderX": "/"
+        "network": "xhttp",
+        "xhttpSettings": {
+          "path": "/vless-xhttp",
+          "mode": "auto"
         }
       },
       "sniffing": {
         "enabled": true,
-        "destOverride": ["http", "tls", "quic"],
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
         "routeOnly": false
       }
     }

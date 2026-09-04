@@ -1,0 +1,41 @@
+{
+  "tag": "reality-__PORT__",
+  "listen": "127.0.0.1",
+  "port": __PORT__,
+  "protocol": "vless",
+  "settings": {
+    "clients": [
+      {
+        "id": "__UUID__",
+        "flow": "xtls-rprx-vision"
+      }
+    ],
+    "decryption": "none"
+  },
+  "streamSettings": {
+    "network": "tcp",
+    "security": "reality",
+    "realitySettings": {
+      "show": false,
+      "dest": "__DEST__:443",
+      "xver": 0,
+      "serverNames": [
+        "__SNI__"
+      ],
+      "privateKey": "__REALITY_PRIVKEY__",
+      "shortIds": [
+        "__SHORT_ID__"
+      ],
+      "spiderX": "/"
+    }
+  },
+  "sniffing": {
+    "enabled": true,
+    "destOverride": [
+      "http",
+      "tls",
+      "quic"
+    ],
+    "routeOnly": false
+  }
+}

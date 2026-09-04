@@ -53,10 +53,12 @@ for path in /usr/local/bin/menu /usr/local/bin/link-gen /usr/local/bin/add-user 
   /usr/local/bin/delete-user /usr/local/bin/mubx-diagnose \
   /usr/local/bin/mubx-tune /usr/local/bin/mubx-adaptive \
   /usr/local/bin/mubx-probe /usr/local/bin/set-domain /usr/local/bin/mubx-cron \
-  /usr/local/bin/generate-secrets /usr/local/bin/uninstall.sh; do
+  /usr/local/bin/reality-fronts /usr/local/bin/generate-secrets \
+  /usr/local/bin/uninstall.sh; do
   restore_path "$path"
 done
 restore_path /usr/local/lib/mubx/common.sh
+restore_path /usr/local/lib/mubx/reality-build.sh
 WAN_IF="$(cat /etc/mubx/wan-interface 2>/dev/null || true)"
 if [ -f /etc/mubx/iptables.previous ]; then
   if ! iptables-restore < /etc/mubx/iptables.previous; then
@@ -118,6 +120,10 @@ for path in /etc/default/dropbear /etc/squid/squid.conf /etc/haproxy/haproxy.cfg
     rm -f "$path"
   fi
 done
+if command -v fail2ban-client >/dev/null 2>&1; then
+  rm -f /etc/fail2ban/jail.d/mubx.conf
+  fail2ban-client reload >/dev/null 2>&1 || true
+fi
 if [ -f /etc/mubx/service-state ]; then
   systemctl daemon-reload
   while read -r service was_active was_enabled was_present; do

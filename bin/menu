@@ -41,6 +41,7 @@ draw() {
   printf '  %s7%s  Show listening ports\n'              "$C_CYAN" "$C_RESET"
   printf '  %s8%s  Run network diagnostics\n'           "$C_CYAN" "$C_RESET"
   printf '  %s9%s  Show transport recommendation\n'     "$C_CYAN" "$C_RESET"
+  printf '  %s10%s Reality SNI fronts\n'                "$C_CYAN" "$C_RESET"
   printf '  %s0%s  Exit\n'                              "$C_CYAN" "$C_RESET"
   mubx_rule
 }
@@ -54,10 +55,15 @@ while true; do
     3) cat /etc/openvpn/client/mubx-client-tcp.ovpn 2>/dev/null || echo "OpenVPN client config not found" ;;
     4) /usr/local/bin/add-user ;;
     5) /usr/local/bin/delete-user ;;
-    6) systemctl restart haproxy nginx xray dropbear squid wstunnel; echo "[*] Core services restarted" ;;
+    6) systemctl restart haproxy nginx xray dropbear squid wstunnel hysteria dnstt \
+         zivpn wg-quick@wg0 openvpn-server@tcp openvpn-server@udp \
+         badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 \
+         badvpn@7500 badvpn@7600 badvpn@7700 2>/dev/null || true
+       echo "[*] Core services restarted" ;;
     7) ss -tulnp | grep -E ':(443|80|2222|8080|3128|10001|10443)' ;;
     8) /usr/local/bin/mubx-diagnose ;;
     9) cat /var/lib/mubx/adaptive-recommendation 2>/dev/null || echo "No recommendation yet" ;;
+    10) /usr/local/bin/reality-fronts ;;
     0|q|Q) exit 0 ;;
     *) echo "  Invalid choice: $opt"; sleep 1; continue ;;
   esac
