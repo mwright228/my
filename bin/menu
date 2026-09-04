@@ -8,28 +8,13 @@ source /usr/local/lib/mubx/common.sh
 DOMAIN=
 load_mubx_env 2>/dev/null || true
 
-# ---- bordered-panel presentation ------------------------------------
-# Box is 60 columns wide (two │ borders around a 58-column inner area),
-# so it renders cleanly on any terminal from 80 columns up.
-IW=58
-
-box_edge() { # $1 left corner $2 right corner
-  printf '%s%s%s%s%s\n' "$1" "$C_DIM" "$(printf '─%.0s' $(seq 1 "$IW"))" "$C_RESET" "$2"
-}
-
-# One content line: pads with spaces so the right border stays flush even
-# when the line contains ANSI colors or multi-byte glyphs.
-put() {
-  local line="$1" vis pad
-  vis="$(printf '%s' "$line" | LC_ALL=C.UTF-8 sed -e $'s/\x1b\[[0-9;]*m//g')"
-  pad=$((IW - $(printf '%s' "$vis" | LC_ALL=C.UTF-8 wc -m)))
-  [ "$pad" -lt 0 ] && pad=0
-  printf '│%s%*s│\n' "$line" "$pad" ""
-}
+# ---- presentation ---------------------------------------------------
+# Bordered-panel drawing (mubx_box_line / mubx_put / mubx_card) lives in
+# lib/common.sh so every screen shares the same 58-column frame.
 
 # Two service entries per row, right column aligned.
 row() { # $1 unit1 $2 label1 $3 unit2 $4 label2
-  put "$(printf '  %s %-14s  %s %s' "$(svc_dot "$1")" "$2" "$(svc_dot "$3")" "$4")"
+  mubx_put "$(printf '  %s %-14s  %s %s' "$(svc_dot "$1")" "$2" "$(svc_dot "$3")" "$4")"
 }
 
 # Status for a set of templated units (the badvpn@7100..7700 instances):
@@ -56,26 +41,26 @@ svc_dot_set() { # $1 unit name  remaining args: instance ports to check
 
 draw() {
   mubx_clear
-  box_edge '┌' '┐'
-  put "$(printf '  %sMUB-X%s · %s%s%s' "$C_BOLD" "$C_RESET" "$C_CYAN" "${DOMAIN:-UNCONFIGURED}" "$C_RESET")"
-  put "$(printf '  %s%s%s' "$C_DIM" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$C_RESET")"
-  box_edge '├' '┤'
-  put ''
-  put "$(printf '  %sServices%s' "$C_BOLD" "$C_RESET")"
+  mubx_box_line '┌' '┐'
+  mubx_put "$(printf '  %sMUB-X%s · %s%s%s' "$C_BOLD" "$C_RESET" "$C_CYAN" "${DOMAIN:-UNCONFIGURED}" "$C_RESET")"
+  mubx_put "$(printf '  %s%s%s' "$C_DIM" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$C_RESET")"
+  mubx_box_line '├' '┤'
+  mubx_put ''
+  mubx_put "$(printf '  %sServices%s' "$C_BOLD" "$C_RESET")"
   row haproxy    "HAProxy"       nginx                "Nginx"
   row xray       "Xray"          dropbear             "Dropbear"
   row wstunnel   "SSH over WS"   squid                "Squid proxy"
   row hysteria   "Hysteria 2"    wg-quick@wg0         "WireGuard"
   row openvpn-server@tcp "OpenVPN TCP" openvpn-server@udp "OpenVPN UDP"
   row dnstt      "DNSTT"         zivpn                "ZivPN"
-  put "$(printf '  %s %s' \
+  mubx_put "$(printf '  %s %s' \
     "$(svc_dot_set badvpn 7100 7200 7300 7400 7500 7600 7700)" "UDPGW bridge (7100-7700)")"
-  put "$(printf '  %s●%s all up   %s◐%s partial   %s○%s down' \
+  mubx_put "$(printf '  %s●%s all up   %s◐%s partial   %s○%s down' \
     "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_RED" "$C_RESET")"
-  put ''
-  put "$(printf '  %sCommands%s' "$C_BOLD" "$C_RESET")"
+  mubx_put ''
+  mubx_put "$(printf '  %sCommands%s' "$C_BOLD" "$C_RESET")"
   opt() { # $1 number $2 description
-    put "$(printf '  %s%-2s%s   %s' "$C_CYAN" "$1" "$C_RESET" "$2")"
+    mubx_put "$(printf '  %s%-2s%s   %s' "$C_CYAN" "$1" "$C_RESET" "$2")"
   }
   opt 1  "Set domain / renew certificate"
   opt 2  "Generate client links"
@@ -92,8 +77,8 @@ draw() {
   opt 13 "Restart failed services"
   opt 14 "Update MUB-X (git pull + re-render)"
   opt 0  "Exit"
-  put ''
-  box_edge '└' '┘'
+  mubx_put ''
+  mubx_box_line '└' '┘'
 }
 
 while true; do

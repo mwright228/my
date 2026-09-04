@@ -75,3 +75,38 @@ mubx_clear() {
   fi
   return 0
 }
+
+# --- bordered panel primitives (shared with the control menu) -----------
+# Panels are 60 columns wide: two │ borders around a 58-column inner area,
+# so they render cleanly on any terminal from 80 columns up.
+MUBX_IW="${MUBX_IW:-58}"
+
+mubx_box_line() { # $1 left corner  $2 right corner
+  printf '%s%s%s%s%s\n' "$1" "$C_DIM" "$(printf '─%.0s' $(seq 1 "$MUBX_IW"))" "$C_RESET" "$2"
+}
+
+# One panel row: pads so the right border stays flush even when the line
+# carries ANSI colors or multi-byte glyphs.
+mubx_put() { # $1 row content
+  local line="$1" vis pad
+  vis="$(printf '%s' "$line" | LC_ALL=C.UTF-8 sed -e $'s/\x1b\[[0-9;]*m//g')"
+  pad=$((MUBX_IW - $(printf '%s' "$vis" | LC_ALL=C.UTF-8 wc -m)))
+  [ "$pad" -lt 0 ] && pad=0
+  printf '│%s%*s│\n' "$line" "$pad" ""
+}
+
+# Visible (ANSI-stripped) column count of a string.
+mubx_vis_len() {
+  printf '%s' "$1" | LC_ALL=C.UTF-8 sed -e $'s/\x1b\[[0-9;]*m//g' | LC_ALL=C.UTF-8 wc -m
+}
+
+# A title row with a right-aligned suffix (used for the per-protocol
+# cards in link-gen): left and right content, separated by padding.
+mubx_card() { # $1 left text  $2 right text
+  local left="$1" right="$2" lw rw pad
+  lw="$(mubx_vis_len "$left")"
+  rw="$(mubx_vis_len "$right")"
+  pad=$((MUBX_IW - lw - rw))
+  [ "$pad" -lt 0 ] && pad=0
+  mubx_put "$left$(printf '%*s' "$pad" '')$right"
+}
