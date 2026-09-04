@@ -3,7 +3,15 @@ Description=DNSTT SlowDNS Server
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/dnstt-server -udp :53 -privkey-file /etc/dnstt/dnstt.priv dns.__DOMAIN__ 127.0.0.1:2222
+# The pinned upstream dnstt-server is a Tor pluggable transport: since the
+# 2022 "server PT1" refactor it has no -udp flag and binds its listener from
+# the TOR_PT_* environment instead (TOR_PT_SERVER_BINDADDR=dnstt-ADDR opens
+# the UDP socket, TOR_PT_ORPORT is the TCP upstream, here Dropbear).
+Environment=TOR_PT_MANAGED_TRANSPORT_VER=1
+Environment=TOR_PT_SERVER_TRANSPORTS=dnstt
+Environment=TOR_PT_SERVER_BINDADDR=dnstt-0.0.0.0:53
+Environment=TOR_PT_ORPORT=127.0.0.1:2222
+ExecStart=/usr/local/bin/dnstt-server -privkey-file /etc/dnstt/dnstt.priv dns.__DOMAIN__
 Restart=always
 RestartSec=3s
 LimitNOFILE=65535
