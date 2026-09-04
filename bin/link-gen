@@ -36,26 +36,57 @@ mubx_kv "Bug host"   "$BUG"
 mubx_kv "Identity"   "$USER_NAME"
 mubx_rule
 
+# A bug host that does not resolve (or resolves elsewhere) silently breaks
+# every link that uses it; surface that before anything gets copied out.
+if [ "$BUG" != "$DOMAIN" ]; then
+  bug_ip="$(getent ahostsv4 "$BUG" 2>/dev/null | awk 'NR==1 { print $1 }')"
+  if [ -z "$bug_ip" ]; then
+    printf '  %s[!]%s "%s" does not resolve - links below using it will not connect.\n' \
+      "$C_RED" "$C_RESET" "$BUG"
+    printf '  %s    Pass a real bug-host domain, or omit it to default to %s.\n' \
+      "$C_RED" "$C_RESET" "$DOMAIN"
+  elif printf '%s' "$MYIP" | grep -Eq '^[0-9.]+$' && [ "$bug_ip" != "$MYIP" ]; then
+    printf '  %s[!]%s "%s" resolves to %s but this server is %s - TLS/WS links\n' \
+      "$C_RED" "$C_RESET" "$BUG" "$bug_ip" "$MYIP"
+    printf '  %s    will fail unless that address routes to this server.\n' "$C_RED" "$C_RESET"
+  fi
+fi
+
 url() { printf '  %s%s%s\n' "$C_CYAN" "$1" "$C_RESET"; }
 kv()  { printf '  %s%-12s%s %s\n' "$C_DIM" "$1:" "$C_RESET" "$2"; }
 
+# Red ○ notice when a service this section depends on is not running, so the
+# output can never advertise something that is currently down.
+hint_down() { # $1 unit $2 warning text
+  if ! systemctl is-active --quiet "$1" 2>/dev/null; then
+    printf '  %s○%s %s\n' "$C_RED" "$C_RESET" "$2"
+  fi
+}
+
 # --- 1. Hysteria 2 --------------------------------------------------------
 mubx_title "[1] Hysteria 2  (UDP 4433)"
+hint_down hysteria "Hysteria 2 is not running (systemctl status hysteria)."
 url "hysteria2://${HY2_PASS}@${DOMAIN}:4433/?sni=${DOMAIN}&insecure=1#MUBX-Hysteria2"
 
 # --- 2. ZivPN -------------------------------------------------------------
 if command -v zivpn >/dev/null 2>&1 && [ -n "${ZIVPN_PASS:-}" ]; then
   mubx_title "[2] ZivPN UDP VPN  (UDP 5667)"
+  hint_down zivpn "ZivPN is not running (systemctl status zivpn)."
   kv "Host / IP" "$DOMAIN ($MYIP)"
   kv "Password"  "$ZIVPN_PASS"
 fi
 
 # --- 3. Xray transports ---------------------------------------------------
 mubx_title "[3] Xray transports  (TCP 443)"
+hint_down xray "Xray is not running - the transports below will not connect."
 printf '  %sVLESS-WS%s\n' "$C_BOLD" "$C_RESET"
 url "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-ws#MUBX-VLESS-WS"
 printf '  %sVLESS-WS (non-TLS, port 80)%s\n' "$C_BOLD" "$C_RESET"
 url "vless://${UUID}@${BUG}:80?encryption=none&security=none&type=ws&host=${DOMAIN}&path=%2Fvless-ws#MUBX-VLESS-WS-80"
+printf '  %sVLESS-HTTPUpgrade%s\n' "$C_BOLD" "$C_RESET"
+url "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=httpupgrade&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-httpupgrade#MUBX-HTTPUpgrade"
+printf '  %sVLESS-XHTTP%s\n' "$C_BOLD" "$C_RESET"
+url "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=xhttp&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-xhttp#MUBX-XHTTP"
 printf '  %sVLESS-Reality (Vision) - one link per SNI front:%s\n' "$C_BOLD" "$C_RESET"
 for _front in ${REALITY_FRONTS:-www.apple.com}; do
   [ -n "$_front" ] || continue
@@ -69,12 +100,16 @@ url "trojan://${UUID}@${BUG}:443?security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&
 
 # --- 4. SSH & injectors ---------------------------------------------------
 mubx_title "[4] SSH & injector payloads"
+hint_down dropbear "Dropbear is not running on 2222/109."
+hint_down badvpn@7300 "UDPGW bridge (7300) is not running - tunneling via 7300 will not work."
 kv "Dropbear SSH"     "$MYIP:2222 (UDPGW 7300)"
 kv "SSH alternate"    "$MYIP:109"
 printf '  %sSSH over WebSocket%s\n' "$C_BOLD" "$C_RESET"
+hint_down wstunnel "wstunnel is not running - the SSH-over-WS commands below will not connect."
 url "ssh -o ProxyCommand='wstunnel client -L stdio://%h:%p wss://${DOMAIN}${SSH_WS_PATH}' user@${DOMAIN}"
 url "ssh -o ProxyCommand='wstunnel client -L stdio://%h:%p ws://${DOMAIN}${SSH_WS_PATH}' user@${DOMAIN}"
 kv "Squid HTTP proxy" "$MYIP:8080 or 3128"
+hint_down squid "Squid is not running - the injector proxy is unavailable."
 printf '  %sPayload:%s  CONNECT [host_port] HTTP/1.1[crlf]Host: %s[crlf]Connection: Keep-Alive[crlf][crlf]\n' \
   "$C_BOLD" "$C_RESET" "$BUG"
 
@@ -92,11 +127,14 @@ fi
 
 # --- 6. OpenVPN -----------------------------------------------------------
 mubx_title "[6] OpenVPN profiles"
+hint_down openvpn-server@tcp "OpenVPN TCP is not running."
+hint_down openvpn-server@udp "OpenVPN UDP is not running."
 kv "TCP (1194)" "/etc/openvpn/client/mubx-client-tcp.ovpn"
 kv "UDP (2200)" "/etc/openvpn/client/mubx-client-udp.ovpn"
 
 # --- 7. SlowDNS / DNSTT ---------------------------------------------------
 mubx_title "[7] SlowDNS / DNSTT  (UDP 53)"
+hint_down dnstt "DNSTT is not running - SlowDNS will not resolve."
 DNSTT_PUB=$(cat /etc/dnstt/dnstt.pub 2>/dev/null || echo "NOT_FOUND")
 kv "NS domain" "dns.$DOMAIN"
 kv "Pubkey"    "$DNSTT_PUB"
