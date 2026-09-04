@@ -18,6 +18,8 @@ REALITY_MARKER_RULES='#MUBX_REALITY_RULES#'
 REALITY_MARKER_BACKENDS='#MUBX_REALITY_BACKENDS#'
 REALITY_BASE_PORT=10443
 REALITY_MAX_FRONTS=12
+SS_MARKER='#MUBX_SS_LOCATIONS#'
+SS_BASE_PORT=10006
 
 # Multi-user store. Overridable (MUBX_USERS_FILE) so tests can render
 # against a scratch copy. Each entry: {name, uuid, added, expiry}.
@@ -173,6 +175,71 @@ mubx_xray_render() { # $1 base_template  $2 inbound_template  $3 out
   rm -f "$tmpbase"
   # Multi-user overlay (per-user identities + stats API) when a store exists.
   mubx_users_apply "$out" || return 1
+  # Per-user Shadowsocks WS inbounds (one loopback port + ws path per user).
+  mubx_ss_apply "$out" "$(dirname "$base_tpl")/ss-inbound.json" || return 1
+}
+
+# Emit one tab-separated row per Shadowsocks user: name, uuid (the SS
+# password), loopback port (10006 + store index) and the ws path
+# (/ss-<name>). Without a store (pre-upgrade host) the legacy admin
+# identity is used, matching how xray configs were rendered before.
+mubx_ss_plan() {
+  if [ -f "$MUBX_USERS_FILE" ]; then
+    jq -r --argjson base "$SS_BASE_PORT" \
+      'range(0; length) as $i | .[$i] |
+       select((.uuid // "") != "") |
+       [.name, .uuid, ($base + $i), ("/ss-" + .name)] | @tsv' \
+      "$MUBX_USERS_FILE" 2>/dev/null || true
+  else
+    printf '%s\t%s\t%s\t%s\n' "admin" "${UUID:-}" "$SS_BASE_PORT" "/ss-admin"
+  fi
+}
+
+# Append one Shadowsocks WS inbound per store user to a rendered config.
+# A missing template simply skips SS (older templates stay valid).
+mubx_ss_apply() { # $1 rendered config file  $2 ss inbound template
+  local cfg="$1" ss_tpl="$2" extra='[]' obj name uuid port path
+  [ -f "$ss_tpl" ] || return 0
+  while IFS=$'\t' read -r name uuid port path; do
+    [ -n "$name" ] && [ -n "$uuid" ] || continue
+    obj="$(sed -e "s|__SS_NAME__|$name|g" \
+               -e "s|__SS_PORT__|$port|g" \
+               -e "s|__SS_PASS__|$uuid|g" \
+               -e "s|__SS_PATH__|$path|g" "$ss_tpl")" || return 1
+    extra="$(jq -cn --argjson arr "$extra" --argjson o "$obj" '$arr + [$o]')" \
+      || return 1
+  done < <(mubx_ss_plan)
+  if [ "$extra" != '[]' ]; then
+    jq --argjson add "$extra" '.inbounds += $add' "$cfg" > "$cfg.mubx" || return 1
+    mv -f "$cfg.mubx" "$cfg"
+  fi
+}
+
+# Render /etc/nginx/nginx.conf from the template: expand the shared
+# #MUBX_SS_LOCATIONS# marker (one /ss-<user> location block per user) in
+# both the port-80 and the loopback-TLS server, and substitute the domain
+# and SSH-over-WS secret path placeholders that install.sh used to handle
+# with raw sed. Validated with `nginx -t` by every caller before use.
+mubx_nginx_render() { # $1 template  $2 out
+  local tmpl="$1" out="$2" content ss_blocks='' name uuid port path
+  content="$(< "$tmpl")" || return 1
+  while IFS=$'\t' read -r name uuid port path; do
+    [ -n "$name" ] || continue
+    printf -v ss_blocks '%s    location %s {\n        proxy_pass http://127.0.0.1:%s;\n        proxy_http_version 1.1;\n        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection $connection_upgrade;\n        proxy_set_header Host $http_host;\n        proxy_read_timeout 86400s;\n        proxy_send_timeout 86400s;\n    }\n\n' \
+      "$ss_blocks" "$path" "$port"
+  done < <(mubx_ss_plan)
+  content="${content//$SS_MARKER/$ss_blocks}"
+  [ -n "${DOMAIN:-}" ] || {
+    echo "[!] DOMAIN is not loaded; cannot render nginx.conf." >&2
+    return 1
+  }
+  [ -n "${SSH_WS_PATH:-}" ] || {
+    echo "[!] SSH_WS_PATH is not loaded; cannot render nginx.conf." >&2
+    return 1
+  }
+  content="${content//__DOMAIN__/$DOMAIN}"
+  content="${content//__SSH_WS_PATH__/$SSH_WS_PATH}"
+  printf '%s' "$content" > "$out"
 }
 
 # Render /etc/haproxy/haproxy.cfg: expand the two markers in the template

@@ -13,6 +13,10 @@ systemd VPS hosts on amd64, arm64, or armhf. The domain must already resolve
 to the VPS and ports 53/80/443 must be reachable. DNS NS delegation for
 `dns.<your-domain>` is required for DNSTT.
 
+> [!TIP]
+> Already running MUB-X? See [UPGRADING.md](UPGRADING.md) — re-running the
+> installer upgrades in place, or follow the manual pull-and-re-render path.
+
 UDP Custom is not installed automatically because this repository does not
 identify a stable, verifiable upstream source for its server binary. An
 untested example unit lives in `configs/` and is not enabled by default.
@@ -27,9 +31,9 @@ release; the upstream project does not publish an armhf binary.
 
 - **HAProxy L4 SNI Router:** Listens on port 443 with zero decryption. Each configured Reality front SNI (default `www.apple.com`, changeable per carrier) is routed straight to Xray Reality; every other SNI — your domain, carrier bug-hosts, mismatched hosts — falls through to Nginx.
 - **Universal Bug-Host Multiplexer:** Terminates TLS on loopback (`127.0.0.1:20443`) via Nginx, accepting connections regardless of custom carrier SNI mismatches.
-- **Multi-Protocol Core (Xray-core):** Full support for VLESS-WebSocket, VLESS-HTTPUpgrade, VMess, Trojan, and XTLS-Vision Reality.
+- **Multi-Protocol Core (Xray-core):** Full support for VLESS-WebSocket, VLESS-HTTPUpgrade, VMess, Trojan, Shadowsocks-WebSocket (per user), and XTLS-Vision Reality.
 - **Configurable Reality fronts:** Reality camouflages against any real HTTPS site, not just Apple. Add/remove SNI fronts (whatever your SIM carriers allow) with `reality-fronts` or menu option `10`; each front gets its own inbound and HAProxy route, and `link-gen` prints one Reality link per front.
-- **Per-user identities & usage:** Every user (`mubx-users` / menu `11`, also auto-created with each SSH account) gets their own UUID across every transport — revoke one user without rekeying the rest. Xray's stats API is enabled, so per-user traffic can be read back with `mubx-users usage`. The legacy shared identity survives as the seeded `admin` user, keeping old links valid. `link-gen [bug-host] [user]` prints links for any user.
+- **Per-user identities & usage:** Every user (`mubx-users` / menu `11`, also auto-created with each SSH account) gets their own UUID across every transport — revoke one user without rekeying the rest. Shadowsocks follows the same model: each user gets their own WS inbound (`127.0.0.1:10006+`) and nginx route (`/ss-<user>` on 80/443) keyed to their UUID, and user add/remove re-renders both Xray and Nginx atomically. Xray's stats API is enabled, so per-user traffic can be read back with `mubx-users usage`. The legacy shared identity survives as the seeded `admin` user, keeping old links valid. `link-gen [bug-host] [user]` prints links for any user.
 - **Squid & SSH Ingestion:** Dropbear SSH via direct port (`2222`) and Squid HTTP CONNECT proxies (`8080` & `3128`).
 - **Mobile UDP Gaming Bridge:** Multi-port BadVPN UDPGW (`7100–7700`) instances forward low-latency UDP traffic for games and VoIP.
 - **ZivPN UDP VPN:** Password-authenticated UDP VPN server on port `5667` (amd64/arm64).
@@ -56,11 +60,13 @@ release; the upstream project does not publish an armhf binary.
 | **109 / 2222** | TCP | SSH | Dropbear | Core SSH Tunnel |
 | **10001** | TCP | WebSocket | Xray-core | VLESS-WS Inbound |
 | **10004** | TCP | HTTPUpgrade | Xray-core | High-Throughput Streaming |
+| **10006+** | TCP | WebSocket | Xray-core | Shadowsocks WS Inbound (one per user) |
 | **10443+** | TCP | Vision | Xray-core | VLESS Reality inbound (one per front) |
 | **1194 / 2200** | TCP / UDP | OpenVPN | OpenVPN | Dual-Stack VPN Tunnel |
 | **51820** | UDP | WireGuard | Kernel | WireGuard L3 Interface |
 | **53** | UDP | DNS | DNSTT | SlowDNS Sub-Resolver |
 | **4433** | UDP | Hysteria 2 | Hysteria | High-performance UDP tunnel |
+| **80 / 443** | TCP | WebSocket | Nginx → Xray | VLESS/VMess/Trojan/Shadowsocks WS routes (`/vless-ws`, `/vmess-ws`, `/trojan-ws`, `/ss-<user>`) |
 | **80 / 443** | TCP | WebSocket | wstunnel → Dropbear | SSH over WebSocket |
 | **7100–7700** | UDP | UDPGW | BadVPN | Mobile Gaming Packet Bridge |
 
@@ -76,8 +82,14 @@ menu
 
 Menu options cover domain & certificate (`1`), client links for any user
 (`2`), SSH user management (`4`/`5`), restarts (`6`), diagnostics (`8`),
-Reality SNI fronts (`10`, or `reality-fronts` for `add`/`remove`/`set`) and
-per-user Xray identities & traffic (`11`, or `mubx-users`).
+Reality SNI fronts (`10`, or `reality-fronts` for `add`/`remove`/`set`),
+per-user Xray identities & traffic (`11`, or `mubx-users`), a bug-host
+audit (`12`, or `mubx-probe`), an on-demand self-heal that restarts only
+the services that are down and explains each failure (`13`, or
+`mubx-restart-failed`), and a built-in self-update that pulls the latest
+tree and re-renders everything in place (`14`, or `mubx-update`).
+`svc-status` prints the reason under any service that is not running (port
+conflicts, last journal line).
 
 For mobile-network troubleshooting, run:
 

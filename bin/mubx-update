@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# MUB-X self-update: refresh an existing installation from its git origin.
+#
+# Runs the same steps install.sh performs for an in-place upgrade - pull the
+# latest tree, install the new scripts / shared libs / systemd units,
+# re-render the generated configs (Xray, HAProxy, Nginx, incl. per-user
+# Shadowsocks WS routes) and restart whatever was running - without the OS
+# packages, binaries and certificate steps. Any failure before the final
+# restart rolls the touched files and service states back from a timestamped
+# backup under /etc/mubx/update-backups.
+#
+# Menu option 14, or run it directly:  mubx-update
+set -Eeuo pipefail
+
+[ "$(id -u)" -eq 0 ] || { echo "[!] Run mubx-update as root." >&2; exit 1; }
+
+REPO_URL="${MUBX_REPO_URL:-https://github.com/mwright228/my.git}"
+ROOT="$(cat /etc/mubx/install-root 2>/dev/null || true)"
+[ -n "$ROOT" ] && [ -d "$ROOT/.git" ] || {
+  echo "[!] MUB-X install root not found ($ROOT); run install.sh first." >&2
+  exit 1
+}
+[ "$(git -C "$ROOT" remote get-url origin 2>/dev/null || true)" = "$REPO_URL" ] || {
+  echo "[!] $ROOT origin does not match $REPO_URL; refusing to self-update." >&2
+  exit 1
+}
+[ -z "$(git -C "$ROOT" status --porcelain)" ] || {
+  echo "[!] $ROOT has local changes; commit or remove them before updating." >&2
+  exit 1
+}
+[ "$(git -C "$ROOT" branch --show-current 2>/dev/null || true)" = "main" ] || {
+  echo "[!] Expected branch 'main' in $ROOT, got '$(git -C "$ROOT" branch --show-current 2>/dev/null)'." >&2
+  exit 1
+}
+
+SERVICES=(
+  haproxy nginx xray dropbear squid wstunnel hysteria zivpn dnstt
+  openvpn-server@tcp openvpn-server@udp wg-quick@wg0
+  badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400
+  badvpn@7500 badvpn@7600 badvpn@7700
+)
+
+cd "$ROOT"
+source ./lib/common.sh
+
+# --- backup / rollback bookkeeping ---------------------------------------
+BK="/etc/mubx/update-backups/$(date -u '+%Y%m%dT%H%M%SZ')"
+install -d -m 0700 "$BK"
+declare -A was_active=()
+for svc in "${SERVICES[@]}"; do
+  systemctl is-active --quiet "$svc" 2>/dev/null && was_active["$svc"]=1 || was_active["$svc"]=0
+done
+saved_list="$BK/manifest"
+
+backup_path() { # $1 absolute path; snapshots it into $BK and registers it
+  local path="$1"
+  [ -e "$path" ] || [ -L "$path" ] || return 0
+  install -d -m 0755 "$BK$(dirname "$path")" 2>/dev/null || true
+  cp -aP "$path" "$BK$path"
+  printf '%s\n' "$path" >> "$saved_list"
+}
+
+restore_activity() { # return to the pre-update active/inactive state
+  local svc
+  for svc in "${SERVICES[@]}"; do
+    systemctl cat "$svc.service" >/dev/null 2>&1 || continue
+    if [ "${was_active[$svc]}" -eq 1 ]; then
+      systemctl start "$svc" || true
+    else
+      systemctl stop "$svc" 2>/dev/null || true
+    fi
+  done
+}
+
+stage_bin() { # $1 src -> /usr/local/bin/<basename>, swapped via rename
+  local src="$1" dst="/usr/local/bin/$(basename "$src")"
+  install -m 0755 "$src" "$dst.tmp.$$"
+  mv -f "$dst.tmp.$$" "$dst"
+}
+
+update_success=0
+on_exit() {
+  local status=$?
+  if [ "$update_success" -eq 0 ]; then
+    echo "[!] Update failed; restoring the previous files and service state." >&2
+    if [ -f "$saved_list" ]; then
+      while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        [ -e "$BK$path" ] || [ -L "$BK$path" ] || continue
+        install -d -m 0755 "$(dirname "$path")" 2>/dev/null || true
+        rm -f "$path"
+        cp -aP "$BK$path" "$path" 2>/dev/null || true
+      done < "$saved_list"
+    fi
+    systemctl daemon-reload || true
+    restore_activity
+  fi
+  exit "$status"
+}
+trap on_exit EXIT
+
+# 1) Pull the new tree. Nothing is touched until this succeeds, so a network
+#    failure is a clean no-op.
+printf '%s[*]%s Pulling from %s\n' "$C_GREEN" "$C_RESET" "$REPO_URL"
+git pull --ff-only origin main
+
+# 2) Snapshot the live files we are about to overwrite.
+for f in "$ROOT"/bin/*; do
+  [ -f "$f" ] || continue
+  backup_path "/usr/local/bin/$(basename "$f")"
+done
+for f in "$ROOT"/lib/*.sh; do
+  [ -f "$f" ] || continue
+  backup_path "/usr/local/lib/mubx/$(basename "$f")"
+done
+for f in "$ROOT"/systemd/*.service "$ROOT"/systemd/*.timer; do
+  [ -f "$f" ] || continue
+  backup_path "/etc/systemd/system/$(basename "$f")"
+done
+backup_path /usr/local/etc/xray/config.json
+backup_path /etc/haproxy/haproxy.cfg
+backup_path /etc/nginx/nginx.conf
+
+# 3) Install the refreshed scripts, libs and units. mubx-update itself is
+#    swapped at the very end (it is the script currently running).
+for f in "$ROOT"/lib/*.sh; do
+  [ -f "$f" ] || continue
+  install -D -m 0644 "$f" "/usr/local/lib/mubx/$(basename "$f")"
+done
+for f in "$ROOT"/systemd/*.service "$ROOT"/systemd/*.timer; do
+  [ -f "$f" ] || continue
+  install -m 0644 "$f" "/etc/systemd/system/$(basename "$f")"
+done
+systemctl daemon-reload
+for f in "$ROOT"/bin/*; do
+  [ -f "$f" ] || continue
+  [ "$(basename "$f")" = "mubx-update" ] && continue
+  stage_bin "$f"
+done
+
+# 4) Re-render the generated configs from the freshly pulled templates.
+#    Secrets are loaded from the environment file, then each candidate is
+#    validated before anything live is replaced.
+load_mubx_env
+source ./lib/reality-build.sh
+mubx_users_seed
+tmp="$(mktemp -d)"
+mubx_xray_render configs/xray.json configs/reality-inbound.json "$tmp/xray.json"
+mubx_haproxy_render configs/haproxy.cfg "$tmp/haproxy.cfg"
+mubx_nginx_render configs/nginx.conf "$tmp/nginx.conf"
+xray run -test -config "$tmp/xray.json"
+nginx -t -c "$tmp/nginx.conf" >/dev/null
+haproxy -c -f "$tmp/haproxy.cfg" >/dev/null
+
+# 5) Swap the validated configs in and restart everything that was running.
+install -m 0600 "$tmp/xray.json" /usr/local/etc/xray/config.json
+install -m 0644 "$tmp/haproxy.cfg" /etc/haproxy/haproxy.cfg
+install -m 0644 "$tmp/nginx.conf" /etc/nginx/nginx.conf
+rm -rf "$tmp"
+
+down=0
+for svc in "${SERVICES[@]}"; do
+  systemctl cat "$svc.service" >/dev/null 2>&1 || continue
+  [ "${was_active[$svc]}" -eq 1 ] || continue
+  if ! systemctl restart "$svc" 2>/dev/null || ! systemctl is-active --quiet "$svc" 2>/dev/null; then
+    printf '  %s○%s %s %sstill down after restart%s\n' "$C_RED" "$C_RESET" "$svc" "$C_BOLD" "$C_RESET"
+    down=$((down + 1))
+  else
+    printf '  %s●%s %s\n' "$C_GREEN" "$C_RESET" "$svc"
+  fi
+done
+
+# 6) Swap in the new copy of the running script, then commit the result.
+stage_bin "$ROOT/bin/mubx-update"
+update_success=1
+trap - EXIT
+printf '\n%s[*]%s MUB-X updated to %s\n' "$C_GREEN" "$C_RESET" \
+  "$(git -C "$ROOT" log -1 --format='%h %cs')"
+if [ "$down" -gt 0 ]; then
+  printf '%s[!]%s %s service(s) did not come back - run mubx-restart-failed or\n' \
+    "$C_YELLOW" "$C_RESET" "$down"
+  printf '    journalctl -u <service> to diagnose, then verify with svc-status.\n'
+else
+  printf '%s[✓]%s All services running. Verify new links with: link-gen\n' "$C_GREEN" "$C_RESET"
+fi

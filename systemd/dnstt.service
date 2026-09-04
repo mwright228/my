@@ -1,8 +1,12 @@
 [Unit]
 Description=DNSTT SlowDNS Server
 After=network.target
+
 [Service]
 ExecStart=/usr/local/bin/dnstt-server -udp :53 -privkey-file /etc/dnstt/dnstt.priv dns.__DOMAIN__ 127.0.0.1:2222
 Restart=always
+RestartSec=3s
+LimitNOFILE=65535
+
 [Install]
 WantedBy=multi-user.target

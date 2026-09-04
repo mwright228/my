@@ -32,12 +32,14 @@ row() { # $1 unit1 $2 label1 $3 unit2 $4 label2
   put "$(printf '  %s %-14s  %s %s' "$(svc_dot "$1")" "$2" "$(svc_dot "$3")" "$4")"
 }
 
-# Status for a set of templated units (e.g. badvpn@7100..7700):
+# Status for a set of templated units (the badvpn@7100..7700 instances):
 # green ● when all are active, yellow ◐ when some are, red ○ when none are.
-svc_dot_set() { # $1 unit name $2 first instance $3 last instance
-  local unit="$1" i up=0 down=0
-  for (( i = $2; i <= $3; i++ )); do
-    if systemctl is-active --quiet "$unit@$i" 2>/dev/null; then
+# Callers pass the exact instance list so we never probe empty ports.
+svc_dot_set() { # $1 unit name  remaining args: instance ports to check
+  local unit="$1" port up=0 down=0
+  shift
+  for port in "$@"; do
+    if systemctl is-active --quiet "$unit@$port" 2>/dev/null; then
       up=$((up + 1))
     else
       down=$((down + 1))
@@ -66,7 +68,8 @@ draw() {
   row hysteria   "Hysteria 2"    wg-quick@wg0         "WireGuard"
   row openvpn-server@tcp "OpenVPN TCP" openvpn-server@udp "OpenVPN UDP"
   row dnstt      "DNSTT"         zivpn                "ZivPN"
-  put "$(printf '  %s %s' "$(svc_dot_set badvpn 7100 7700)" "UDPGW bridge (7100-7700)")"
+  put "$(printf '  %s %s' \
+    "$(svc_dot_set badvpn 7100 7200 7300 7400 7500 7600 7700)" "UDPGW bridge (7100-7700)")"
   put "$(printf '  %s●%s all up   %s◐%s partial   %s○%s down' \
     "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_RED" "$C_RESET")"
   put ''
@@ -85,6 +88,9 @@ draw() {
   opt 9  "Show transport recommendation"
   opt 10 "Reality SNI fronts"
   opt 11 "Users & traffic"
+  opt 12 "Bug-host audit"
+  opt 13 "Restart failed services"
+  opt 14 "Update MUB-X (git pull + re-render)"
   opt 0  "Exit"
   put ''
   box_edge '└' '┘'
@@ -111,6 +117,9 @@ while true; do
     9) cat /var/lib/mubx/adaptive-recommendation 2>/dev/null || echo "No recommendation yet" ;;
     10) /usr/local/bin/reality-fronts ;;
     11) /usr/local/bin/mubx-users ;;
+    12) /usr/local/bin/mubx-probe ;;
+    13) /usr/local/bin/mubx-restart-failed ;;
+    14) /usr/local/bin/mubx-update ;;
     0|q|Q) exit 0 ;;
     *) echo "  Invalid choice: $opt"; sleep 1; continue ;;
   esac

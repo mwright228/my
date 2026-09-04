@@ -50,7 +50,8 @@ printf '  %-16s: 4433 (UDP)\n' "Hysteria 2"
 printf '  %-16s: 5667 (UDP)\n' "ZivPN"
 printf '  %-16s: 53 (UDP)\n' "SlowDNS DNSTT"
 printf '  %-16s: 443 (SNI: VLESS/VMess/Trojan WS,\n' "Xray"
-printf '  %-16s:      HTTPUpgrade, xHTTP; Reality per front)\n' ""
+printf '  %-16s:      HTTPUpgrade, xHTTP, Shadowsocks WS;\n' ""
+printf '  %-16s:      Reality per front)\n' ""
 printf '  %-16s: 7100-7700 (UDP)\n' "BADVPN UDPGW"
 sep
 if [ -n "${DOMAIN:-}" ] && [ -r /etc/dnstt/dnstt.pub ]; then

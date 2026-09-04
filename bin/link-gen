@@ -141,4 +141,22 @@ kv "Pubkey"    "$DNSTT_PUB"
 printf '  %sClient:%s\n' "$C_BOLD" "$C_RESET"
 url "dnstt-client -udp 1.1.1.1:53 -pubkey ${DNSTT_PUB} dns.${DOMAIN} 127.0.0.1:2222"
 
+# --- 8. Shadowsocks -------------------------------------------------------
+# One WS route per user: SS inbound (password = the user's Xray UUID) on
+# 127.0.0.1:<10006+store index>, exposed by nginx as /ss-<user> on 443 (TLS)
+# and 80 (plain). The SIP002 links use the standard v2ray-plugin params.
+mubx_title "[8] Shadowsocks  (WebSocket, per user)"
+hint_down xray "Xray is not running - Shadowsocks links will not connect."
+SS_UI="$(printf 'aes-256-gcm:%s' "$UUID" | base64 -w 0 | tr '+/' '-_' | tr -d '=')"
+kv "Method"  "aes-256-gcm (password = this user's UUID)"
+kv "TLS route" "${BUG}:443, path /ss-${USER_NAME}"
+kv "Plain route" "${BUG}:80, path /ss-${USER_NAME}"
+printf '  %sTLS (import into v2rayNG / Shadowrocket / sing-box):%s\n' "$C_BOLD" "$C_RESET"
+url "ss://${SS_UI}@${BUG}:443?plugin=v2ray-plugin%3Btls%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
+printf '  %sPlain WS (port 80):%s\n' "$C_BOLD" "$C_RESET"
+url "ss://${SS_UI}@${BUG}:80?plugin=v2ray-plugin%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
+[ "$BUG" = "$DOMAIN" ] || \
+  printf '  %s[!]%s The TLS link above requires the SNI %s to terminate on this server - if %s is a configured Reality front, use the plain WS link or the default domain.\n' \
+    "$C_RED" "$C_RESET" "$BUG" "$BUG"
+
 mubx_rule

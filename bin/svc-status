@@ -23,17 +23,43 @@ check() { # $1 unit  $2 protocol(tcp|udp)  $3 port (empty = unit-only)
   return 0
 }
 
-# One status row, colon aligned like a service listing.
+# One status row, colon aligned like a service listing. When the verdict is
+# down, a second indented line explains why (last journal line, or a port
+# conflict when something else holds the port) so the failure is diagnosable
+# right from this screen.
 row() { # $1 label  $2 unit  $3 tcp|udp  $4 port
   local label="$1" unit="$2" proto="$3" port="${4:-}"
-  local text name
+  local text name hint
   name="$(printf '%-34s' "$label")"
   if check "$unit" "$proto" "$port"; then
     text="${C_GREEN}Running (No Error)${C_RESET}"
   else
     text="${C_RED}Not Running (Error)${C_RESET}"
+    hint="$(failure_hint "$unit" "$proto" "$port")"
+    [ -z "$hint" ] || printf '    %s↳ %s%s\n' "$C_DIM" "${hint:0:112}" "$C_RESET"
   fi
   printf '» Service %s : %s\n' "$name" "$text"
+}
+
+# Explain why a service is down: port conflict first (most common for DNSTT,
+# where systemd-resolved or another DNS stub can grab UDP 53), then the last
+# journal line from the unit itself.
+failure_hint() { # $1 unit  $2 protocol(tcp|udp)  $3 port (empty = unit-only)
+  local unit="$1" proto="$2" port="${3:-}"
+  local msg='' holder last
+  if [ -n "$port" ] && ! ss -H -l"${proto:0:1}"n "sport = :$port" 2>/dev/null | grep -q .; then
+    holder="$(ss -H -l"${proto:0:1}"n -p "sport = :$port" 2>/dev/null | head -n 1)"
+    if [ -n "$holder" ]; then
+      msg="port $port is held by another listener: $holder"
+    else
+      msg="no ${proto^^}/$port listener"
+    fi
+  fi
+  last="$(journalctl -u "$unit" -n 2 --no-pager -o cat 2>/dev/null | tail -n 1 || true)"
+  if [ -n "$last" ]; then
+    msg="${msg:+$msg; }$last"
+  fi
+  printf '%s' "$msg"
 }
 
 header() { # $1 section title
@@ -59,6 +85,8 @@ while IFS=$'\t' read -r tag proto port; do
     trojan-ws)     label="Xray Trojan WebSocket (WS)" ;;
     vless-httpupgrade) label="Xray VLESS HTTPUpgrade" ;;
     vless-xhttp)   label="Xray VLESS xHTTP" ;;
+    shadowsocks-*) name="${tag#shadowsocks-}"
+                   label="Xray Shadowsocks WS ($name)" ;;
     reality-*)
       idx=$((port - 10442))   # 10443 -> front #1
       sni="${_fronts[$((idx - 1))]:-sni-$idx}"

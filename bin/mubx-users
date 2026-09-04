@@ -2,9 +2,10 @@
 # Manage per-user Xray identities on this server.
 #
 # Every user in the store gets their own UUID on every transport inbound
-# (VLESS-WS, VLESS-HTTPUpgrade, XHTTP, VMess, Trojan and Reality). Removing
-# a user revokes just that identity; the rest keep working. Xray's stats API
-# is enabled when the store exists, so per-user traffic can be read back.
+# (VLESS-WS, VLESS-HTTPUpgrade, XHTTP, VMess, Trojan and Reality) plus a
+# Shadowsocks WS inbound/password of their own. Removing a user revokes just
+# that identity; the rest keep working. Xray's stats API is enabled when the
+# store exists, so per-user traffic can be read back for the UUID transports.
 #
 # The store lives in /etc/mubx/users.json (override with MUBX_USERS_FILE).
 # The first entry ("admin") carries the legacy UUID from install, so older
@@ -31,6 +32,7 @@ TPL_DIR="$(cat /etc/mubx/install-root 2>/dev/null || true)"
   exit 1
 }
 XRAY_CFG=/usr/local/etc/xray/config.json
+NGINX_CFG=/etc/nginx/nginx.conf
 
 store_require() {
   if [ ! -f "$STORE" ]; then
@@ -39,33 +41,54 @@ store_require() {
   fi
 }
 
-# Regenerate the Xray config from the current store and reload Xray.
-# Config is validated with `xray run -test` before it replaces the live one.
+# Regenerate the Xray and Nginx configs from the current store and reload
+# both. Every user owns a Shadowsocks WS route (/ss-<user>) in nginx, so a
+# store change must re-render nginx.conf as well as the Xray config. Both
+# candidates are validated (xray run -test, nginx -t) before the live files
+# are swapped; any restart failure rolls both files back atomically.
 reload_xray() {
-  local tmp
-  tmp="$(mktemp)"
+  local tmpdir xray_new nginx_new
+  tmpdir="$(mktemp -d)"
+  xray_new="$tmpdir/xray.json"
+  nginx_new="$tmpdir/nginx.conf"
   if ! mubx_xray_render "$TPL_DIR/configs/xray.json" \
-      "$TPL_DIR/configs/reality-inbound.json" "$tmp"; then
+      "$TPL_DIR/configs/reality-inbound.json" "$xray_new"; then
     echo "[!] Failed to render the Xray config." >&2
-    rm -f "$tmp"
+    rm -rf "$tmpdir"
     return 1
   fi
-  if ! xray run -test -config "$tmp"; then
+  if ! xray run -test -config "$xray_new"; then
     echo "[!] New Xray config failed validation; nothing was changed." >&2
-    rm -f "$tmp"
+    rm -rf "$tmpdir"
     return 1
   fi
-  cp -a "$XRAY_CFG" "$tmp.old"
-  cp -a "$tmp" "$XRAY_CFG"
+  if ! mubx_nginx_render "$TPL_DIR/configs/nginx.conf" "$nginx_new"; then
+    echo "[!] Failed to render the Nginx config." >&2
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  if ! nginx -t -c "$nginx_new" >/dev/null 2>&1; then
+    echo "[!] New Nginx config failed validation; nothing was changed." >&2
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  cp -a "$XRAY_CFG" "$tmpdir/xray.old"
+  cp -a "$NGINX_CFG" "$tmpdir/nginx.old"
+  cp -a "$xray_new" "$XRAY_CFG"
   chmod 0600 "$XRAY_CFG"
-  if ! systemctl restart xray || ! systemctl is-active --quiet xray; then
-    echo "[!] Xray restart failed; rolling back the config." >&2
-    cp -a "$tmp.old" "$XRAY_CFG"
+  cp -a "$nginx_new" "$NGINX_CFG"
+  if ! systemctl restart xray || ! systemctl is-active --quiet xray ||
+     ! systemctl reload nginx; then
+    echo "[!] Service reload failed; rolling back both configs." >&2
+    cp -a "$tmpdir/xray.old" "$XRAY_CFG"
+    chmod 0600 "$XRAY_CFG"
+    cp -a "$tmpdir/nginx.old" "$NGINX_CFG"
     systemctl restart xray || true
-    rm -f "$tmp" "$tmp.old"
+    systemctl reload nginx || true
+    rm -rf "$tmpdir"
     return 1
   fi
-  rm -f "$tmp" "$tmp.old"
+  rm -rf "$tmpdir"
 }
 
 name_ok() { [[ "$1" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]]; }

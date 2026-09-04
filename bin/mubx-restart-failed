@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# MUB-X self-heal on demand: restart every managed service that should be
+# running but is not, then report what came back and what still fails (with
+# the last journal line so the remaining failures are diagnosable).
+#
+# Menu option 13. The weekly mubx-cron timer runs the same revive loop; this
+# is the immediate, operator-facing version with per-service output.
+set -Eeuo pipefail
+
+[ "$(id -u)" -eq 0 ] || { echo "[!] Run mubx-restart-failed as root." >&2; exit 1; }
+
+if [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+  mubx_clear
+fi
+
+SERVICES=(
+  haproxy nginx xray dropbear squid wstunnel hysteria zivpn dnstt
+  openvpn-server@tcp openvpn-server@udp wg-quick@wg0
+  badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400
+  badvpn@7500 badvpn@7600 badvpn@7700
+)
+
+printf '%sMUB-X%s · restart failed services\\n' "$C_BOLD" "$C_RESET"
+mubx_rule
+fixed=0
+still_down=0
+for svc in "${SERVICES[@]}"; do
+  systemctl cat "$svc.service" >/dev/null 2>&1 || continue   # not installed
+  if systemctl is-active --quiet "$svc" 2>/dev/null; then
+    printf '  %s●%s %s\\n' "$C_GREEN" "$C_RESET" "$svc"
+    continue
+  fi
+  if systemctl restart "$svc" 2>/dev/null && \
+     systemctl is-active --quiet "$svc" 2>/dev/null; then
+    printf '  %s●%s %s %srevived%s\\n' "$C_GREEN" "$C_RESET" "$svc" "$C_DIM" "$C_RESET"
+    fixed=$((fixed + 1))
+  else
+    printf '  %s○%s %s %sstill down%s\\n' "$C_RED" "$C_RESET" "$svc" "$C_BOLD" "$C_RESET"
+    last="$(journalctl -u "$svc" -n 1 --no-pager -o cat 2>/dev/null | tail -n 1 || true)"
+    [ -n "$last" ] && printf '     %s↳ %s%s\\n' "$C_DIM" "${last:0:110}" "$C_RESET"
+    still_down=$((still_down + 1))
+  fi
+done
+mubx_rule
+if [ "$still_down" -eq 0 ]; then
+  printf '  %s●%s All managed services are running.\\n' "$C_GREEN" "$C_RESET"
+else
+  printf '  %s○%s %s service(s) restarted, %s still failing - run svc-status or\\n' \
+    "$C_RED" "$C_RESET" "$fixed" "$still_down"
+  printf '      journalctl -u <service> for the failure cause.\\n'
+fi

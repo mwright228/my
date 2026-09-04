@@ -19,10 +19,11 @@ done
 say "JSON validity (templates and examples)"
 for f in configs/*.json examples/*.json; do
   [ -f "$f" ] || continue
-  # reality-inbound.json is a per-front fragment with a numeric placeholder
-  # ("port": __PORT__), so standalone JSON parsing does not apply to it; the
-  # render smoke tests below validate the substituted result instead.
-  [ "$(basename "$f")" = "reality-inbound.json" ] && continue
+  # reality-inbound.json and ss-inbound.json are per-item fragments with a
+  # numeric placeholder ("port": __PORT__), so standalone JSON parsing does
+  # not apply to them; the render smoke tests below validate the substituted
+  # results instead.
+  case "$(basename "$f")" in reality-inbound.json|ss-inbound.json) continue ;; esac
   if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$f" 2>/dev/null; then
     echo "JSON FAIL: $f"
     fail=1
@@ -44,6 +45,39 @@ render_xray() { # $1 tmpdir  $2 users store (may be empty)  -> writes "$1/xray.j
              mubx_haproxy_render configs/haproxy.cfg "$2"' \
       x "$tmp/xray.json" "$tmp/haproxy.cfg"
   )
+}
+
+render_nginx() { # $1 tmpdir  $2 users store (may be empty)  -> writes "$1/nginx.conf"
+  local tmp="$1" users="$2"
+  (
+    export DOMAIN="example.com" \
+      SSH_WS_PATH="/ssh-ci-9f2a"
+    if [ -n "$users" ]; then
+      export MUBX_USERS_FILE="$users"
+    fi
+    export UUID="11111111-2222-3333-4444-555555555555" \
+      REALITY_FRONTS="www.apple.com dl.google.com"
+    bash -c 'source lib/reality-build.sh && mubx_nginx_render configs/nginx.conf "$1"' \
+      x "$tmp/nginx.conf"
+  )
+}
+
+# The one Shadowsocks inbound every valid render must carry for a user.
+check_ss_user() { # $1 xray config  $2 name  $3 uuid  $4 port
+  python3 - "$1" "$2" "$3" "$4" <<'PY'
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+name, uuid, port = sys.argv[2], sys.argv[3], int(sys.argv[4])
+matches = [i for i in cfg["inbounds"] if i["tag"] == "shadowsocks-" + name]
+assert len(matches) == 1, "expected 1 shadowsocks-%s inbound" % name
+ss = matches[0]
+assert ss["port"] == port, (name, ss["port"], port)
+assert ss["settings"]["method"] == "aes-256-gcm"
+assert ss["settings"]["password"] == uuid
+assert ss["streamSettings"]["network"] == "ws"
+assert ss["streamSettings"]["wsSettings"]["path"] == "/ss-" + name
+print("  ss inbound OK: %s -> %d%s" % (name, port, "/ss-" + name))
+PY
 }
 
 say "Reality render smoke test (multi-front)"
@@ -71,6 +105,24 @@ PY
       echo "second front ACL missing from HAProxy render"
       fail=1
     }
+    check_ss_user "$tmp/xray.json" admin "11111111-2222-3333-4444-555555555555" 10006 || fail=1
+    if render_nginx "$tmp" ""; then
+      grep -q '#MUBX_SS_LOCATIONS#' "$tmp/nginx.conf" && {
+        echo "Nginx SS marker was not expanded (legacy admin)"
+        fail=1
+      }
+      grep -q 'location /ss-admin' "$tmp/nginx.conf" || {
+        echo "legacy SS route /ss-admin missing from nginx render"
+        fail=1
+      }
+      grep -q '__SSH_WS_PATH__\|__DOMAIN__' "$tmp/nginx.conf" && {
+        echo "nginx placeholders were not substituted"
+        fail=1
+      }
+    else
+      echo "legacy nginx render step failed"
+      fail=1
+    fi
   else
     echo "render step failed"
     fail=1
@@ -107,6 +159,33 @@ print("  multi-user render OK: %d users across %d inbounds" % (len(users), len(t
 PY
     rc=$?
     if [ $rc -ne 0 ]; then fail=1; fi
+    check_ss_user "$tmp/xray.json" admin "11111111-2222-3333-4444-555555555555" 10006 || fail=1
+    check_ss_user "$tmp/xray.json" alice "22222222-3333-4444-5555-666666666666" 10007 || fail=1
+    if render_nginx "$tmp" "$tmp/users.json"; then
+      for route in '/ss-admin' '/ss-alice'; do
+        [ "$(grep -c "location $route" "$tmp/nginx.conf")" -eq 2 ] || {
+          echo "$route must appear in both nginx servers (80 + 20443)"
+          fail=1
+        }
+      done
+      for port in 10006 10007; do
+        [ "$(grep -c "proxy_pass http://127.0.0.1:$port;" "$tmp/nginx.conf")" -eq 2 ] || {
+          echo "SS proxy_pass to $port must appear in both nginx servers"
+          fail=1
+        }
+      done
+      grep -q 'location /ssh-ci-9f2a' "$tmp/nginx.conf" || {
+        echo "SSH-over-WS path placeholder was not substituted"
+        fail=1
+      }
+      grep -q '#MUBX_SS_LOCATIONS#\|__SSH_WS_PATH__\|__DOMAIN__' "$tmp/nginx.conf" && {
+        echo "nginx markers or placeholders left in multi-user render"
+        fail=1
+      }
+    else
+      echo "multi-user nginx render step failed"
+      fail=1
+    fi
   else
     echo "multi-user render step failed"
     fail=1

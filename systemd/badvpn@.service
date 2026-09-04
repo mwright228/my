@@ -5,6 +5,8 @@ After=network.target
 [Service]
 ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 0.0.0.0:%I --max-clients 1000 --max-connections-for-client 100
 Restart=always
+RestartSec=2s
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target

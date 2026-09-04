@@ -52,7 +52,8 @@ done
 for path in /usr/local/bin/menu /usr/local/bin/link-gen /usr/local/bin/add-user \
   /usr/local/bin/delete-user /usr/local/bin/mubx-diagnose \
   /usr/local/bin/mubx-tune /usr/local/bin/mubx-adaptive \
-  /usr/local/bin/mubx-probe /usr/local/bin/set-domain /usr/local/bin/mubx-cron \
+  /usr/local/bin/mubx-probe /usr/local/bin/mubx-restart-failed \
+  /usr/local/bin/mubx-update /usr/local/bin/set-domain /usr/local/bin/mubx-cron \
   /usr/local/bin/reality-fronts /usr/local/bin/mubx-users /usr/local/bin/svc-status \
   /usr/local/bin/generate-secrets /usr/local/bin/uninstall.sh; do
   restore_path "$path"

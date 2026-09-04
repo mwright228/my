@@ -1,0 +1,25 @@
+{
+  "tag": "shadowsocks-__SS_NAME__",
+  "listen": "127.0.0.1",
+  "port": __SS_PORT__,
+  "protocol": "shadowsocks",
+  "settings": {
+    "method": "aes-256-gcm",
+    "password": "__SS_PASS__"
+  },
+  "streamSettings": {
+    "network": "ws",
+    "wsSettings": {
+      "path": "__SS_PATH__"
+    }
+  },
+  "sniffing": {
+    "enabled": true,
+    "destOverride": [
+      "http",
+      "tls",
+      "quic"
+    ],
+    "routeOnly": false
+  }
+}

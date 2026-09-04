@@ -580,8 +580,8 @@ if [ -n "${REALITY_FRONTS_IN:-}" ]; then
 fi
 sed -i "s/^DOMAIN=.*/DOMAIN=\"$DOMAIN\"/; s|__DOMAIN__|$DOMAIN|g" /etc/telecom-engine.env
 load_secrets
-sed -i "s|__SSH_WS_PATH__|$SSH_WS_PATH|g" /etc/nginx/nginx.conf /etc/systemd/system/wstunnel.service
-sed -i "s|__DOMAIN__|$DOMAIN|g" /etc/nginx/nginx.conf /etc/systemd/system/dnstt.service
+sed -i "s|__SSH_WS_PATH__|$SSH_WS_PATH|g" /etc/systemd/system/wstunnel.service
+sed -i "s|__DOMAIN__|$DOMAIN|g" /etc/systemd/system/dnstt.service
 sed -i "s|__DOMAIN__|$DOMAIN|g; s|__HY2_PASS__|$HY2_PASS|g" /etc/hysteria/config.yaml
 # Generate the Xray config (one Reality inbound per configured SNI front,
 # plus a per-user client identity for every entry in the users store) and
@@ -591,6 +591,10 @@ mubx_users_seed
 mubx_xray_render configs/xray.json configs/reality-inbound.json \
   /usr/local/etc/xray/config.json
 mubx_haproxy_render configs/haproxy.cfg /etc/haproxy/haproxy.cfg
+# Nginx gets the same renderer treatment: /ss-<user> Shadowsocks routes are
+# expanded from the user store (like the Reality routes above), so adding or
+# removing a user later keeps the routes in sync via `mubx-users`.
+mubx_nginx_render configs/nginx.conf /etc/nginx/nginx.conf
 chmod 0600 /usr/local/etc/xray/config.json
 ZIVPN_ARCH="$(dpkg --print-architecture)"
 ZIVPN_ENABLED=1
@@ -657,12 +661,20 @@ systemctl is-active --quiet wg-quick@wg0 ||
   die "wg-quick@wg0 failed to start; inspect its journal."
 for port in 7100 7200 7300 7400 7500 7600 7700; do
   run systemctl enable --now "badvpn@$port.service"
-  systemctl is-active --quiet "badvpn@$port.service" ||
-    die "badvpn@$port.service failed to start; inspect its journal."
+  if ! systemctl is-active --quiet "badvpn@$port.service"; then
+    journalctl -u "badvpn@$port" -n 8 --no-pager >&2 || true
+    die "badvpn@$port.service failed to start; see its journal above."
+  fi
 done
 run systemctl enable dnstt
 run systemctl restart dnstt
-systemctl is-active --quiet dnstt || die "dnstt failed to start; inspect journalctl -u dnstt."
+if ! systemctl is-active --quiet dnstt; then
+  printf '[!] dnstt failed to start.\n' >&2
+  printf '    UDP 53 currently bound by: %s\n' \
+    "$(ss -H -lun -p 'sport = :53' 2>/dev/null | head -n 1 || echo '(nothing)')" >&2
+  journalctl -u dnstt -n 12 --no-pager >&2 || true
+  die 'dnstt failed to start; resolve any port-53 conflict above and re-run install.'
+fi
 run systemctl enable wstunnel
 run systemctl restart wstunnel
 systemctl is-active --quiet wstunnel || die "wstunnel failed to start; inspect journalctl -u wstunnel."
