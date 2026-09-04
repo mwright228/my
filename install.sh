@@ -103,7 +103,8 @@ restore_install_state() {
         fi
       done
     fi
-    if [ "$resolver_changed" -eq 1 ] && [ -e /etc/mubx/resolv.conf.previous ]; then
+    if [ "$resolver_changed" -eq 1 ] &&
+      { [ -e /etc/mubx/resolv.conf.previous ] || [ -L /etc/mubx/resolv.conf.previous ]; }; then
       rm -f /etc/resolv.conf
       cp -a /etc/mubx/resolv.conf.previous /etc/resolv.conf
     fi
@@ -193,6 +194,9 @@ backup_file /etc/mubx/install-root
 backup_file /etc/mubx/ownership
 printf '%s\n' "$INSTALL_ROOT" > /etc/mubx/install-root
 printf 'MUB-X\n' > /etc/mubx/ownership
+if [ -L /etc/mubx/resolv.conf.previous ]; then
+  rm -f /etc/mubx/resolv.conf.previous
+fi
 if [ ! -e /etc/mubx/resolv.conf.previous ] && [ -e /etc/resolv.conf ]; then
   cp -a /etc/resolv.conf /etc/mubx/resolv.conf.previous
 fi
