@@ -16,6 +16,8 @@ to the VPS and ports 53/80/443 must be reachable. DNS NS delegation for
 UDP Custom is not installed automatically because this repository does not
 identify a stable, verifiable upstream source for its server binary. The
 included unit is a configuration template only and is not enabled by default.
+ZivPN is a separate protocol and is installed from the pinned `1.4.9` upstream
+release; the upstream project does not publish an armhf binary.
 
 ---
 
@@ -26,6 +28,7 @@ included unit is a configuration template only and is not enabled by default.
 - **Multi-Protocol Core (Xray-core):** Full support for VLESS-WebSocket, VLESS-HTTPUpgrade, VMess, Trojan, and XTLS-Vision Reality.
 - **Squid & SSH Ingestion:** Dropbear SSH via direct port (`2222`), WebSocket reverse proxy (`/ssh-ws`), and Squid HTTP CONNECT proxies (`8080` & `3128`).
 - **Mobile UDP Gaming Bridge:** Multi-port BadVPN UDPGW (`7100–7700`) instances forward low-latency UDP traffic for games and VoIP.
+- **ZivPN UDP VPN:** Password-authenticated UDP VPN server on port `5667` (amd64/arm64).
 - **Hysteria 2:** Installed from the upstream installer and configured with the issued certificate.
 - **DNSTT:** Built from a pinned upstream commit; requires DNS NS delegation for `dns.<your-domain>`.
 - **Kernel-Level Performance:** Auto-tuned TCP BBR congestion control, FQ queue discipline, and maximized file descriptor limits.

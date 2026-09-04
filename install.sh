@@ -77,6 +77,19 @@ command -v hysteria >/dev/null 2>&1 || die "Hysteria installation did not provid
 BUILD_ROOT="$(mktemp -d)"
 trap 'rm -rf "$BUILD_ROOT"' EXIT
 
+GO_VERSION="1.25.0"
+case "$(dpkg --print-architecture)" in
+  amd64) GO_ARCH="amd64" ;;
+  arm64) GO_ARCH="arm64" ;;
+  armhf) GO_ARCH="armv6l" ;;
+esac
+curl --fail --location --proto '=https' --tlsv1.2 \
+  "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" \
+  --output "$BUILD_ROOT/go.tar.gz"
+rm -rf /usr/local/go
+tar -C /usr/local -xzf "$BUILD_ROOT/go.tar.gz"
+export PATH="/usr/local/go/bin:$PATH"
+
 run git clone --quiet https://github.com/tladesignz/dnstt.git "$BUILD_ROOT/dnstt"
 git -C "$BUILD_ROOT/dnstt" checkout --quiet f1b9b97a269f83bad41d2ceef291b4d2c161cd11
 (cd "$BUILD_ROOT/dnstt" && run go build -trimpath -o /usr/local/bin/dnstt-server ./dnstt-server)
@@ -133,6 +146,34 @@ sed -i "s|__DOMAIN__|$DOMAIN|g; s|__UUID__|$UUID|g; s|__SHORT_ID__|$SHORT_ID|g; 
   /etc/systemd/system/dnstt.service
 sed -i "s|__DOMAIN__|$DOMAIN|g; s|__HY2_PASS__|$HY2_PASS|g" /etc/hysteria/config.yaml
 
+ZIVPN_ARCH="$(dpkg --print-architecture)"
+ZIVPN_ENABLED=1
+case "$ZIVPN_ARCH" in
+  amd64) ZIVPN_ASSET="udp-zivpn-linux-amd64" ;;
+  arm64) ZIVPN_ASSET="udp-zivpn-linux-arm64" ;;
+  armhf)
+    ZIVPN_ENABLED=0
+    printf '[!] ZivPN is unavailable on armhf; continuing without it.\n' >&2
+    ;;
+  *) die "No ZivPN binary mapping for $ZIVPN_ARCH." ;;
+esac
+if [ "$ZIVPN_ENABLED" -eq 1 ]; then
+  curl --fail --location --proto '=https' --tlsv1.2 \
+    "https://github.com/zahidbd2/udp-zivpn/releases/download/udp-zivpn_1.4.9/$ZIVPN_ASSET" \
+    --output /usr/local/bin/zivpn
+  chmod 0755 /usr/local/bin/zivpn
+  install -d -m 0700 /etc/zivpn
+  install -m 0600 configs/zivpn.json /etc/zivpn/config.json
+  ln -sfn "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" /etc/zivpn/zivpn.crt
+  ln -sfn "/etc/letsencrypt/live/$DOMAIN/privkey.pem" /etc/zivpn/zivpn.key
+  sed -i "s|__ZIVPN_PASS__|$ZIVPN_PASS|g" /etc/zivpn/config.json
+  iptables -t nat -C PREROUTING -i "$WAN_IF" -p udp --dport 6000:19999 \
+    -j DNAT --to-destination :5667 2>/dev/null ||
+    iptables -t nat -A PREROUTING -i "$WAN_IF" -p udp --dport 6000:19999 \
+      -j DNAT --to-destination :5667
+  iptables-save > /etc/iptables/rules.v4
+fi
+
 nginx -t
 haproxy -c -f /etc/haproxy/haproxy.cfg
 xray run -test -config /usr/local/etc/xray/config.json
@@ -153,6 +194,11 @@ done
 run systemctl enable dnstt
 run systemctl restart dnstt
 systemctl is-active --quiet dnstt || die "dnstt failed to start; inspect journalctl -u dnstt."
+if [ "$ZIVPN_ENABLED" -eq 1 ]; then
+  run systemctl enable zivpn
+  run systemctl restart zivpn
+  systemctl is-active --quiet zivpn || die "zivpn failed to start; inspect journalctl -u zivpn."
+fi
 run systemctl enable hysteria
 run systemctl restart hysteria
 systemctl is-active --quiet hysteria || die "hysteria failed to start; inspect journalctl -u hysteria."

@@ -32,6 +32,12 @@ echo -e "\n${C_BOLD}${C_ORANGE}─── [2] UDP CUSTOM // ZIVPN GAMING CORE ─
 echo -e "  • ${C_WHITE}Host / IP   :${C_RESET} ${DOMAIN} (${MYIP})"
 echo -e "  • ${C_WHITE}UDP Port    :${C_RESET} 7300 (or any open port 1-65535)"
 echo -e "  • ${C_WHITE}Credentials :${C_RESET} System SSH username & password"
+if command -v zivpn >/dev/null 2>&1 && [ -n "${ZIVPN_PASS:-}" ]; then
+  echo -e "\n${C_BOLD}${C_ORANGE}─── [2b] ZIVPN UDP VPN (PORT 5667) ───${C_RESET}"
+  echo -e "  • ${C_WHITE}Host / IP   :${C_RESET} ${DOMAIN} (${MYIP})"
+  echo -e "  • ${C_WHITE}UDP Port    :${C_RESET} 5667"
+  echo -e "  • ${C_WHITE}Password    :${C_RESET} ${ZIVPN_PASS}"
+fi
 
 # 3. Xray Proxies
 echo -e "\n${C_BOLD}${C_ORANGE}─── [3] XRAY CORE PROXIES (PORT 443) ───${C_RESET}"
