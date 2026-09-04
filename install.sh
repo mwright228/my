@@ -680,9 +680,24 @@ run systemctl daemon-reload
 run systemctl enable --now mubx-adaptive.timer
 if command -v fail2ban-client >/dev/null 2>&1; then
   install -D -m 0644 configs/fail2ban-mubx.conf /etc/fail2ban/jail.d/mubx.conf
-  systemctl enable --now fail2ban || true
-  fail2ban-client status dropbear >/dev/null 2>&1 ||
-    echo "[!] fail2ban 'dropbear' jail did not activate; inspect journalctl -u fail2ban." >&2
+  systemctl enable fail2ban
+  # restart (not just enable): a daemon already running from a previous
+  # install would otherwise never pick up the freshly written jail file.
+  systemctl restart fail2ban || true
+  # The daemon needs a moment to load jails and open its socket after the
+  # unit reports active; poll briefly so a slow start is not a false alarm.
+  jail_ok=0
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    if fail2ban-client status dropbear >/dev/null 2>&1; then
+      jail_ok=1
+      break
+    fi
+    sleep 0.5
+  done
+  if [ "$jail_ok" -eq 0 ]; then
+    echo "[!] fail2ban 'dropbear' jail did not activate; last log lines:" >&2
+    journalctl -u fail2ban -n 15 --no-pager >&2 || true
+  fi
 fi
 
 install_success=1
