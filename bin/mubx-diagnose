@@ -80,7 +80,7 @@ mubx_group_close
 
 # --- UDP listeners (local check) --------------------------------------------
 mubx_group_open "UDP listeners (local)"
-for spec in "openvpn UDP|2200" "hysteria 2|4433" "wireguard|51820" "dnstt|53" "zivpn|5667" "badvpn udpgw|7100" "badvpn udpgw|7500" "badvpn udpgw|7700"; do
+for spec in "openvpn UDP|2200" "hysteria 2|4433" "wireguard|51820" "zivpn|5667" "badvpn udpgw|7100" "badvpn udpgw|7500" "badvpn udpgw|7700"; do
   name="${spec%%|*}"; port="${spec##*|}"
   if ss -H -uln "sport = :$port" 2>/dev/null | grep -q .; then
     mubx_card "  $name" "$(printf '%s%s listening%s' "$C_GREEN" "$port" "$C_RESET")"
@@ -103,7 +103,7 @@ mubx_group_close
 
 # --- MUB-X services ----------------------------------------------------------
 mubx_group_open "MUB-X services"
-for service in haproxy nginx xray hysteria dnstt dropbear squid wg-quick@wg0; do
+for service in haproxy nginx xray hysteria dropbear squid wg-quick@wg0; do
   if systemctl is-active --quiet "$service" 2>/dev/null; then
     mubx_card "  $service" "$(mubx_dot "$C_GREEN" '●' 'up')"
   else

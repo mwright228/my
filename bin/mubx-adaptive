@@ -5,13 +5,13 @@
 # what this host can actually verify:
 #   * TCP transports -> real connect latency to the public endpoint.
 #   * UDP transports -> local listener health. A generic client cannot
-#     complete WireGuard / QUIC / DNSTT handshakes, so remote UDP
+#     complete WireGuard / QUIC / ZivPN handshakes, so remote UDP
 #     reachability is intentionally not guessed here.
 #
 # The old implementation measured every transport with a TCP connect, which
 # can never succeed against UDP-only services, so WireGuard, Hysteria,
-# OpenVPN-UDP and DNSTT always scored zero and the recommendation was
-# meaningless (it usually fell back to DNSTT).
+# OpenVPN-UDP always scored zero and the recommendation was
+# meaningless.
 set -Eeuo pipefail
 
 DOMAIN=
@@ -41,7 +41,7 @@ HOST="${DOMAIN:-127.0.0.1}"
 
 # Preference order: breaks ties between transports with equal scores and
 # ranks UDP transports, whose latency cannot be measured generically.
-ORDER=(xray-websocket xray-reality wireguard hysteria openvpn-udp dnstt)
+ORDER=(xray-websocket xray-reality wireguard hysteria openvpn-udp)
 
 declare -A score=()
 declare -A detail=()
@@ -87,10 +87,6 @@ fi
 if listener_up udp 2200; then
   score[openvpn-udp]=50000
   detail[openvpn-udp]="listener up (UDP 2200)"
-fi
-if listener_up udp 53; then
-  score[dnstt]=50000
-  detail[dnstt]="listener up (UDP 53)"
 fi
 
 best="none"

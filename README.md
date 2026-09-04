@@ -10,8 +10,7 @@ curl -fsSL https://raw.githubusercontent.com/mwright228/my/main/install.sh | bas
 
 The installer targets fresh Ubuntu 20.04/22.04/24.04 or Debian 11/12/13
 systemd VPS hosts on amd64, arm64, or armhf. The domain must already resolve
-to the VPS and ports 53/80/443 must be reachable. DNS NS delegation for
-`dns.<your-domain>` is required for DNSTT.
+to the VPS and ports 80/443 must be reachable.
 
 > [!TIP]
 > Already running MUB-X? See [UPGRADING.md](UPGRADING.md) — re-running the
@@ -38,11 +37,9 @@ release; the upstream project does not publish an armhf binary.
 - **Mobile UDP Gaming Bridge:** Multi-port BadVPN UDPGW (`7100–7700`) instances forward low-latency UDP traffic for games and VoIP.
 - **ZivPN UDP VPN:** Password-authenticated UDP VPN server on port `5667` (amd64/arm64).
 - **Hysteria 2:** Installed from a pinned upstream release and configured with the issued certificate.
-- **DNSTT:** Built from a pinned upstream commit; requires DNS NS delegation for `dns.<your-domain>`.
 - **SSH over WebSocket:** Restricted wstunnel backend for a generated secret path on ports 80 and 443, forwarding only to Dropbear. Use the generated `ws://` or `wss://` command from `link-gen`.
 - **Kernel-Level Performance:** Enables IPv4 forwarding and applies high file-descriptor limits to high-throughput services.
-- **Emergency SlowDNS Tunnel:** Built-in `dnstt` server running on port 53. DNS NS delegation for `dns.<your-domain>` is still required.
-- **Automated Self-Healing:** A weekly systemd timer renews Let's Encrypt certificates (restarting Hysteria/ZivPN on real renewals so they never serve an expired cert), updates GeoIP/GeoSite databases, and revives any managed daemon that stopped running (HAProxy, Nginx, Xray, Dropbear, Squid, wstunnel, Hysteria, ZivPN, DNSTT, OpenVPN, WireGuard, BadVPN).
+- **Automated Self-Healing:** A weekly systemd timer renews Let's Encrypt certificates (restarting Hysteria/ZivPN on real renewals so they never serve an expired cert), updates GeoIP/GeoSite databases, and revives any managed daemon that stopped running (HAProxy, Nginx, Xray, Dropbear, Squid, wstunnel, Hysteria, ZivPN, OpenVPN, WireGuard, BadVPN).
 - **Adaptive transport monitor:** Periodically measures installed transport reachability and records a recommendation in `/var/lib/mubx/adaptive-recommendation`.
 - **Mobile diagnostics:** `mubx-diagnose` reports public IPs, latency/loss, DNS, TCP reachability, path-MTU probes, kernel congestion control, and service health.
 - **Congestion tuning:** `mubx-tune` enables BBR and `fq` only when supported and applies conservative TCP keepalive/socket-buffer defaults.
@@ -64,7 +61,6 @@ release; the upstream project does not publish an armhf binary.
 | **10443+** | TCP | Vision | Xray-core | VLESS Reality inbound (one per front) |
 | **1194 / 2200** | TCP / UDP | OpenVPN | OpenVPN | Dual-Stack VPN Tunnel |
 | **51820** | UDP | WireGuard | Kernel | WireGuard L3 Interface |
-| **53** | UDP | DNS | DNSTT | SlowDNS Sub-Resolver |
 | **4433** | UDP | Hysteria 2 | Hysteria | High-performance UDP tunnel |
 | **80 / 443** | TCP | WebSocket | Nginx → Xray | VLESS/VMess/Trojan/Shadowsocks WS routes (`/vless-ws`, `/vmess-ws`, `/trojan-ws`, `/ss-<user>`) |
 | **80 / 443** | TCP | WebSocket | wstunnel → Dropbear | SSH over WebSocket |
@@ -105,4 +101,3 @@ renewal + service self-heal).
 ## 📄 License
 
 MIT — see [LICENSE](LICENSE).
-

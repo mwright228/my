@@ -28,8 +28,8 @@ check() { # $1 unit  $2 protocol(tcp|udp)  $3 port (empty = unit-only)
   return 0
 }
 
-# Explain why a service is down: port conflict first (most common for DNSTT,
-# where systemd-resolved or another DNS stub can grab UDP 53), then the last
+# Explain why a service is down: for listener-backed rows, whether
+# anything is actually bound to the expected port, plus the last
 # journal line from the unit itself.
 failure_hint() { # $1 unit  $2 protocol(tcp|udp)  $3 port (empty = unit-only)
   local unit="$1" proto="$2" port="${3:-}"
@@ -136,7 +136,6 @@ row "OpenVPN UDP (2200)"  openvpn-server@udp udp 2200
 row "WireGuard (51820)"   wg-quick@wg0   udp 51820
 row "Hysteria 2 (4433)"   hysteria       udp 4433
 row "ZivPN UDP VPN (5667)" zivpn         udp 5667
-row "SlowDNS / DNSTT (53)" dnstt         udp 53
 row "Dropbear SSH (109, 2222)" dropbear  tcp 2222
 group_close
 

@@ -154,30 +154,7 @@ block "/etc/openvpn/client/mubx-client-tcp.ovpn"
 sub "UDP profile"
 block "/etc/openvpn/client/mubx-client-udp.ovpn"
 
-# --- 7. SlowDNS / DNSTT ---------------------------------------------------
-card dnstt "SlowDNS / DNSTT" "(UDP 53)"
-DNSTT_PUB=$(cat /etc/dnstt/dnstt.pub 2>/dev/null || echo "NOT_FOUND")
-sub "NS domain"
-block "dns.$DOMAIN"
-sub "Public key"
-block "$DNSTT_PUB"
-sub "Client"
-block "dnstt-client -udp 1.1.1.1:53 -pubkey ${DNSTT_PUB} dns.${DOMAIN} 127.0.0.1:2222"
-# The server can run perfectly while the registrar never delegated the
-# dns.<domain> zone - check so operators are not left chasing nothing.
-if command -v dig >/dev/null 2>&1 && [ "$DNSTT_PUB" != "NOT_FOUND" ]; then
-  delegation="$(timeout 5 dig +short NS "dns.$DOMAIN" @1.1.1.1 2>/dev/null | head -n 1 || true)"
-  if [ -z "$delegation" ]; then
-    printf '\n  %s[!]%s No NS delegation found for dns.%s - resolvers will never\n' \
-      "$C_YELLOW" "$C_RESET" "$DOMAIN"
-    printf '  %s    reach this server. Add an NS record (e.g. ns1.%s) with a\n' \
-      "$C_YELLOW" "$C_RESET" "$DOMAIN"
-    printf '  %s    glue A record pointing at %s in your DNS panel.\n' \
-      "$C_YELLOW" "$C_RESET" "$MYIP"
-  fi
-fi
-
-# --- 8. Shadowsocks -------------------------------------------------------
+# --- 7. Shadowsocks -------------------------------------------------------
 card xray "Shadowsocks WS" "(WebSocket, per user)"
 SS_UI="$(printf 'aes-256-gcm:%s' "$UUID" | base64 -w 0 | tr '+/' '-_' | tr -d '=')"
 sub "TLS route (port 443)"

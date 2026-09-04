@@ -238,9 +238,6 @@ if [ -L /etc/resolv.conf ] || grep -q '127\.0\.0\.53' /etc/resolv.conf 2>/dev/nu
   resolver_changed=1
 fi
 command -v ss >/dev/null 2>&1 || die "The ss command is required for port validation."
-if ss -H -lun 'sport = :53' | grep -q .; then
-  die "UDP port 53 is already in use; stop the existing DNS listener before installing DNSTT."
-fi
 
 if [ ! -d "$INSTALL_ROOT/.git" ]; then
   if [ -e "$INSTALL_ROOT" ] && [ -n "$(find "$INSTALL_ROOT" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
@@ -259,7 +256,7 @@ cd "$INSTALL_ROOT"
 for service in apache2 nginx haproxy xray \
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0 \
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 badvpn@7500 badvpn@7600 badvpn@7700 \
-  dnstt zivpn hysteria wstunnel mubx-cron.timer mubx-adaptive.timer; do
+  zivpn hysteria wstunnel mubx-cron.timer mubx-adaptive.timer; do
   systemctl is-active --quiet "$service" && services_was_active["$service"]=1 ||
     services_was_active["$service"]=0
   systemctl is-enabled --quiet "$service" && services_was_enabled["$service"]=1 ||
@@ -287,8 +284,8 @@ backup_file /etc/nginx/nginx.conf
 backup_file /etc/telecom-engine.env
 backup_file /etc/sysctl.d/99-mubx-forwarding.conf
 backup_file /etc/sysctl.d/99-mubx-network.conf
-for path in /etc/hysteria/config.yaml /etc/dnstt/dnstt.priv /etc/dnstt/dnstt.pub \
-  /etc/zivpn/config.json /etc/openvpn/server/tcp.conf \
+for path in /etc/hysteria/config.yaml /etc/zivpn/config.json \
+  /etc/openvpn/server/tcp.conf \
   /etc/openvpn/server/udp.conf /etc/openvpn/certs/server.ext \
   /etc/openvpn/client/client.ext /etc/openvpn/certs/ca.crt \
   /etc/openvpn/certs/ca.key /etc/openvpn/certs/ca.srl \
@@ -312,8 +309,7 @@ backup_file /usr/local/etc/xray/domain
 backup_file /usr/local/etc/xray/config.json
 backup_file /usr/local/share/xray/geoip.dat
 backup_file /usr/local/share/xray/geosite.dat
-backup_file /usr/local/go
-for file in xray hysteria wstunnel zivpn dnstt-server dnstt-client badvpn-udpgw; do
+for file in xray hysteria wstunnel zivpn badvpn-udpgw; do
   backup_file "/usr/local/bin/$file"
 done
 install -m 0755 bin/* /usr/local/bin/
@@ -387,33 +383,6 @@ command -v hysteria >/dev/null 2>&1 || die "Hysteria installation did not provid
 
 BUILD_ROOT="$(mktemp -d)"
 
-GO_VERSION="1.26.8"
-case "$(dpkg --print-architecture)" in
-  amd64) GO_ARCH="amd64"; GO_SHA256="d0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b" ;;
-  arm64) GO_ARCH="arm64"; GO_SHA256="211ffced9dcb9633a55eac6364816ec0ddd951389a740e88fa8b3337971bdda0" ;;
-  armhf) GO_ARCH="armv6l"; GO_SHA256="eab440beabf395870752021fa74cedf04f97b61e43ebbe005ecbb98b94e55697" ;;
-esac
-download_verified \
-  "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" \
-  "$GO_SHA256" \
-  "$BUILD_ROOT/go.tar.gz"
-GO_STAGE="$BUILD_ROOT/go-stage"
-install -d -m 0755 "$GO_STAGE"
-tar -C "$GO_STAGE" -xzf "$BUILD_ROOT/go.tar.gz"
-export PATH="$GO_STAGE/go/bin:$PATH"
-
-run git clone --quiet https://github.com/tladesignz/dnstt.git "$BUILD_ROOT/dnstt"
-git -C "$BUILD_ROOT/dnstt" checkout --quiet f1b9b97a269f83bad41d2ceef291b4d2c161cd11
-(cd "$BUILD_ROOT/dnstt" && run go build -trimpath -o "$BUILD_ROOT/dnstt-server" ./dnstt-server)
-(cd "$BUILD_ROOT/dnstt" && run go build -trimpath -o "$BUILD_ROOT/dnstt-client" ./dnstt-client)
-stage_bin "$BUILD_ROOT/dnstt-server" /usr/local/bin/dnstt-server
-stage_bin "$BUILD_ROOT/dnstt-client" /usr/local/bin/dnstt-client
-install -d -m 0700 /etc/dnstt
-if [ ! -s /etc/dnstt/dnstt.priv ]; then
-  run /usr/local/bin/dnstt-server -gen-key \
-    -privkey-file /etc/dnstt/dnstt.priv -pubkey-file /etc/dnstt/dnstt.pub
-  chmod 0600 /etc/dnstt/dnstt.priv
-fi
 
 run git clone --quiet https://github.com/ambrop72/badvpn.git "$BUILD_ROOT/badvpn"
 git -C "$BUILD_ROOT/badvpn" checkout --quiet 07268f02706e78e282e19641b5d1d41e8e89bf31
@@ -423,13 +392,6 @@ run cmake --build "$BUILD_ROOT/badvpn-build" --target badvpn-udpgw --parallel "$
 [ -x "$BUILD_ROOT/badvpn-build/udpgw/badvpn-udpgw" ] ||
   die "BadVPN build completed without badvpn-udpgw."
 stage_bin "$BUILD_ROOT/badvpn-build/udpgw/badvpn-udpgw" /usr/local/bin/badvpn-udpgw
-GO_INSTALL_DIR="/usr/local/go-${GO_VERSION}"
-backup_file "$GO_INSTALL_DIR"
-rm -rf "$GO_INSTALL_DIR"
-mv "$GO_STAGE/go" "$GO_INSTALL_DIR"
-backup_file /usr/local/go
-rm -f /usr/local/go
-ln -sfn "$GO_INSTALL_DIR" /usr/local/go
 
 install -d -m 0700 /etc/openvpn/certs /etc/openvpn/server
 if [ ! -s /etc/openvpn/certs/ca.crt ]; then
@@ -581,7 +543,6 @@ fi
 sed -i "s/^DOMAIN=.*/DOMAIN=\"$DOMAIN\"/; s|__DOMAIN__|$DOMAIN|g" /etc/telecom-engine.env
 load_secrets
 sed -i "s|__SSH_WS_PATH__|$SSH_WS_PATH|g" /etc/systemd/system/wstunnel.service
-sed -i "s|__DOMAIN__|$DOMAIN|g" /etc/systemd/system/dnstt.service
 sed -i "s|__DOMAIN__|$DOMAIN|g; s|__HY2_PASS__|$HY2_PASS|g" /etc/hysteria/config.yaml
 # Generate the Xray config (one Reality inbound per configured SNI front,
 # plus a per-user client identity for every entry in the users store) and
@@ -644,6 +605,20 @@ fi
 nginx -t
 haproxy -c -f /etc/haproxy/haproxy.cfg
 xray run -test -config /usr/local/etc/xray/config.json
+# Retire daemons removed from MUB-X: older releases shipped DNSTT (SlowDNS).
+# Upgraded hosts still carry its unit and binaries; stop them and remove the
+# files. They are snapshotted above so a failed upgrade rolls back cleanly.
+if [ -e /etc/systemd/system/dnstt.service ]; then
+  backup_file /etc/systemd/system/dnstt.service
+  backup_file /usr/local/bin/dnstt-server
+  backup_file /usr/local/bin/dnstt-client
+  backup_file /etc/dnstt/dnstt.priv
+  backup_file /etc/dnstt/dnstt.pub
+  systemctl disable --now dnstt 2>/dev/null || true
+  rm -f /etc/systemd/system/dnstt.service \
+    /usr/local/bin/dnstt-server /usr/local/bin/dnstt-client
+  rm -rf /etc/dnstt
+fi
 run systemctl daemon-reload
 for svc in nginx haproxy xray dropbear squid wstunnel; do
   run systemctl enable "$svc"
@@ -666,15 +641,6 @@ for port in 7100 7200 7300 7400 7500 7600 7700; do
     die "badvpn@$port.service failed to start; see its journal above."
   fi
 done
-run systemctl enable dnstt
-run systemctl restart dnstt
-if ! systemctl is-active --quiet dnstt; then
-  printf '[!] dnstt failed to start.\n' >&2
-  printf '    UDP 53 currently bound by: %s\n' \
-    "$(ss -H -lun -p 'sport = :53' 2>/dev/null | head -n 1 || echo '(nothing)')" >&2
-  journalctl -u dnstt -n 12 --no-pager >&2 || true
-  die 'dnstt failed to start; resolve any port-53 conflict above and re-run install.'
-fi
 run systemctl enable wstunnel
 run systemctl restart wstunnel
 systemctl is-active --quiet wstunnel || die "wstunnel failed to start; inspect journalctl -u wstunnel."

@@ -3,6 +3,11 @@
 Existing servers upgrade **in place**: nothing is wiped, every secret,
 certificate, user, Reality front, and per-user identity survives.
 
+> [!NOTE]
+> DNSTT / SlowDNS was removed from MUB-X - ZivPN covers the UDP-tunnel
+> role. The next update disables and deletes the old `dnstt` unit,
+> binaries and `/etc/dnstt` keys automatically.
+
 ## Fastest: menu option `14` (self-update)
 
 Once `mubx-update` is installed, updates are one keypress from the control
@@ -32,11 +37,11 @@ service activity to `/etc/mubx/backup<path>` and restores them on failure.
 curl -fsSL https://raw.githubusercontent.com/mwright228/my/main/install.sh | bash
 ```
 
-Run as root on the VPS. Ports 53/80/443 must be free while it runs (it stops
+Run as root on the VPS. Ports 80/443 must be free while it runs (it stops
 nginx/HAProxy briefly for certificate handling), and the domain must keep
 resolving to the server. Re-runs are idempotent: they keep `REALITY_FRONTS`,
 `SSH_WS_PATH`, `DOMAIN`, all secrets in `/etc/telecom-engine.env`, the user
-store `/etc/mubx/users.json`, DNSTT / WireGuard / OpenVPN keys, and the
+store `/etc/mubx/users.json`, WireGuard / OpenVPN keys, and the
 Let's Encrypt certificate.
 
 > [!NOTE]
@@ -92,8 +97,6 @@ followed by `systemctl daemon-reload`. When in doubt, re-run `install.sh`.
 
 1. **Services up** — run `mubx-restart-failed` (menu `13`); every service
    should report running. Anything still down prints its last journal line
-   and any port conflict — DNSTT in particular is usually a UDP-53 squatter
-   (`systemctl status dnstt`, `ss -lun 'sport = :53'`).
 2. **Full status** — `svc-status` (menu `7`): all rows `Running`. The Xray
    transports list should now include one `Xray Shadowsocks WS (<user>)`
    row per user (admin plus any others you created), alongside Reality,

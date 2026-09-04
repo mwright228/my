@@ -19,7 +19,7 @@ esac
 for svc in nginx haproxy xray dropbear squid \
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0 \
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 badvpn@7500 badvpn@7600 badvpn@7700 \
-  dnstt hysteria zivpn wstunnel mubx-cron.timer mubx-adaptive.timer; do
+  hysteria zivpn wstunnel mubx-cron.timer mubx-adaptive.timer; do
   systemctl disable --now "$svc" 2>/dev/null || true
 done
 restore_path() {
@@ -32,7 +32,7 @@ restore_path() {
     rm -rf -- "$path"
   fi
 }
-for path in /etc/systemd/system/badvpn@.service /etc/systemd/system/dnstt.service \
+for path in /etc/systemd/system/badvpn@.service \
   /etc/systemd/system/wstunnel.service \
   /etc/systemd/system/hysteria.service /etc/systemd/system/zivpn.service \
   /etc/systemd/system/mubx-cron.service /etc/systemd/system/mubx-cron.timer \
@@ -41,13 +41,8 @@ for path in /etc/systemd/system/badvpn@.service /etc/systemd/system/dnstt.servic
 done
 systemctl daemon-reload
 for path in /usr/local/bin/xray /usr/local/bin/hysteria /usr/local/bin/wstunnel /usr/local/bin/zivpn \
-  /usr/local/bin/dnstt-server /usr/local/bin/dnstt-client /usr/local/bin/badvpn-udpgw \
-  /usr/local/go; do
+  /usr/local/bin/badvpn-udpgw; do
   restore_path "$path"
-done
-for backup in /etc/mubx/backup/usr/local/go-*; do
-  [ -e "$backup" ] || continue
-  restore_path "${backup#/etc/mubx/backup}"
 done
 for path in /usr/local/bin/menu /usr/local/bin/link-gen /usr/local/bin/add-user \
   /usr/local/bin/delete-user /usr/local/bin/mubx-diagnose \
@@ -81,7 +76,7 @@ fi
 restore_path /etc/sysctl.d/99-mubx-forwarding.conf
 restore_path /etc/sysctl.d/99-mubx-network.conf
 for path in /etc/telecom-engine.env /usr/local/etc/xray/domain \
-  /etc/hysteria/config.yaml /etc/dnstt/dnstt.priv /etc/dnstt/dnstt.pub \
+  /etc/hysteria/config.yaml \
   /etc/zivpn/config.json /etc/zivpn/zivpn.crt /etc/zivpn/zivpn.key; do
   restore_path "$path"
 done

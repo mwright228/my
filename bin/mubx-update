@@ -34,7 +34,7 @@ ROOT="$(cat /etc/mubx/install-root 2>/dev/null || true)"
 }
 
 SERVICES=(
-  haproxy nginx xray dropbear squid wstunnel hysteria zivpn dnstt
+  haproxy nginx xray dropbear squid wstunnel hysteria zivpn
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400
   badvpn@7500 badvpn@7600 badvpn@7700
@@ -122,11 +122,10 @@ backup_path /etc/haproxy/haproxy.cfg
 backup_path /etc/nginx/nginx.conf
 
 # 3) Install the refreshed scripts, libs and units. mubx-update itself is
-#    swapped at the very end (it is the script currently running). Two unit
-#    templates (dnstt, wstunnel) carry install-time placeholders that are
+#    swapped at the very end (it is the script currently running). The
+#    wstunnel unit template carries an install-time placeholder that is
 #    substituted against the live secrets, exactly like install.sh does -
-#    otherwise the daemons would start with literal __DOMAIN__ /
-#    __SSH_WS_PATH__ values.
+#    otherwise the daemon would start with a literal __SSH_WS_PATH__.
 load_mubx_env
 for f in "$ROOT"/lib/*.sh; do
   [ -f "$f" ] || continue
@@ -137,7 +136,20 @@ for f in "$ROOT"/systemd/*.service "$ROOT"/systemd/*.timer; do
   install -m 0644 "$f" "/etc/systemd/system/$(basename "$f")"
 done
 sed -i "s|__SSH_WS_PATH__|$SSH_WS_PATH|g" /etc/systemd/system/wstunnel.service
-sed -i "s|__DOMAIN__|$DOMAIN|g" /etc/systemd/system/dnstt.service
+# Retire daemons removed from MUB-X: DNSTT was retired upstream; hosts
+# upgraded from older releases still have its unit and binaries. Stop and
+# remove them - they are snapshotted above so a failed update rolls back.
+if [ -e /etc/systemd/system/dnstt.service ]; then
+  backup_path /etc/systemd/system/dnstt.service
+  backup_path /usr/local/bin/dnstt-server
+  backup_path /usr/local/bin/dnstt-client
+  backup_path /etc/dnstt/dnstt.priv
+  backup_path /etc/dnstt/dnstt.pub
+  systemctl disable --now dnstt 2>/dev/null || true
+  rm -f /etc/systemd/system/dnstt.service \
+    /usr/local/bin/dnstt-server /usr/local/bin/dnstt-client
+  rm -rf /etc/dnstt
+fi
 systemctl daemon-reload
 for f in "$ROOT"/bin/*; do
   [ -f "$f" ] || continue

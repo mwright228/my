@@ -48,19 +48,9 @@ mubx_kvrow "OpenVPN"       "1194 (TCP), 2200 (UDP)"
 mubx_kvrow "WireGuard"     "51820 (UDP)"
 mubx_kvrow "Hysteria 2"    "4433 (UDP)"
 mubx_kvrow "ZivPN"         "5667 (UDP)"
-mubx_kvrow "SlowDNS DNSTT" "53 (UDP)"
 mubx_kvrow "UDPGW bridge"  "7100-7700 (UDP)"
 mubx_kvrow "Xray transports" "menu 2 → all links"
 mubx_box_line '└' '┘'
-if [ -n "${DOMAIN:-}" ] && [ -r /etc/dnstt/dnstt.pub ]; then
-  printf '\n'
-  mubx_box_line '┌' '┐'
-  mubx_put "$(printf '  %sSlowDNS / DNSTT%s' "$C_BOLD" "$C_RESET")"
-  mubx_box_line '├' '┤'
-  mubx_kvrow "NS domain" "dns.$DOMAIN"
-  mubx_box_line '└' '┘'
-  printf '  %sPublic key  %s%s%s\n' "$C_DIM" "$C_RESET" "$C_CYAN" "$(cat /etc/dnstt/dnstt.pub)"
-fi
 
 if [ -t 0 ]; then
   read -r -p "  Print full client links for $u? [y/N] " ans
