@@ -109,6 +109,8 @@ while IFS=$'\t' read -r tag proto port; do
     vless-xhttp)   label="VLESS xHTTP" ;;
     shadowsocks-*) name="${tag#shadowsocks-}"
                    label="Shadowsocks WS ($name)" ;;
+    ssplain-*)     name="${tag#ssplain-}"
+                   label="Shadowsocks TCP ($name)" ;;
     reality-*)
       idx=$((port - 10442))   # 10443 -> front #1
       sni="${_fronts[$((idx - 1))]:-sni-$idx}"

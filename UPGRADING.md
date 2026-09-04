@@ -98,13 +98,15 @@ followed by `systemctl daemon-reload`. When in doubt, re-run `install.sh`.
 1. **Services up** — run `mubx-restart-failed` (menu `13`); every service
    should report running. Anything still down prints its last journal line
 2. **Full status** — `svc-status` (menu `7`): all rows `Running`. The Xray
-   transports list should now include one `Xray Shadowsocks WS (<user>)`
-   row per user (admin plus any others you created), alongside Reality,
-   VLESS/VMess/Trojan WS, HTTPUpgrade and xHTTP.
+   transports list should now include one `Xray Shadowsocks WS (<user>)` and
+   one `Xray Shadowsocks TCP (<user>)` row per user (admin plus any others
+   you created), alongside Reality, VLESS/VMess/Trojan WS, HTTPUpgrade and
+   xHTTP.
 3. **New protocol smoke test** — `link-gen` (menu `2`, user `admin`):
-   section `[8] Shadowsocks` must print a TLS (443) and plain (80)
-   `ss://` link ending in `#MUBX-SS-admin`. Import the TLS one into
-   v2rayNG / Shadowrocket / sing-box and confirm a connection.
+   section `[8] Shadowsocks` must print a TLS (443), plain WS (80) and
+   plain TCP (8388) `ss://` link. Import the plain TCP one into v2rayNG /
+   Shadowrocket / sing-box — no plugin or TLS toggles required — and confirm
+   a connection.
 4. **Per-user lifecycle** — `add-user alice` then `link-gen` for alice
    shows `/ss-alice`; after `delete-user alice`, alice's Xray inbound and
    nginx route are gone (`grep -c 'ss-alice' /etc/nginx/nginx.conf` → 0)

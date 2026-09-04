@@ -20,6 +20,7 @@ REALITY_BASE_PORT=10443
 REALITY_MAX_FRONTS=12
 SS_MARKER='#MUBX_SS_LOCATIONS#'
 SS_BASE_PORT=10006
+SS_PLAIN_BASE_PORT=8388
 
 # Multi-user store. Overridable (MUBX_USERS_FILE) so tests can render
 # against a scratch copy. Each entry: {name, uuid, added, expiry}.
@@ -177,21 +178,24 @@ mubx_xray_render() { # $1 base_template  $2 inbound_template  $3 out
   mubx_users_apply "$out" || return 1
   # Per-user Shadowsocks WS inbounds (one loopback port + ws path per user).
   mubx_ss_apply "$out" "$(dirname "$base_tpl")/ss-inbound.json" || return 1
+  # Per-user plain Shadowsocks TCP inbounds (one public port per user).
+  mubx_ss_plain_apply "$out" "$(dirname "$base_tpl")/ss-plain-inbound.json" || return 1
 }
 
 # Emit one tab-separated row per Shadowsocks user: name, uuid (the SS
 # password), loopback port (10006 + store index) and the ws path
 # (/ss-<name>). Without a store (pre-upgrade host) the legacy admin
 # identity is used, matching how xray configs were rendered before.
-mubx_ss_plan() {
+mubx_ss_plan() { # $1 base port (default SS_BASE_PORT, i.e. the loopback WS ports)
+  local base="${1:-$SS_BASE_PORT}"
   if [ -f "$MUBX_USERS_FILE" ]; then
-    jq -r --argjson base "$SS_BASE_PORT" \
+    jq -r --argjson base "$base" \
       'range(0; length) as $i | .[$i] |
        select((.uuid // "") != "") |
        [.name, .uuid, ($base + $i), ("/ss-" + .name)] | @tsv' \
       "$MUBX_USERS_FILE" 2>/dev/null || true
   else
-    printf '%s\t%s\t%s\t%s\n' "admin" "${UUID:-}" "$SS_BASE_PORT" "/ss-admin"
+    printf '%s\t%s\t%s\t%s\n' "admin" "${UUID:-}" "$base" "/ss-admin"
   fi
 }
 
@@ -209,6 +213,29 @@ mubx_ss_apply() { # $1 rendered config file  $2 ss inbound template
     extra="$(jq -cn --argjson arr "$extra" --argjson o "$obj" '$arr + [$o]')" \
       || return 1
   done < <(mubx_ss_plan)
+  if [ "$extra" != '[]' ]; then
+    jq --argjson add "$extra" '.inbounds += $add' "$cfg" > "$cfg.mubx" || return 1
+    mv -f "$cfg.mubx" "$cfg"
+  fi
+}
+
+# Append one plain Shadowsocks TCP inbound (raw SS, no WebSocket / no TLS)
+# per store user, binding publicly on SS_PLAIN_BASE_PORT + index. This lets
+# any Shadowsocks client - v2rayNG, sing-box, Shadowrocket - connect without
+# a plugin or any certificate handling, and doubles as an odd-port channel
+# past carrier filters that only police 80/443/8080. A missing template
+# simply skips plain SS (older templates stay valid).
+mubx_ss_plain_apply() { # $1 rendered config file  $2 ss plain inbound template
+  local cfg="$1" ss_tpl="$2" extra='[]' obj name uuid port path
+  [ -f "$ss_tpl" ] || return 0
+  while IFS=$'\t' read -r name uuid port path; do
+    [ -n "$name" ] && [ -n "$uuid" ] || continue
+    obj="$(sed -e "s|__SS_NAME__|$name|g" \
+               -e "s|__SS_PORT__|$port|g" \
+               -e "s|__SS_PASS__|$uuid|g" "$ss_tpl")" || return 1
+    extra="$(jq -cn --argjson arr "$extra" --argjson o "$obj" '$arr + [$o]')" \
+      || return 1
+  done < <(mubx_ss_plan "$SS_PLAIN_BASE_PORT")
   if [ "$extra" != '[]' ]; then
     jq --argjson add "$extra" '.inbounds += $add' "$cfg" > "$cfg.mubx" || return 1
     mv -f "$cfg.mubx" "$cfg"

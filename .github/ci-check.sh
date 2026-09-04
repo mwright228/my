@@ -19,11 +19,11 @@ done
 say "JSON validity (templates and examples)"
 for f in configs/*.json examples/*.json; do
   [ -f "$f" ] || continue
-  # reality-inbound.json and ss-inbound.json are per-item fragments with a
-  # numeric placeholder ("port": __PORT__), so standalone JSON parsing does
-  # not apply to them; the render smoke tests below validate the substituted
-  # results instead.
-  case "$(basename "$f")" in reality-inbound.json|ss-inbound.json) continue ;; esac
+  # reality-inbound.json, ss-inbound.json and ss-plain-inbound.json are
+  # per-item fragments with a numeric placeholder ("port": __PORT__), so
+  # standalone JSON parsing does not apply to them; the render smoke tests
+  # below validate the substituted results instead.
+  case "$(basename "$f")" in reality-inbound.json|ss-inbound.json|ss-plain-inbound.json) continue ;; esac
   if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$f" 2>/dev/null; then
     echo "JSON FAIL: $f"
     fail=1
@@ -80,6 +80,25 @@ print("  ss inbound OK: %s -> %d%s" % (name, port, "/ss-" + name))
 PY
 }
 
+# The plain (non-WS) Shadowsocks inbound every valid render must carry for a
+# user: public bind, raw SS TCP, no TLS.
+check_ss_plain_user() { # $1 xray config  $2 name  $3 uuid  $4 port
+  python3 - "$1" "$2" "$3" "$4" <<'PY'
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+name, uuid, port = sys.argv[2], sys.argv[3], int(sys.argv[4])
+matches = [i for i in cfg["inbounds"] if i["tag"] == "ssplain-" + name]
+assert len(matches) == 1, "expected 1 ssplain-%s inbound" % name
+ss = matches[0]
+assert ss["listen"] == "0.0.0.0", ss["listen"]
+assert ss["port"] == port, (name, ss["port"], port)
+assert ss["settings"]["method"] == "aes-256-gcm"
+assert ss["settings"]["password"] == uuid
+assert ss["streamSettings"]["network"] == "tcp"
+print("  ss plain TCP OK: %s -> :%d" % (name, port))
+PY
+}
+
 say "Reality render smoke test (multi-front)"
 if command -v jq >/dev/null 2>&1; then
   tmp="$(mktemp -d)"
@@ -106,6 +125,7 @@ PY
       fail=1
     }
     check_ss_user "$tmp/xray.json" admin "11111111-2222-3333-4444-555555555555" 10006 || fail=1
+    check_ss_plain_user "$tmp/xray.json" admin "11111111-2222-3333-4444-555555555555" 8388 || fail=1
     if render_nginx "$tmp" ""; then
       grep -q '#MUBX_SS_LOCATIONS#' "$tmp/nginx.conf" && {
         echo "Nginx SS marker was not expanded (legacy admin)"
@@ -161,6 +181,8 @@ PY
     if [ $rc -ne 0 ]; then fail=1; fi
     check_ss_user "$tmp/xray.json" admin "11111111-2222-3333-4444-555555555555" 10006 || fail=1
     check_ss_user "$tmp/xray.json" alice "22222222-3333-4444-5555-666666666666" 10007 || fail=1
+    check_ss_plain_user "$tmp/xray.json" admin "11111111-2222-3333-4444-555555555555" 8388 || fail=1
+    check_ss_plain_user "$tmp/xray.json" alice "22222222-3333-4444-5555-666666666666" 8389 || fail=1
     if render_nginx "$tmp" "$tmp/users.json"; then
       for route in '/ss-admin' '/ss-alice'; do
         [ "$(grep -c "location $route" "$tmp/nginx.conf")" -eq 2 ] || {

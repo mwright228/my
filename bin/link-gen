@@ -12,10 +12,13 @@ source /usr/local/lib/mubx/common.sh
 load_mubx_env
 BUG="${1:-$DOMAIN}"
 USER_NAME="${2:-admin}"
-# Resolve the per-user UUID when a store exists.
+# Resolve the per-user UUID and store index when a store exists. The index
+# maps to the plain Shadowsocks TCP port (8388 + index) the renderer assigns.
+user_idx=0
 if [ -f /etc/mubx/users.json ]; then
-  user_uuid="$(jq -r --arg n "$USER_NAME" '.[] | select(.name == $n) | .uuid' \
-    /etc/mubx/users.json 2>/dev/null || true)"
+  read -r user_uuid user_idx < <(jq -r --arg n "$USER_NAME" \
+    'range(0; length) as $i | .[$i] | select(.name == $n) | [.uuid, $i] | @tsv' \
+    /etc/mubx/users.json 2>/dev/null || true)
   if [ -z "$user_uuid" ]; then
     echo "[!] No MUB-X user named '$USER_NAME'. Users:" >&2
     jq -r '.[].name' /etc/mubx/users.json 2>/dev/null | sed 's/^/  /' >&2 || true
@@ -155,13 +158,17 @@ sub "UDP profile"
 block "/etc/openvpn/client/mubx-client-udp.ovpn"
 
 # --- 7. Shadowsocks -------------------------------------------------------
-card xray "Shadowsocks WS" "(WebSocket, per user)"
+card xray "Shadowsocks" "(WS + plain TCP, per user)"
 SS_UI="$(printf 'aes-256-gcm:%s' "$UUID" | base64 -w 0 | tr '+/' '-_' | tr -d '=')"
-sub "TLS route (port 443)"
+SS_PLAIN_PORT=$(( ${SS_PLAIN_BASE_PORT:-8388} + ${user_idx:-0} ))
+sub "TLS route (port 443, WebSocket)"
 block "ss://${SS_UI}@${BUG}:443?plugin=v2ray-plugin%3Btls%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
 sub "Plain WS route (port 80)"
 block "ss://${SS_UI}@${BUG}:80?plugin=v2ray-plugin%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
+sub "Plain TCP route (port ${SS_PLAIN_PORT}, no TLS)"
+block "ss://${SS_UI}@${DOMAIN}:${SS_PLAIN_PORT}#MUBX-SS-${USER_NAME}-tcp"
+note "plain TCP needs no plugin and no cert toggles - works in v2rayNG / sing-box / Shadowrocket"
 [ "$BUG" = "$DOMAIN" ] || \
-  printf '  %s[!]%s The TLS link above needs SNI %s to terminate on this server - if %s is a configured Reality front, use the plain WS link or the default domain.\n' \
+  printf '  %s[!]%s The TLS link above needs SNI %s to terminate on this server - if %s is a configured Reality front, use the plain WS or plain TCP link, or the default domain.\n' \
     "$C_RED" "$C_RESET" "$BUG" "$BUG"
 printf '\n'

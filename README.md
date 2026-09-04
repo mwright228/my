@@ -30,9 +30,9 @@ release; the upstream project does not publish an armhf binary.
 
 - **HAProxy L4 SNI Router:** Listens on port 443 with zero decryption. Each configured Reality front SNI (default `www.apple.com`, changeable per carrier) is routed straight to Xray Reality; every other SNI — your domain, carrier bug-hosts, mismatched hosts — falls through to Nginx.
 - **Universal Bug-Host Multiplexer:** Terminates TLS on loopback (`127.0.0.1:20443`) via Nginx, accepting connections regardless of custom carrier SNI mismatches.
-- **Multi-Protocol Core (Xray-core):** Full support for VLESS-WebSocket, VLESS-HTTPUpgrade, VMess, Trojan, Shadowsocks-WebSocket (per user), and XTLS-Vision Reality.
+- **Multi-Protocol Core (Xray-core):** Full support for VLESS-WebSocket, VLESS-HTTPUpgrade, VMess, Trojan, Shadowsocks (per user, WebSocket + plain TCP), and XTLS-Vision Reality.
 - **Configurable Reality fronts:** Reality camouflages against any real HTTPS site, not just Apple. Add/remove SNI fronts (whatever your SIM carriers allow) with `reality-fronts` or menu option `10`; each front gets its own inbound and HAProxy route, and `link-gen` prints one Reality link per front.
-- **Per-user identities & usage:** Every user (`mubx-users` / menu `11`, also auto-created with each SSH account) gets their own UUID across every transport — revoke one user without rekeying the rest. Shadowsocks follows the same model: each user gets their own WS inbound (`127.0.0.1:10006+`) and nginx route (`/ss-<user>` on 80/443) keyed to their UUID, and user add/remove re-renders both Xray and Nginx atomically. Xray's stats API is enabled, so per-user traffic can be read back with `mubx-users usage`. The legacy shared identity survives as the seeded `admin` user, keeping old links valid. `link-gen [bug-host] [user]` prints links for any user.
+- **Per-user identities & usage:** Every user (`mubx-users` / menu `11`, also auto-created with each SSH account) gets their own UUID across every transport — revoke one user without rekeying the rest. Shadowsocks follows the same model: each user gets their own WS inbound (`127.0.0.1:10006+`) and nginx route (`/ss-<user>` on 80/443) keyed to their UUID, plus a plain Shadowsocks TCP inbound (`0.0.0.0:8388+`, no WS/TLS) so any SS client — v2rayNG included — connects without a plugin, and user add/remove re-renders both Xray and Nginx atomically. Xray's stats API is enabled, so per-user traffic can be read back with `mubx-users usage`. The legacy shared identity survives as the seeded `admin` user, keeping old links valid. `link-gen [bug-host] [user]` prints links for any user.
 - **Squid & SSH Ingestion:** Dropbear SSH via direct ports (`2222`, `109`, `53`) and Squid HTTP CONNECT proxies (`8080` & `3128`).
 - **Mobile UDP Gaming Bridge:** Multi-port BadVPN UDPGW (`7100–7700`) instances forward low-latency UDP traffic for games and VoIP.
 - **ZivPN UDP VPN:** Password-authenticated UDP VPN server on port `5667` (amd64/arm64).
@@ -58,6 +58,7 @@ release; the upstream project does not publish an armhf binary.
 | **10001** | TCP | WebSocket | Xray-core | VLESS-WS Inbound |
 | **10004** | TCP | HTTPUpgrade | Xray-core | High-Throughput Streaming |
 | **10006+** | TCP | WebSocket | Xray-core | Shadowsocks WS Inbound (one per user) |
+| **8388+** | TCP | Shadowsocks | Xray-core | Plain SS TCP Inbound (one per user, no WS/TLS) |
 | **10443+** | TCP | Vision | Xray-core | VLESS Reality inbound (one per front) |
 | **1194 / 2200** | TCP / UDP | OpenVPN | OpenVPN | Dual-Stack VPN Tunnel |
 | **51820** | UDP | WireGuard | Kernel | WireGuard L3 Interface |
