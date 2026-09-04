@@ -16,6 +16,14 @@ download_verified() {
   [ "$(sha256sum "$output" | awk '{print $1}')" = "$expected" ] ||
     die "Checksum verification failed for $url."
 }
+# Install an executable atomically: stage next to the destination and rename.
+# Overwriting a live binary in place fails with ETXTBSY ("Text file busy")
+# when its daemon is still running from that path, leaving a truncated file.
+stage_bin() {
+  local src="$1" dst="$2"
+  install -m 0755 "$src" "$dst.tmp.$$"
+  mv -f "$dst.tmp.$$" "$dst"
+}
 load_secrets() {
   local key value
   while IFS='=' read -r key value; do
@@ -347,8 +355,8 @@ download_root="$(mktemp -d /tmp/mubx-download.XXXXXX)"
 download_verified \
   "https://github.com/XTLS/Xray-core/releases/download/$XRAY_VERSION/$XRAY_ASSET" \
   "$XRAY_SHA256" "$download_root/xray.zip"
-unzip -p "$download_root/xray.zip" xray > /usr/local/bin/xray
-chmod 0755 /usr/local/bin/xray
+unzip -p "$download_root/xray.zip" xray > "$download_root/xray.new"
+stage_bin "$download_root/xray.new" /usr/local/bin/xray
 # Ship geoip/geosite databases now instead of waiting for the first weekly
 # maintenance run. Newer Xray releases bundle them in the zip; skip quietly
 # if this build does not.
@@ -365,13 +373,13 @@ done
 rm -f "$download_root/xray.zip"
 download_verified \
   "https://github.com/HyNetworks/hysteria/releases/download/app/$HYSTERIA_VERSION/$HYSTERIA_ASSET" \
-  "$HYSTERIA_SHA256" /usr/local/bin/hysteria
-chmod 0755 /usr/local/bin/hysteria
+  "$HYSTERIA_SHA256" "$download_root/hysteria"
+stage_bin "$download_root/hysteria" /usr/local/bin/hysteria
 download_verified \
   "https://github.com/erebe/wstunnel/releases/download/$WSTUNNEL_VERSION/$WSTUNNEL_ASSET" \
   "$WSTUNNEL_SHA256" "$download_root/wstunnel.tar.gz"
 tar -xzf "$download_root/wstunnel.tar.gz" -C "$download_root"
-install -m 0755 "$download_root/wstunnel" /usr/local/bin/wstunnel
+stage_bin "$download_root/wstunnel" /usr/local/bin/wstunnel
 
 run certbot certonly --standalone --keep-until-expiring --non-interactive --agree-tos \
   --register-unsafely-without-email -d "$DOMAIN"
@@ -396,8 +404,10 @@ export PATH="$GO_STAGE/go/bin:$PATH"
 
 run git clone --quiet https://github.com/tladesignz/dnstt.git "$BUILD_ROOT/dnstt"
 git -C "$BUILD_ROOT/dnstt" checkout --quiet f1b9b97a269f83bad41d2ceef291b4d2c161cd11
-(cd "$BUILD_ROOT/dnstt" && run go build -trimpath -o /usr/local/bin/dnstt-server ./dnstt-server)
-(cd "$BUILD_ROOT/dnstt" && run go build -trimpath -o /usr/local/bin/dnstt-client ./dnstt-client)
+(cd "$BUILD_ROOT/dnstt" && run go build -trimpath -o "$BUILD_ROOT/dnstt-server" ./dnstt-server)
+(cd "$BUILD_ROOT/dnstt" && run go build -trimpath -o "$BUILD_ROOT/dnstt-client" ./dnstt-client)
+stage_bin "$BUILD_ROOT/dnstt-server" /usr/local/bin/dnstt-server
+stage_bin "$BUILD_ROOT/dnstt-client" /usr/local/bin/dnstt-client
 install -d -m 0700 /etc/dnstt
 if [ ! -s /etc/dnstt/dnstt.priv ]; then
   run /usr/local/bin/dnstt-server -gen-key \
@@ -412,7 +422,7 @@ cmake -S "$BUILD_ROOT/badvpn" -B "$BUILD_ROOT/badvpn-build" \
 run cmake --build "$BUILD_ROOT/badvpn-build" --target badvpn-udpgw --parallel "$(nproc)"
 [ -x "$BUILD_ROOT/badvpn-build/udpgw/badvpn-udpgw" ] ||
   die "BadVPN build completed without badvpn-udpgw."
-install -m 0755 "$BUILD_ROOT/badvpn-build/udpgw/badvpn-udpgw" /usr/local/bin/badvpn-udpgw
+stage_bin "$BUILD_ROOT/badvpn-build/udpgw/badvpn-udpgw" /usr/local/bin/badvpn-udpgw
 GO_INSTALL_DIR="/usr/local/go-${GO_VERSION}"
 backup_file "$GO_INSTALL_DIR"
 rm -rf "$GO_INSTALL_DIR"
@@ -603,8 +613,8 @@ if [ "$ZIVPN_ENABLED" -eq 1 ]; then
   download_verified \
     "https://github.com/zahidbd2/udp-zivpn/releases/download/udp-zivpn_1.4.9/$ZIVPN_ASSET" \
     "$ZIVPN_SHA256" \
-    /usr/local/bin/zivpn
-  chmod 0755 /usr/local/bin/zivpn
+    "$download_root/zivpn"
+  stage_bin "$download_root/zivpn" /usr/local/bin/zivpn
   install -d -m 0700 /etc/zivpn
   install -m 0600 configs/zivpn.json /etc/zivpn/config.json
   ln -sfn "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" /etc/zivpn/zivpn.crt
