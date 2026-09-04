@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly MUB-X maintenance
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+Unit=mubx-cron.service
+
+[Install]
+WantedBy=timers.target

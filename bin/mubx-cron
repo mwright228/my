@@ -1,7 +1,86 @@
 #!/usr/bin/env bash
-curl -sL -o /usr/local/share/xray/geoip.dat https://github.com/v2fly/geoip/releases/latest/download/geoip.dat 2>/dev/null || true
-curl -sL -o /usr/local/share/xray/geosite.dat https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat 2>/dev/null || true
-certbot renew --quiet --post-hook "systemctl reload nginx haproxy" 2>/dev/null || true
-for svc in haproxy nginx xray dropbear squid; do
-  systemctl is-active --quiet "$svc" || systemctl restart "$svc" 2>/dev/null || true
+set -Eeuo pipefail
+
+GEOIP_URL="https://github.com/v2fly/geoip/releases/download/202608050239/geoip.dat"
+GEOIP_SHA256="c67bd077eb102cec74fab759b73d17f99275f56af10a87c14d9fd983508f5ce1"
+GEOSITE_URL="https://github.com/v2fly/domain-list-community/releases/download/20260904020013/dlc.dat"
+GEOSITE_SHA256="f82f26c015f9726c763d96a5f658e5b31b285dc094a985e718051e421f350ed6"
+install -d -m 0755 /usr/local/share/xray
+tmpdir="$(mktemp -d)"
+maintenance_success=0
+declare -A database_was_present=()
+for file in geoip.dat geosite.dat; do
+  if [ -e "/usr/local/share/xray/$file" ]; then
+    database_was_present["$file"]=1
+    cp -a "/usr/local/share/xray/$file" "$tmpdir/$file.previous"
+  else
+    database_was_present["$file"]=0
+  fi
 done
+nginx_was_active=0
+haproxy_was_active=0
+systemctl is-active --quiet nginx && nginx_was_active=1 || true
+systemctl is-active --quiet haproxy && haproxy_was_active=1 || true
+declare -A was_active=()
+for svc in haproxy nginx xray dropbear squid hysteria zivpn; do
+  systemctl is-active --quiet "$svc" && was_active["$svc"]=1 || was_active["$svc"]=0
+done
+cleanup() {
+  local status=0
+  if [ "$maintenance_success" -eq 0 ]; then
+    for file in geoip.dat geosite.dat; do
+      if [ -e "$tmpdir/$file.previous" ]; then
+        cp -a "$tmpdir/$file.previous" "/usr/local/share/xray/$file" ||
+          status=1
+      elif [ "${database_was_present[$file]}" -eq 0 ]; then
+        rm -f "/usr/local/share/xray/$file" || status=1
+      fi
+    done
+  fi
+  for svc in haproxy nginx xray dropbear squid hysteria zivpn; do
+    systemctl cat "$svc.service" >/dev/null 2>&1 || continue
+    if [ "${was_active[$svc]}" -eq 1 ]; then
+      systemctl start "$svc" || status=1
+      systemctl is-active --quiet "$svc" || status=1
+    else
+      systemctl stop "$svc" || status=1
+      systemctl is-active --quiet "$svc" && status=1 || true
+    fi
+  done
+  return "$status"
+}
+on_exit() {
+  local status=$?
+  cleanup || status=$?
+  rm -rf "$tmpdir" || status=1
+  exit "$status"
+}
+trap on_exit EXIT
+curl --fail --silent --show-error --location --retry 3 \
+  -o "$tmpdir/geoip.dat" \
+  "$GEOIP_URL"
+curl --fail --silent --show-error --location --retry 3 \
+  -o "$tmpdir/geosite.dat" \
+  "$GEOSITE_URL"
+test -s "$tmpdir/geoip.dat" && test -s "$tmpdir/geosite.dat"
+[ "$(sha256sum "$tmpdir/geoip.dat" | awk '{print $1}')" = "$GEOIP_SHA256" ]
+[ "$(sha256sum "$tmpdir/geosite.dat" | awk '{print $1}')" = "$GEOSITE_SHA256" ]
+systemctl stop nginx haproxy
+certbot renew --quiet
+cleanup
+mv -f "$tmpdir/geoip.dat" /usr/local/share/xray/geoip.dat
+mv -f "$tmpdir/geosite.dat" /usr/local/share/xray/geosite.dat
+if [ "${was_active[xray]}" -eq 1 ]; then
+  systemctl restart xray
+  systemctl is-active --quiet xray
+fi
+for svc in haproxy nginx xray dropbear squid hysteria zivpn; do
+  systemctl cat "$svc.service" >/dev/null 2>&1 || continue
+  if [ "${was_active[$svc]}" -eq 1 ] && ! systemctl is-active --quiet "$svc"; then
+    systemctl restart "$svc"
+  fi
+  [ "${was_active[$svc]}" -eq 0 ] || systemctl is-active --quiet "$svc"
+done
+maintenance_success=1
+rm -rf "$tmpdir"
+trap - EXIT

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 if [ ! -f /etc/telecom-engine.env ]; then
   echo "[!] Run install.sh first"; exit 1; fi
-source /etc/telecom-engine.env 2>/dev/null || DOMAIN="UNCONFIGURED"
+source /usr/local/lib/mubx/common.sh
+load_mubx_env || DOMAIN="UNCONFIGURED"
 STATUS_FLAG() { systemctl is-active --quiet "$1" 2>/dev/null && echo "[ONLINE]" || echo "[OFFLINE]"; }
 clear
 echo "  MUB-X NODE: $DOMAIN"
@@ -20,10 +21,8 @@ read -p "Select: " opt
 case $opt in
   1) /usr/local/bin/set-domain ;;
   2) read -p "Bug-host: " b; /usr/local/bin/link-gen "${b:-$DOMAIN}" ;;
-  4) read -p "User: " u; read -p "Pass: " p; read -p "Days: " d
-     useradd -e $(date -d "+$d days" +%Y-%m-%d) -s /bin/false -M "$u"
-     echo "$u:$p" | chpasswd; echo "[+] User $u added" ;;
-  5) read -p "User: " u; userdel -r "$u" 2>/dev/null || userdel "$u"; echo "[-] Deleted" ;;
+  4) /usr/local/bin/add-user ;;
+  5) /usr/local/bin/delete-user ;;
   6) systemctl restart haproxy nginx xray dropbear squid; echo "[*] Restarted" ;;
   7) ss -tulnp | grep -E ':(443|80|2222|8080|3128|10001|10443)' ;;
   0) exit 0 ;; esac

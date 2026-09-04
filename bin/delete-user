@@ -1,0 +1,19 @@
+#!/bin/bash
+set -euo pipefail
+
+read -r -p "Username to delete: " username
+[[ "$username" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] ||
+  { echo "Bad username" >&2; exit 1; }
+
+entry="$(getent passwd "$username" || true)"
+[ -n "$entry" ] || { echo "User does not exist" >&2; exit 1; }
+IFS=: read -r _ _ uid _ _ home shell <<< "$entry"
+[ "$uid" -ge 1000 ] || { echo "Refusing to delete a system account" >&2; exit 1; }
+[ "$shell" = "/bin/false" ] ||
+  { echo "Refusing to delete an account not created for MUB-X access" >&2; exit 1; }
+
+read -r -p "Type the username to confirm deletion: " confirmation
+[ "$confirmation" = "$username" ] || { echo "Deletion cancelled" >&2; exit 1; }
+
+userdel -r "$username"
+echo "[-] Deleted $username"

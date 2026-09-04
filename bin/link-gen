@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-source /etc/telecom-engine.env 2>/dev/null
+source /usr/local/lib/mubx/common.sh
+load_mubx_env
 BUG="${1:-$DOMAIN}"
 MYIP=$(curl -4 -s ifconfig.me 2>/dev/null || echo "$DOMAIN")
 HY2_PASS="${HY2_PASS:?Missing Hysteria password; rerun the installer}"
@@ -27,13 +28,9 @@ echo -e "${C_DIM}─────────────────────
 echo -e "\n${C_BOLD}${C_ORANGE}─── [1] HYSTERIA 2 // BRUTAL UDP CORE (PORT 4433) ───${C_RESET}"
 echo -e "${C_CYAN}hysteria2://${HY2_PASS}@${DOMAIN}:4433/?sni=${DOMAIN}&insecure=1#MUBX-Hysteria2${C_RESET}"
 
-# 2. UDP Custom / ZivPN
-echo -e "\n${C_BOLD}${C_ORANGE}─── [2] UDP CUSTOM // ZIVPN GAMING CORE ───${C_RESET}"
-echo -e "  • ${C_WHITE}Host / IP   :${C_RESET} ${DOMAIN} (${MYIP})"
-echo -e "  • ${C_WHITE}UDP Port    :${C_RESET} 7300 (or any open port 1-65535)"
-echo -e "  • ${C_WHITE}Credentials :${C_RESET} System SSH username & password"
+# 2. ZivPN
 if command -v zivpn >/dev/null 2>&1 && [ -n "${ZIVPN_PASS:-}" ]; then
-  echo -e "\n${C_BOLD}${C_ORANGE}─── [2b] ZIVPN UDP VPN (PORT 5667) ───${C_RESET}"
+  echo -e "\n${C_BOLD}${C_ORANGE}─── [2] ZIVPN UDP VPN (PORT 5667) ───${C_RESET}"
   echo -e "  • ${C_WHITE}Host / IP   :${C_RESET} ${DOMAIN} (${MYIP})"
   echo -e "  • ${C_WHITE}UDP Port    :${C_RESET} 5667"
   echo -e "  • ${C_WHITE}Password    :${C_RESET} ${ZIVPN_PASS}"
@@ -59,7 +56,7 @@ echo -e "  ${C_YELLOW}Payload:${C_RESET} CONNECT [host_port] HTTP/1.1[crlf]Host:
 
 # 5. WireGuard
 echo -e "\n${C_BOLD}${C_ORANGE}─── [5] WIREGUARD L3 KERNEL VPN (PORT 51820) ───${C_RESET}"
-WG_CONF=$(ls /etc/wireguard/client*.conf /etc/wireguard/wg0-client.conf 2>/dev/null | head -n 1)
+WG_CONF=/etc/wireguard/mubx-client.conf
 if [ -f "$WG_CONF" ]; then
     echo -e "${C_GREEN}[✓] WireGuard Client Profile Found. Scan QR Code:${C_RESET}"
     qrencode -t ansiutf8 < "$WG_CONF"

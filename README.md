@@ -29,11 +29,11 @@ release; the upstream project does not publish an armhf binary.
 - **Squid & SSH Ingestion:** Dropbear SSH via direct port (`2222`) and Squid HTTP CONNECT proxies (`8080` & `3128`).
 - **Mobile UDP Gaming Bridge:** Multi-port BadVPN UDPGW (`7100–7700`) instances forward low-latency UDP traffic for games and VoIP.
 - **ZivPN UDP VPN:** Password-authenticated UDP VPN server on port `5667` (amd64/arm64).
-- **Hysteria 2:** Installed from the upstream installer and configured with the issued certificate.
+- **Hysteria 2:** Installed from a pinned upstream release and configured with the issued certificate.
 - **DNSTT:** Built from a pinned upstream commit; requires DNS NS delegation for `dns.<your-domain>`.
-- **Kernel-Level Performance:** Auto-tuned TCP BBR congestion control, FQ queue discipline, and maximized file descriptor limits.
+- **Kernel-Level Performance:** Enables IPv4 forwarding and applies high file-descriptor limits to high-throughput services.
 - **Emergency SlowDNS Tunnel:** Built-in `dnstt` server running on port 53. DNS NS delegation for `dns.<your-domain>` is still required.
-- **Automated Self-Healing:** Weekly cron routine renews Let's Encrypt certificates, updates GeoIP/GeoSite databases, and auto-restarts failed daemons.
+- **Automated Self-Healing:** A weekly systemd timer renews Let's Encrypt certificates, updates GeoIP/GeoSite databases, and auto-restarts failed daemons.
 
 ---
 
@@ -51,7 +51,8 @@ release; the upstream project does not publish an armhf binary.
 | **10443** | TCP | Vision | Xray-core | VLESS Reality (Anti-DPI) |
 | **1194 / 2200** | TCP / UDP | OpenVPN | OpenVPN | Dual-Stack VPN Tunnel |
 | **51820** | UDP | WireGuard | Kernel | WireGuard L3 Interface |
-| **5300** | UDP | DNS | DNSTT | SlowDNS Sub-Resolver |
+| **53** | UDP | DNS | DNSTT | SlowDNS Sub-Resolver |
+| **4433** | UDP | Hysteria 2 | Hysteria | High-performance UDP tunnel |
 | **7100–7700** | UDP | UDPGW | BadVPN | Mobile Gaming Packet Bridge |
 
 ---

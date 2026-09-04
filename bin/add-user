@@ -1,11 +1,16 @@
 #!/bin/bash
 set -euo pipefail
-read -p "Username: " u
-read -p "Password: " p
-read -p "Days: " d
+read -r -p "Username: " u
+read -r -s -p "Password: " p
+printf '\n'
+read -r -s -p "Confirm password: " p_confirm
+printf '\n'
+[ "$p" = "$p_confirm" ] || { echo "Passwords do not match" >&2; exit 1; }
+[ -n "$p" ] || { echo "Password cannot be empty" >&2; exit 1; }
+read -r -p "Days: " d
 [[ "$u" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] || { echo "Bad username"; exit 1; }
-[[ "$d" =~ ^[0-9]+$ ]] || { echo "Bad days"; exit 1; }
+[[ "$d" =~ ^[1-9][0-9]*$ ]] || { echo "Days must be positive"; exit 1; }
 EXP=$(date -d "+${d} days" +%Y-%m-%d)
 useradd -M -s /bin/false -e "$EXP" "$u"
-echo "$u:$p" | chpasswd
+printf '%s:%s\n' "$u" "$p" | chpasswd
 echo "[+] $u expires $EXP"
