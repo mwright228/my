@@ -39,7 +39,8 @@ export DEBIAN_FRONTEND=noninteractive
 run apt-get update
 run apt-get install -y ca-certificates curl certbot dnsutils lsof psmisc git jq \
   uuid-runtime openssl nginx dropbear squid haproxy openvpn wireguard-tools \
-  iptables iptables-persistent qrencode netcat-openbsd
+  iptables iptables-persistent qrencode netcat-openbsd golang-go \
+  build-essential cmake libnspr4-dev libnss3-dev
 
 if [ ! -d "$INSTALL_ROOT/.git" ]; then
   run rm -rf "$INSTALL_ROOT"
@@ -64,11 +65,37 @@ curl --fail --location --proto '=https' --tlsv1.2 \
 run bash /tmp/xray-install.sh install
 rm -f /tmp/xray-install.sh
 
-run bash -c "$(curl --fail --location --proto '=https' --tlsv1.2 https://get.hy2.sh/)"
+curl --fail --location --proto '=https' --tlsv1.2 https://get.hy2.sh/ \
+  --output /tmp/hysteria-install.sh
+run bash /tmp/hysteria-install.sh
+rm -f /tmp/hysteria-install.sh
 
 run certbot certonly --standalone --non-interactive --agree-tos \
   --register-unsafely-without-email -d "$DOMAIN"
 command -v hysteria >/dev/null 2>&1 || die "Hysteria installation did not provide /usr/local/bin/hysteria."
+
+BUILD_ROOT="$(mktemp -d)"
+trap 'rm -rf "$BUILD_ROOT"' EXIT
+
+run git clone --quiet https://github.com/tladesignz/dnstt.git "$BUILD_ROOT/dnstt"
+git -C "$BUILD_ROOT/dnstt" checkout --quiet f1b9b97a269f83bad41d2ceef291b4d2c161cd11
+(cd "$BUILD_ROOT/dnstt" && run go build -trimpath -o /usr/local/bin/dnstt-server ./dnstt-server)
+(cd "$BUILD_ROOT/dnstt" && run go build -trimpath -o /usr/local/bin/dnstt-client ./dnstt-client)
+install -d -m 0700 /etc/dnstt
+if [ ! -s /etc/dnstt/dnstt.priv ]; then
+  run /usr/local/bin/dnstt-server -gen-key \
+    -privkey-file /etc/dnstt/dnstt.priv -pubkey-file /etc/dnstt/dnstt.pub
+  chmod 0600 /etc/dnstt/dnstt.priv
+fi
+
+run git clone --quiet https://github.com/ambrop72/badvpn.git "$BUILD_ROOT/badvpn"
+git -C "$BUILD_ROOT/badvpn" checkout --quiet 07268f02706e78e282e19641b5d1d41e8e89bf31
+cmake -S "$BUILD_ROOT/badvpn" -B "$BUILD_ROOT/badvpn-build" \
+  -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1
+run cmake --build "$BUILD_ROOT/badvpn-build" --target badvpn-udpgw --parallel "$(nproc)"
+[ -x "$BUILD_ROOT/badvpn-build/udpgw/badvpn-udpgw" ] ||
+  die "BadVPN build completed without badvpn-udpgw."
+install -m 0755 "$BUILD_ROOT/badvpn-build/udpgw/badvpn-udpgw" /usr/local/bin/badvpn-udpgw
 
 install -d -m 0700 /etc/openvpn/certs /etc/openvpn/server
 if [ ! -s /etc/openvpn/certs/ca.crt ]; then
@@ -120,7 +147,12 @@ for svc in openvpn-server@tcp openvpn-server@udp; do
   run systemctl restart "$svc"
   systemctl is-active --quiet "$svc" || die "$svc failed to start; inspect journalctl -u $svc."
 done
-run systemctl daemon-reload
+for port in 7100 7200 7300 7400 7500 7600 7700; do
+  run systemctl enable --now "badvpn@$port.service"
+done
+run systemctl enable dnstt
+run systemctl restart dnstt
+systemctl is-active --quiet dnstt || die "dnstt failed to start; inspect journalctl -u dnstt."
 run systemctl enable hysteria
 run systemctl restart hysteria
 systemctl is-active --quiet hysteria || die "hysteria failed to start; inspect journalctl -u hysteria."

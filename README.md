@@ -10,8 +10,12 @@ curl -fsSL https://raw.githubusercontent.com/mwright228/my/main/install.sh | bas
 
 The installer targets fresh Ubuntu 20.04/22.04/24.04 or Debian 11/12/13
 systemd VPS hosts on amd64, arm64, or armhf. The domain must already resolve
-to the VPS and ports 80/443 must be reachable while the Let's Encrypt
-certificate is issued.
+to the VPS and ports 53/80/443 must be reachable. DNS NS delegation for
+`dns.<your-domain>` is required for DNSTT.
+
+UDP Custom is not installed automatically because this repository does not
+identify a stable, verifiable upstream source for its server binary. The
+included unit is a configuration template only and is not enabled by default.
 
 ---
 
@@ -22,8 +26,10 @@ certificate is issued.
 - **Multi-Protocol Core (Xray-core):** Full support for VLESS-WebSocket, VLESS-HTTPUpgrade, VMess, Trojan, and XTLS-Vision Reality.
 - **Squid & SSH Ingestion:** Dropbear SSH via direct port (`2222`), WebSocket reverse proxy (`/ssh-ws`), and Squid HTTP CONNECT proxies (`8080` & `3128`).
 - **Mobile UDP Gaming Bridge:** Multi-port BadVPN UDPGW (`7100–7700`) instances forward low-latency UDP traffic for games and VoIP.
+- **Hysteria 2:** Installed from the upstream installer and configured with the issued certificate.
+- **DNSTT:** Built from a pinned upstream commit; requires DNS NS delegation for `dns.<your-domain>`.
 - **Kernel-Level Performance:** Auto-tuned TCP BBR congestion control, FQ queue discipline, and maximized file descriptor limits.
-- **Emergency SlowDNS Tunnel:** Built-in `dnstt` server running on port 53 for zero-balance cellular bypass.
+- **Emergency SlowDNS Tunnel:** Built-in `dnstt` server running on port 53. DNS NS delegation for `dns.<your-domain>` is still required.
 - **Automated Self-Healing:** Weekly cron routine renews Let's Encrypt certificates, updates GeoIP/GeoSite databases, and auto-restarts failed daemons.
 
 ---
