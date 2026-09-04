@@ -1,9 +1,18 @@
 #!/bin/bash
 set -euo pipefail
 read -p "Domain: " d
-[ -z "$d" ] && exit 1
+[ -z "$d" ] && { echo "Domain is required" >&2; exit 1; }
+[[ "$d" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]] ||
+  { echo "Invalid domain" >&2; exit 1; }
 echo "$d" > /usr/local/etc/xray/domain
 systemctl stop apache2 nginx haproxy 2>/dev/null || true
 fuser -k 80/tcp 2>/dev/null || true
 sleep 1
 certbot certonly --standalone -d "$d" --agree-tos --register-unsafely-without-email --non-interactive
+if [ -f /etc/nginx/nginx.conf ]; then
+  sed -i "s|/etc/letsencrypt/live/[^/]*/|/etc/letsencrypt/live/$d/|g" /etc/nginx/nginx.conf
+fi
+if [ -f /etc/telecom-engine.env ]; then
+  sed -i "s/^DOMAIN=.*/DOMAIN=\"$d\"/" /etc/telecom-engine.env
+fi
+systemctl restart nginx haproxy

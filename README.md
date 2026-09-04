@@ -5,8 +5,12 @@ Multi Port VPS Script
 > Click the copy icon in the top-right corner of the box below to copy the install command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mubeen10010/mub-x/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mwright228/my/main/install.sh | bash
 ```
+
+The installer currently targets a fresh Ubuntu 22.04 LTS amd64 VPS. The domain
+must already resolve to the VPS and ports 80/443 must be reachable while the
+Let's Encrypt certificate is issued.
 
 ---
 
