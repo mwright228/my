@@ -22,32 +22,33 @@ STATUS_FLAG() {
   fi
 }
 clear
-printf '%s╔════════════════════════════════════════════════════════════════════╗%s\n' "$C_BLUE" "$C_RESET"
-printf '%s║%s  %sMUB-X%s  %sSECURE TRANSPORT CONTROL CENTER%s                       %s║%s\n' \
-  "$C_BLUE" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_CYAN" "$C_BOLD" "$C_RESET" "$C_BLUE" "$C_RESET"
-printf '%s╠════════════════════════════════════════════════════════════════════╣%s\n' "$C_BLUE" "$C_RESET"
-printf '%s║%s  %sNODE%s     %-52s %s║%s\n' "$C_BLUE" "$C_RESET" "$C_DIM" "$C_RESET" "$DOMAIN" "$C_BLUE" "$C_RESET"
-printf '%s║%s  %sTIME%s     %-52s %s║%s\n' "$C_BLUE" "$C_RESET" "$C_DIM" "$C_RESET" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$C_BLUE" "$C_RESET"
-printf '%s╚════════════════════════════════════════════════════════════════════╝%s\n\n' "$C_BLUE" "$C_RESET"
-printf '%s┌─ SERVICE STATUS ───────────────────────────────────────────────────┐%s\n' "$C_CYAN" "$C_RESET"
-printf '  %s%-14s%b    %s%-14s%b\n' "$C_DIM" "EDGE ROUTER" "$(STATUS_FLAG haproxy)" "$C_DIM" "WEB GATEWAY" "$(STATUS_FLAG nginx)"
-printf '  %s%-14s%b    %s%-14s%b\n' "$C_DIM" "XRAY CORE" "$(STATUS_FLAG xray)" "$C_DIM" "SSH ACCESS" "$(STATUS_FLAG dropbear)"
-printf '  %s%-14s%b    %s%-14s%b\n' "$C_DIM" "WS TUNNEL" "$(STATUS_FLAG wstunnel)" "$C_DIM" "HTTP PROXY" "$(STATUS_FLAG squid)"
-printf '  %s%-14s%b    %s%-14s%b\n' "$C_DIM" "HY2 UDP" "$(STATUS_FLAG hysteria)" "$C_DIM" "WIREGUARD" "$(STATUS_FLAG wg-quick@wg0)"
-printf '%s└───────────────────────────────────────────────────────────────────┘%s\n\n' "$C_CYAN" "$C_RESET"
-printf '%s┌─ PROVISIONING ────────────────────────────────────────────────────┐%s\n' "$C_GREEN" "$C_RESET"
-printf '  %s[1]%s  Domain & SSL       %s[2]%s  Generate client links\n' "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
-printf '  %s[4]%s  Add user           %s[5]%s  Delete user\n' "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
-printf '%s└───────────────────────────────────────────────────────────────────┘%s\n' "$C_GREEN" "$C_RESET"
-printf '%s┌─ OPERATIONS ───────────────────────────────────────────────────────┐%s\n' "$C_BLUE" "$C_RESET"
-printf '  %s[6]%s  Restart services   %s[7]%s  Inspect listening ports\n' "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
-printf '  %s[8]%s  Network diagnostics %s[9]%s  Adaptive recommendation\n' "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
-printf '%s└───────────────────────────────────────────────────────────────────┘%s\n' "$C_BLUE" "$C_RESET"
-printf '  %s[0]%s  Exit to shell\n\n' "$C_CYAN" "$C_RESET"
-read -r -p "  ${C_BOLD}➜${C_RESET} Select an option [0-9]: " opt
+printf '%s%sMUB-X SERVER MENU%s\n' "$C_BOLD" "$C_BLUE" "$C_RESET"
+printf '%s%s%s\n' "$C_DIM" "----------------------------------------" "$C_RESET"
+printf '  Host: %s%s%s\n' "$C_CYAN" "$DOMAIN" "$C_RESET"
+printf '  Time: %s\n\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+
+printf '%sServices%s\n' "$C_BOLD" "$C_RESET"
+printf '  HAProxy   %-18b  Nginx     %b\n' "$(STATUS_FLAG haproxy)" "$(STATUS_FLAG nginx)"
+printf '  Xray      %-18b  Dropbear  %b\n' "$(STATUS_FLAG xray)" "$(STATUS_FLAG dropbear)"
+printf '  wstunnel  %-18b  Squid     %b\n' "$(STATUS_FLAG wstunnel)" "$(STATUS_FLAG squid)"
+printf '  Hysteria  %-18b  WireGuard %b\n\n' "$(STATUS_FLAG hysteria)" "$(STATUS_FLAG wg-quick@wg0)"
+
+printf '%sCommands%s\n' "$C_BOLD" "$C_RESET"
+printf '  %s1%s  Set domain and SSL certificate\n' "$C_CYAN" "$C_RESET"
+printf '  %s2%s  Generate client links\n' "$C_CYAN" "$C_RESET"
+printf '  %s3%s  Show OpenVPN client config\n' "$C_CYAN" "$C_RESET"
+printf '  %s4%s  Add user\n' "$C_CYAN" "$C_RESET"
+printf '  %s5%s  Delete user\n' "$C_CYAN" "$C_RESET"
+printf '  %s6%s  Restart services\n' "$C_CYAN" "$C_RESET"
+printf '  %s7%s  Show listening ports\n' "$C_CYAN" "$C_RESET"
+printf '  %s8%s  Run network diagnostics\n' "$C_CYAN" "$C_RESET"
+printf '  %s9%s  Show transport recommendation\n' "$C_CYAN" "$C_RESET"
+printf '  %s0%s  Exit\n\n' "$C_CYAN" "$C_RESET"
+read -r -p "Choose an option: " opt
 case "$opt" in
   1) /usr/local/bin/set-domain ;;
   2) read -p "Bug-host: " b; /usr/local/bin/link-gen "${b:-$DOMAIN}" ;;
+  3) cat /etc/openvpn/client/mubx-client-tcp.ovpn 2>/dev/null || echo "OpenVPN client config not found" ;;
   4) /usr/local/bin/add-user ;;
   5) /usr/local/bin/delete-user ;;
   6) systemctl restart haproxy nginx xray dropbear squid wstunnel; echo "[*] Services restarted" ;;
