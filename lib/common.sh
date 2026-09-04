@@ -110,3 +110,8 @@ mubx_card() { # $1 left text  $2 right text
   [ "$pad" -lt 0 ] && pad=0
   mubx_put "$left$(printf '%*s' "$pad" '')$right"
 }
+
+# A dim "label: value" row inside a panel (value cyan).
+mubx_kvrow() { # $1 label  $2 value
+  mubx_put "$(printf '  %s%-12s%s %s%s%s' "$C_DIM" "$1:" "$C_RESET" "$C_CYAN" "$2" "$C_RESET")"
+}

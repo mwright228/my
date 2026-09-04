@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # MUB-X service status: one verdict per protocol / transport, not just per
 # systemd unit. Xray transports are enumerated from the live config so every
-# inbound (incl. each Reality SNI front) is listed individually; UDP-only
-# daemons are checked via their listener, TCP ones via their unit + socket.
+# inbound (incl. each Reality SNI front and Shadowsocks user) is listed
+# individually; UDP-only daemons are checked via their listener, TCP ones
+# via their unit + socket.
+#
+# Output uses the same 58-column bordered frame as the menu: one card per
+# group, status flush right per row, and any failing service explains itself
+# (port conflict / last journal line) in a note right under the card.
 set -Eeuo pipefail
 
 source /usr/local/lib/mubx/common.sh
@@ -21,24 +26,6 @@ check() { # $1 unit  $2 protocol(tcp|udp)  $3 port (empty = unit-only)
     ss -H -"${proto}"ln "sport = :$port" 2>/dev/null | grep -q . || return 1
   fi
   return 0
-}
-
-# One status row, colon aligned like a service listing. When the verdict is
-# down, a second indented line explains why (last journal line, or a port
-# conflict when something else holds the port) so the failure is diagnosable
-# right from this screen.
-row() { # $1 label  $2 unit  $3 tcp|udp  $4 port
-  local label="$1" unit="$2" proto="$3" port="${4:-}"
-  local text name hint
-  name="$(printf '%-34s' "$label")"
-  if check "$unit" "$proto" "$port"; then
-    text="${C_GREEN}Running (No Error)${C_RESET}"
-  else
-    text="${C_RED}Not Running (Error)${C_RESET}"
-    hint="$(failure_hint "$unit" "$proto" "$port")"
-    [ -z "$hint" ] || printf '    %s↳ %s%s\n' "$C_DIM" "${hint:0:112}" "$C_RESET"
-  fi
-  printf '» Service %s : %s\n' "$name" "$text"
 }
 
 # Explain why a service is down: port conflict first (most common for DNSTT,
@@ -62,48 +49,88 @@ failure_hint() { # $1 unit  $2 protocol(tcp|udp)  $3 port (empty = unit-only)
   printf '%s' "$msg"
 }
 
-header() { # $1 section title
-  printf '\n%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n' "$C_DIM" "$C_RESET"
-  printf '%s» %s «%s\n' "$C_BOLD" "$1" "$C_RESET"
-  printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n' "$C_DIM" "$C_RESET"
+# --- presentation -----------------------------------------------------------
+declare -a _hints=()
+
+group_open() { # $1 section title
+  _hints=()
+  mubx_box_line '┌' '┐'
+  mubx_put "$(printf '  %s%s%s' "$C_BOLD" "$1" "$C_RESET")"
+  mubx_box_line '├' '┤'
+}
+
+group_close() {
+  mubx_box_line '└' '┘'
+  local h
+  if [ "${#_hints[@]}" -gt 0 ]; then
+    for h in "${_hints[@]}"; do
+      printf '  %s↳ %s%s\n' "$C_DIM" "${h:0:96}" "$C_RESET"
+    done
+  fi
+  printf '\n'
+}
+
+# One status row; a failing service registers its explanation in _hints.
+row() { # $1 label  $2 unit  $3 tcp|udp  $4 port
+  local label="$1" unit="$2" proto="$3" port="${4:-}" right col
+  if check "$unit" "$proto" "$port"; then
+    col="$C_GREEN"
+    right="$(printf '%s●%s  %s%s%s' "$col" "$C_RESET" "$col" 'up  ' "$C_RESET")"
+  else
+    col="$C_RED"
+    right="$(printf '%s○%s  %s%s%s' "$col" "$C_RESET" "$col" 'down' "$C_RESET")"
+    _hints+=("$(failure_hint "$unit" "$proto" "$port")")
+  fi
+  mubx_card "$(printf '  %s' "$label")" "$right"
 }
 
 mubx_clear
-printf '%sMUB-X%s · Service Information · %s%s%s\n' \
-  "$C_BOLD" "$C_RESET" "$C_CYAN" "${DOMAIN:-UNCONFIGURED}" "$C_RESET"
+# --- summary box ------------------------------------------------------------
+mubx_box_line '┌' '┐'
+mubx_put "$(printf '  %sMUB-X%s · %sservice information%s' "$C_BOLD" "$C_RESET" "$C_CYAN" "$C_RESET")"
+mubx_box_line '├' '┤'
+mubx_kvrow "Domain"    "${DOMAIN:-UNCONFIGURED}"
+mubx_kvrow "Timestamp" "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+mubx_box_line '└' '┘'
+printf '\n'
 
-# --- Xray transports ---------------------------------------------------
-header "Xray transports"
+# --- Xray transports --------------------------------------------------------
+group_open "Xray transports"
 # reality fronts come back in config order (10443+n); map port -> SNI front.
 read -r -a _fronts <<< "${REALITY_FRONTS:-}"
 while IFS=$'\t' read -r tag proto port; do
   [ -n "$tag" ] || continue
   case "$tag" in
     socks-local|api) continue ;;
-    vless-ws)      label="Xray VLESS WebSocket (WS)" ;;
-    vmess-ws)      label="Xray VMess WebSocket (WS)" ;;
-    trojan-ws)     label="Xray Trojan WebSocket (WS)" ;;
-    vless-httpupgrade) label="Xray VLESS HTTPUpgrade" ;;
-    vless-xhttp)   label="Xray VLESS xHTTP" ;;
+    vless-ws)      label="VLESS WebSocket (WS)" ;;
+    vmess-ws)      label="VMess WebSocket (WS)" ;;
+    trojan-ws)     label="Trojan WebSocket (WS)" ;;
+    vless-httpupgrade) label="VLESS HTTPUpgrade" ;;
+    vless-xhttp)   label="VLESS xHTTP" ;;
     shadowsocks-*) name="${tag#shadowsocks-}"
-                   label="Xray Shadowsocks WS ($name)" ;;
+                   label="Shadowsocks WS ($name)" ;;
     reality-*)
       idx=$((port - 10442))   # 10443 -> front #1
       sni="${_fronts[$((idx - 1))]:-sni-$idx}"
-      label="Xray Reality ($sni)" ;;
-    *)             label="Xray ${tag}" ;;
+      # keep the row inside the 58-column frame for very long SNIs
+      sni_disp="${sni:0:26}"
+      [ "${#sni}" -gt 26 ] && sni_disp="${sni_disp}…"
+      label="Reality ($sni_disp)" ;;
+    *)             label="${tag}" ;;
   esac
-  row "$label" xray tcp "$port"
+  row "Xray · $label" xray tcp "$port"
 done < <(jq -r '.inbounds[] | select(.tag != "socks-local" and .tag != "api") | [.tag, (.protocol // "-"), (.port // 0)] | @tsv' "$XRAY_CONF" 2>/dev/null)
+group_close
 
-# --- BadVPN UDPGW ------------------------------------------------------
-header "BadVPN UDPGW ports"
+# --- BadVPN UDPGW -----------------------------------------------------------
+group_open "BadVPN UDPGW ports"
 for p in 7100 7200 7300 7400 7500 7600 7700; do
   row "BadVPN UDPGW $p" "badvpn@$p" udp "$p"
 done
+group_close
 
-# --- VPN & tunnel services ---------------------------------------------
-header "VPN & tunnel services"
+# --- VPN & tunnel services --------------------------------------------------
+group_open "VPN & tunnel services"
 row "OpenVPN TCP (1194)"  openvpn-server@tcp tcp 1194
 row "OpenVPN UDP (2200)"  openvpn-server@udp udp 2200
 row "WireGuard (51820)"   wg-quick@wg0   udp 51820
@@ -111,19 +138,20 @@ row "Hysteria 2 (4433)"   hysteria       udp 4433
 row "ZivPN UDP VPN (5667)" zivpn         udp 5667
 row "SlowDNS / DNSTT (53)" dnstt         udp 53
 row "Dropbear SSH (109, 2222)" dropbear  tcp 2222
+group_close
 
-# --- Web / proxy layer --------------------------------------------------
-header "Proxy & web services"
+# --- Web / proxy layer ------------------------------------------------------
+group_open "Proxy & web services"
 row "HAProxy TLS front (443)" haproxy tcp 443
 row "Nginx TLS terminator"    nginx   tcp 443
 row "Nginx plain HTTP (80)"   nginx   tcp 80
 row "Squid CONNECT proxy (8080, 3128)" squid tcp 8080
 row "wstunnel SSH-over-WS"    wstunnel tcp 18080
-row "fail2ban (dropbear jail)" fail2ban ""
+row "fail2ban (dropbear jail)" fail2ban "" ""
+group_close
 
-# --- Maintenance timers -------------------------------------------------
-header "Maintenance timers"
-row "mubx weekly cron"     mubx-cron.timer ""
-row "mubx adaptive probe"  mubx-adaptive.timer ""
-
-printf '\n'
+# --- Maintenance timers -----------------------------------------------------
+group_open "Maintenance timers"
+row "mubx weekly cron"     mubx-cron.timer "" ""
+row "mubx adaptive probe"  mubx-adaptive.timer "" ""
+group_close

@@ -33,9 +33,7 @@ HY2_PASS="${HY2_PASS:?Missing Hysteria password; rerun the installer}"
 [ -n "${UUID:-}" ] || { echo "[!] Missing UUID; rerun the installer." >&2; exit 1; }
 
 # --- presentation helpers -------------------------------------------------
-kvrow() { # label/value row inside the summary box
-  mubx_put "$(printf '  %s%-12s%s %s%s%s' "$C_DIM" "$1:" "$C_RESET" "$C_CYAN" "$2" "$C_RESET")"
-}
+# (mubx_box_line / mubx_put / mubx_card / mubx_kvrow live in common.sh)
 # One protocol card: unit (or space separated units, all must be active),
 # title, meta text; status dot + word flush right.
 card() {
@@ -64,10 +62,10 @@ mubx_clear
 mubx_box_line '┌' '┐'
 mubx_put "$(printf '  %sMUB-X%s · %sclient links%s' "$C_BOLD" "$C_RESET" "$C_CYAN" "$C_RESET")"
 mubx_box_line '├' '┤'
-kvrow "Gateway"    "$DOMAIN"
-kvrow "Public IPv4" "$MYIP"
-kvrow "Bug host"   "$BUG"
-kvrow "Identity"   "$USER_NAME"
+mubx_kvrow "Gateway"    "$DOMAIN"
+mubx_kvrow "Public IPv4" "$MYIP"
+mubx_kvrow "Bug host"   "$BUG"
+mubx_kvrow "Identity"   "$USER_NAME"
 mubx_box_line '└' '┘'
 
 # A bug host that does not resolve (or resolves elsewhere) silently breaks
