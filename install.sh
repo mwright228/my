@@ -45,6 +45,16 @@ load_secrets() {
     [ -n "${!key:-}" ] || die "Missing $key in /etc/telecom-engine.env."
   done
 }
+# Canonicalize a git remote URL for comparison: strip the scheme, any embedded
+# credentials (token@ / user:pass@), and a trailing ".git" or slash, so a
+# legacy credential-embedded origin still matches the clean repository URL.
+canonical_repo_url() {
+  printf '%s\n' "$1" |
+    sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' \
+        -e 's#^[^/@]*@##' \
+        -e 's#\.git$##' \
+        -e 's#/$##'
+}
 
 require_root
 resolver_changed=0
@@ -228,8 +238,16 @@ if [ ! -d "$INSTALL_ROOT/.git" ]; then
 else
   [ -z "$(git -C "$INSTALL_ROOT" status --porcelain)" ] ||
     die "$INSTALL_ROOT has local changes; commit or remove them before upgrading."
-  [ "$(git -C "$INSTALL_ROOT" remote get-url origin)" = "$REPO_URL" ] ||
-    die "$INSTALL_ROOT origin does not match $REPO_URL."
+  origin_url="$(git -C "$INSTALL_ROOT" remote get-url origin)"
+  if [ "$(canonical_repo_url "$origin_url")" = "$(canonical_repo_url "$REPO_URL")" ]; then
+    # Same repository; normalize a legacy credential-embedded origin (e.g. a
+    # token URL left over from when the repository was private).
+    if [ "$origin_url" != "$REPO_URL" ]; then
+      run git -C "$INSTALL_ROOT" remote set-url origin "$REPO_URL"
+    fi
+  else
+    die "$INSTALL_ROOT origin does not match $REPO_URL (fix: git -C $INSTALL_ROOT remote set-url origin $REPO_URL)."
+  fi
   run git -C "$INSTALL_ROOT" pull --ff-only origin main
 fi
 cd "$INSTALL_ROOT"

@@ -13,8 +13,17 @@ esac
   { echo "[!] Refusing to remove a directory without a MUB-X checkout." >&2; exit 1; }
 [ -f /etc/mubx/ownership ] && [ "$(cat /etc/mubx/ownership)" = "MUB-X" ] ||
   { echo "[!] Refusing to remove an unverified MUB-X installation." >&2; exit 1; }
-[ "$(git -C "$INSTALL_ROOT" remote get-url origin 2>/dev/null || true)" = \
-  "${MUBX_REPO_URL:-https://github.com/mwright228/my.git}" ] ||
+# Canonicalize a git remote URL for comparison: strip the scheme, embedded
+# credentials (token@ / user:pass@), and a trailing ".git" or slash.
+canonical_repo_url() {
+  printf '%s\n' "$1" |
+    sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' \
+        -e 's#^[^/@]*@##' \
+        -e 's#\.git$##' \
+        -e 's#/$##'
+}
+[ "$(canonical_repo_url "$(git -C "$INSTALL_ROOT" remote get-url origin 2>/dev/null || true)")" = \
+  "$(canonical_repo_url "${MUBX_REPO_URL:-https://github.com/mwright228/my.git}")" ] ||
   { echo "[!] Refusing to remove an unexpected repository." >&2; exit 1; }
 for svc in nginx haproxy xray dropbear squid \
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0 \

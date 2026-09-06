@@ -15,15 +15,34 @@ set -Eeuo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "[!] Run mubx-update as root." >&2; exit 1; }
 
 REPO_URL="${MUBX_REPO_URL:-https://github.com/mwright228/my.git}"
+# Canonicalize a git remote URL for comparison: strip the scheme, embedded
+# credentials (token@ / user:pass@), and a trailing ".git" or slash.
+canonical_repo_url() {
+  printf '%s\n' "$1" |
+    sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' \
+        -e 's#^[^/@]*@##' \
+        -e 's#\.git$##' \
+        -e 's#/$##'
+}
 ROOT="$(cat /etc/mubx/install-root 2>/dev/null || true)"
 [ -n "$ROOT" ] && [ -d "$ROOT/.git" ] || {
   echo "[!] MUB-X install root not found ($ROOT); run install.sh first." >&2
   exit 1
 }
-[ "$(git -C "$ROOT" remote get-url origin 2>/dev/null || true)" = "$REPO_URL" ] || {
+origin_url="$(git -C "$ROOT" remote get-url origin 2>/dev/null || true)"
+if [ "$(canonical_repo_url "$origin_url")" = "$(canonical_repo_url "$REPO_URL")" ]; then
+  # Same repository; normalize a legacy credential-embedded origin (e.g. a
+  # token URL left over from when the repository was private) so pulls no
+  # longer depend on that credential staying valid.
+  if [ "$origin_url" != "$REPO_URL" ]; then
+    echo "[*] Normalizing $ROOT origin to $REPO_URL"
+    git -C "$ROOT" remote set-url origin "$REPO_URL"
+  fi
+else
   echo "[!] $ROOT origin does not match $REPO_URL; refusing to self-update." >&2
+  echo "    Fix with: git -C $ROOT remote set-url origin $REPO_URL" >&2
   exit 1
-}
+fi
 [ -z "$(git -C "$ROOT" status --porcelain)" ] || {
   echo "[!] $ROOT has local changes; commit or remove them before updating." >&2
   exit 1
