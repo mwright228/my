@@ -4,3 +4,4 @@ Description=MUB-X maintenance
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/mubx-cron
+NoNewPrivileges=true

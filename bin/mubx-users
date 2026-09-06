@@ -113,7 +113,7 @@ cmd_list() {
 }
 
 cmd_add() { # $1 name  $2 days (optional)
-  local name="$1" days="${2:-}" backup uuid expiry added
+  local name="$1" days="${2:-}" backup new uuid expiry added
   store_require
   name_ok "$name" || { echo "[!] Bad username (lowercase, 3-32 chars, [a-z0-9_-])" >&2; return 1; }
   user_exists "$name" && { echo "[!] User '$name' already exists." >&2; return 1; }
@@ -125,13 +125,15 @@ cmd_add() { # $1 name  $2 days (optional)
     expiry="$(date -d "+${days} days" '+%Y-%m-%d')"
   fi
   backup="$(mktemp)"
+  new="$(mktemp)"
   store_write_backup "$backup"
   jq --arg n "$name" --arg u "$uuid" --arg a "$added" --arg e "$expiry" \
-    '. += [{name: $n, uuid: $u, added: $a, expiry: $e}]' "$STORE" > "$STORE.new"
-  mv -f "$STORE.new" "$STORE"
-  chmod 0600 "$STORE"
+    '. += [{name: $n, uuid: $u, added: $a, expiry: $e}]' "$STORE" > "$new"
+  install -m 0600 "$new" "$STORE"
+  rm -f "$new"
   if ! reload_xray; then
-    mv -f "$backup" "$STORE"
+    install -m 0600 "$backup" "$STORE"
+    rm -f "$backup"
     return 1
   fi
   rm -f "$backup"
@@ -139,7 +141,7 @@ cmd_add() { # $1 name  $2 days (optional)
 }
 
 cmd_remove() { # $1 name
-  local name="$1" backup
+  local name="$1" backup new
   store_require
   if ! user_exists "$name"; then
     # Idempotent: accounts created before the user store had no identity.
@@ -151,12 +153,14 @@ cmd_remove() { # $1 name
     return 1
   }
   backup="$(mktemp)"
+  new="$(mktemp)"
   store_write_backup "$backup"
-  jq --arg n "$name" 'del(.[] | select(.name == $n))' "$STORE" > "$STORE.new"
-  mv -f "$STORE.new" "$STORE"
-  chmod 0600 "$STORE"
+  jq --arg n "$name" 'del(.[] | select(.name == $n))' "$STORE" > "$new"
+  install -m 0600 "$new" "$STORE"
+  rm -f "$new"
   if ! reload_xray; then
-    mv -f "$backup" "$STORE"
+    install -m 0600 "$backup" "$STORE"
+    rm -f "$backup"
     return 1
   fi
   rm -f "$backup"

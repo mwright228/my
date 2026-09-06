@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+[ "$(id -u)" -eq 0 ] || { echo "[!] Run add-user as root." >&2; exit 1; }
 if [ -r /usr/local/lib/mubx/common.sh ]; then
   source /usr/local/lib/mubx/common.sh
   DOMAIN=

@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-
+[ "$(id -u)" -eq 0 ] || { echo "[!] Run delete-user as root." >&2; exit 1; }
 read -r -p "Username to delete: " username
 [[ "$username" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] ||
   { echo "Bad username" >&2; exit 1; }
