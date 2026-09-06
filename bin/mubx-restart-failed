@@ -3,7 +3,7 @@
 # running but is not, then report what came back and what still fails (with
 # the last journal line so the remaining failures are diagnosable).
 #
-# Menu option 13. The weekly mubx-cron timer runs the same revive loop; this
+# Menu option 12. The weekly mubx-cron timer runs the same revive loop; this
 # is the immediate, operator-facing version with per-service output.
 set -Eeuo pipefail
 

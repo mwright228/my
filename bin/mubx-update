@@ -9,7 +9,7 @@
 # restart rolls the touched files and service states back from a timestamped
 # backup under /etc/mubx/update-backups.
 #
-# Menu option 14, or run it directly:  mubx-update
+# Menu option 13, or run it directly:  mubx-update
 set -Eeuo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "[!] Run mubx-update as root." >&2; exit 1; }

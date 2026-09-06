@@ -136,8 +136,8 @@ group_close
 
 # --- Web / proxy layer ------------------------------------------------------
 group_open "Proxy & web services"
-row "HAProxy TLS front (443)" haproxy tcp 443
-row "Nginx TLS terminator"    nginx   tcp 443
+row "HAProxy 443 split (TLS/SS)" haproxy tcp 443
+row "Nginx TLS terminator"    nginx   tcp 20443
 row "Nginx plain HTTP (80)"   nginx   tcp 80
 row "Squid CONNECT proxy (8080, 3128)" squid tcp 8080
 row "wstunnel SSH-over-WS"    wstunnel tcp 18080
