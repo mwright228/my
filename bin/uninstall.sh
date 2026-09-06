@@ -90,7 +90,7 @@ done
 for path in /etc/openvpn/client/mubx-client.key /etc/openvpn/client/mubx-client.crt \
   /etc/openvpn/client/mubx-client.csr /etc/openvpn/client/mubx-client-tcp.ovpn \
   /etc/openvpn/client/mubx-client-udp.ovpn /etc/openvpn/client/client.ext \
-  /etc/openvpn/server/tcp.conf /etc/openvpn/server/udp.conf \
+  /etc/openvpn/server/tcp.conf /etc/openvpn/server/udp.conf /etc/openvpn/server/tc.key \
   /etc/openvpn/certs/ca.crt /etc/openvpn/certs/ca.key /etc/openvpn/certs/ca.srl \
   /etc/openvpn/certs/server.ext \
   /etc/openvpn/certs/dh.pem /etc/openvpn/certs/server.crt /etc/openvpn/certs/server.csr \

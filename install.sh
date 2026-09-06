@@ -263,7 +263,7 @@ backup_file /etc/telecom-engine.env
 backup_file /etc/sysctl.d/99-mubx-forwarding.conf
 backup_file /etc/sysctl.d/99-mubx-network.conf
 for path in /etc/hysteria/config.yaml /etc/zivpn/config.json \
-  /etc/openvpn/server/tcp.conf \
+  /etc/openvpn/server/tcp.conf /etc/openvpn/server/tc.key \
   /etc/openvpn/server/udp.conf /etc/openvpn/certs/server.ext \
   /etc/openvpn/client/client.ext /etc/openvpn/certs/ca.crt \
   /etc/openvpn/certs/ca.key /etc/openvpn/certs/ca.srl \
@@ -409,6 +409,10 @@ EOF
     -in /etc/openvpn/certs/server.csr -out /etc/openvpn/certs/server.crt \
     -extfile /etc/openvpn/certs/server.ext
 fi
+if [ ! -s /etc/openvpn/server/tc.key ]; then
+  run openvpn --genkey secret /etc/openvpn/server/tc.key
+  chmod 0600 /etc/openvpn/server/tc.key
+fi
 install -m 0644 configs/openvpn-tcp.conf /etc/openvpn/server/tcp.conf
 install -m 0644 configs/openvpn-udp.conf /etc/openvpn/server/udp.conf
 install -d -m 0700 /etc/openvpn/client
@@ -454,6 +458,8 @@ nobind
 persist-key
 persist-tun
 remote-cert-tls server
+cipher AES-256-GCM
+data-ciphers AES-256-GCM:CHACHA20-POLY1305
 <ca>
 $(cat /etc/openvpn/certs/ca.crt)
 </ca>
@@ -463,6 +469,9 @@ $(cat /etc/openvpn/client/mubx-client.crt)
 <key>
 $(cat /etc/openvpn/client/mubx-client.key)
 </key>
+<tls-crypt>
+$(cat /etc/openvpn/server/tc.key)
+</tls-crypt>
 EOF
 cp /etc/openvpn/client/mubx-client-tcp.ovpn /etc/openvpn/client/mubx-client-udp.ovpn
 sed -i "s/proto tcp-client/proto udp/; s/remote $DOMAIN 1194/remote $DOMAIN 2200/" \

@@ -111,3 +111,18 @@ for service in haproxy nginx xray hysteria dropbear squid wg-quick@wg0; do
   fi
 done
 mubx_group_close
+
+# --- Firewall & packet filters -----------------------------------------------
+mubx_group_open "Firewall status"
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi "status: active"; then
+  mubx_card "  UFW firewall" "$(mubx_dot "$C_YELLOW" '●' 'active')"
+  mubx_hint "UFW is active: ensure ports 443, 80, 2222, 5667, 8443, 8388 are allowed"
+else
+  mubx_card "  UFW firewall" "$(mubx_dot "$C_GREEN" '○' 'inactive')"
+fi
+if iptables -t nat -L PREROUTING -n 2>/dev/null | grep -q "5667"; then
+  mubx_card "  ZivPN UDP DNAT" "$(mubx_dot "$C_GREEN" '●' 'active')"
+else
+  mubx_card "  ZivPN UDP DNAT" "$(mubx_dot "$C_DIM" '○' 'off')"
+fi
+mubx_group_close

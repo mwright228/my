@@ -7,6 +7,10 @@ ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 0.0.0.0:%I --max-clients 100
 Restart=always
 RestartSec=2s
 LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target

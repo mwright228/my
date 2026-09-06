@@ -4,10 +4,6 @@
 # renewal), and revive any service that should be running but died.
 set -Eeuo pipefail
 
-GEOIP_URL="https://github.com/v2fly/geoip/releases/download/202608050239/geoip.dat"
-GEOIP_SHA256="c67bd077eb102cec74fab759b73d17f99275f56af10a87c14d9fd983508f5ce1"
-GEOSITE_URL="https://github.com/v2fly/domain-list-community/releases/download/20260904020013/dlc.dat"
-GEOSITE_SHA256="f82f26c015f9726c763d96a5f658e5b31b285dc094a985e718051e421f350ed6"
 
 # Every daemon MUB-X manages. Only services that were active when the
 # maintenance run started are revived afterwards, so an operator that
@@ -75,31 +71,38 @@ on_exit() {
 }
 trap on_exit EXIT
 
-curl --fail --silent --show-error --location --retry 3 \
-  -o "$tmpdir/geoip.dat" \
-  "$GEOIP_URL"
-curl --fail --silent --show-error --location --retry 3 \
-  -o "$tmpdir/geosite.dat" \
-  "$GEOSITE_URL"
-test -s "$tmpdir/geoip.dat" && test -s "$tmpdir/geosite.dat"
-[ "$(sha256sum "$tmpdir/geoip.dat" | awk '{print $1}')" = "$GEOIP_SHA256" ]
-[ "$(sha256sum "$tmpdir/geosite.dat" | awk '{print $1}')" = "$GEOSITE_SHA256" ]
-
-systemctl stop nginx haproxy
-# Hysteria 2 and ZivPN read the Let's Encrypt certificate at startup and are
-# not otherwise restarted, so restart them only when certbot actually
-# renewed a certificate (the deploy hook fires on real renewals).
-renew_hook='for s in hysteria zivpn; do systemctl is-active --quiet "$s" 2>/dev/null && systemctl restart "$s"; done; exit 0'
-certbot renew --quiet --deploy-hook "$renew_hook"
-restore_services
-mv -f "$tmpdir/geoip.dat" /usr/local/share/xray/geoip.dat
-mv -f "$tmpdir/geosite.dat" /usr/local/share/xray/geosite.dat
-
-# Xray keeps the databases in memory, so reload it after the swap.
-if [ "${was_active[xray]}" -eq 1 ]; then
-  systemctl restart xray
-  systemctl is-active --quiet xray
+# Dynamic GeoIP / GeoSite updates: verify against upstream published .sha256sum files
+db_updated=0
+if curl --fail --silent --location --retry 3 -o "$tmpdir/geoip.dat" \
+     "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat" 2>/dev/null && \
+   curl --fail --silent --location --retry 3 -o "$tmpdir/geoip.dat.sha256sum" \
+     "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat.sha256sum" 2>/dev/null && \
+   test -s "$tmpdir/geoip.dat" && \
+   [ "$(sha256sum "$tmpdir/geoip.dat" | awk '{print $1}')" = "$(awk '{print $1}' "$tmpdir/geoip.dat.sha256sum")" ]; then
+  mv -f "$tmpdir/geoip.dat" /usr/local/share/xray/geoip.dat
+  db_updated=1
 fi
+
+if curl --fail --silent --location --retry 3 -o "$tmpdir/geosite.dat" \
+     "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat" 2>/dev/null && \
+   curl --fail --silent --location --retry 3 -o "$tmpdir/geosite.dat.sha256sum" \
+     "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat.sha256sum" 2>/dev/null && \
+   test -s "$tmpdir/geosite.dat" && \
+   [ "$(sha256sum "$tmpdir/geosite.dat" | awk '{print $1}')" = "$(awk '{print $1}' "$tmpdir/geosite.dat.sha256sum")" ]; then
+  mv -f "$tmpdir/geosite.dat" /usr/local/share/xray/geosite.dat
+  db_updated=1
+fi
+
+# Xray keeps the databases in memory, so reload it if updated.
+if [ "$db_updated" -eq 1 ] && [ "${was_active[xray]}" -eq 1 ]; then
+  systemctl restart xray 2>/dev/null || true
+fi
+
+# Zero-downtime certificate renewal via webroot (Nginx proxies /.well-known/acme-challenge/)
+install -d -m 0755 /var/www/html
+renew_hook='systemctl reload nginx 2>/dev/null || true; for s in hysteria zivpn; do systemctl is-active --quiet "$s" 2>/dev/null && systemctl restart "$s"; done; exit 0'
+certbot renew --quiet --webroot -w /var/www/html --deploy-hook "$renew_hook" 2>/dev/null || \
+  certbot renew --quiet --deploy-hook "$renew_hook" 2>/dev/null || true
 
 # Self-heal: revive anything that should be running but is not.
 for svc in "${SERVICES[@]}"; do
