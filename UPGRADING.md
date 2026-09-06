@@ -163,3 +163,10 @@ The URLs are HTTPS-only; the token in the path is the only credential.
 - **SS-2022** keys are minted per user the first time `mubx-sub` runs; the
   matching inbounds appear on the next Xray re-render (menu 13, or any
   user add/remove).
+- **ShadowTLS v3** ships as a new optional daemon (`singbox.service`, pinned
+  sing-box binary). After an update, run `menu 13` once: the installer and
+  `mubx-update` both stage the binary and render `/etc/sing-box/config.json`
+  from `SHADOWTLS_PASS` (added to the env file automatically by
+  `generate-secrets`) and the admin SS-2022 key. Verify with
+  `systemctl status singbox` and `ss -ltnp | grep 8448`. Client configs are
+  in the subscription files (`MUBX-ShadowTLS` node).

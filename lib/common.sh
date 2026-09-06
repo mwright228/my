@@ -29,7 +29,7 @@ load_mubx_env() {
   [ -r "$env_file" ] || die "Missing MUB-X environment file: $env_file"
   while IFS='=' read -r key value; do
     case "$key" in
-      DOMAIN|UUID|HY2_PASS|ZIVPN_PASS|SSH_WS_PATH)
+      DOMAIN|UUID|HY2_PASS|ZIVPN_PASS|SSH_WS_PATH|SHADOWTLS_PASS|SHADOWTLS_SNI)
         value="${value#\"}"
         value="${value%\"}"
         [[ "$value" != *$'\n'* ]] || die "Invalid newline in $key"

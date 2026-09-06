@@ -116,6 +116,14 @@ only credential.
   `127.0.0.1:11006+` are rendered whenever keys exist in
   `/etc/mubx/ss2022-keys/` (created automatically by `mubx-sub`); the
   `MUBX-SS22-<user>` link then appears in subscriptions and `link-gen`.
+- **ShadowTLS v3 (via sing-box):** the strongest anti-DPI route — clients
+  complete a real TLS handshake with a decoy SNI (default `www.microsoft.com`,
+  override at install with `MUBX_SHADOWTLS_SNI=`) before negotiating the
+  admin identity's SS-2022 session underneath, all on TCP 8448. Xray cannot
+  speak ShadowTLS, so MUB-X ships a pinned, checksum-verified sing-box
+  (`/usr/local/bin/sing-box`, unit `singbox.service`). Needs NekoBox,
+  sing-box or Shadowrocket-style clients; the full client config ships in
+  the `clash.yaml` / `singbox.json` subscriptions as `MUBX-ShadowTLS`.
 
 For mobile-network troubleshooting, run:
 

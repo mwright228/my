@@ -223,6 +223,25 @@ mubx_ss_443_apply() { # $1 rendered config file  $2 ss-443 inbound template
   mv -f "$cfg.mubx" "$cfg"
 }
 
+# Render /etc/sing-box/config.json: ShadowTLS v3 on public 8448 whose
+# "detour" carries a bare SS-2022 inbound (the admin/primary identity's
+# 32-byte key from lib/subscribe.sh). Clients speak TLS to a decoy SNI and
+# only then negotiate SS-2022 - the strongest anti-DPI pairing MUB-X ships.
+# Skipped when lib/subscribe.sh is unavailable (CI renders without keys).
+mubx_singbox_render() { # $1 template  $2 out
+  local tpl="$1" out="$2" ss22_pass
+  declare -F mubx_ss2022_psk >/dev/null 2>&1 || return 0
+  ss22_pass="$(mubx_ss2022_psk admin)"
+  [ -n "$ss22_pass" ] || return 0
+  [ -n "${SHADOWTLS_PASS:-}" ] || {
+    echo "[!] SHADOWTLS_PASS is not loaded; cannot render the sing-box config." >&2
+    return 1
+  }
+  sed -e "s|__SHADOWTLS_PASS__|$SHADOWTLS_PASS|g" \
+      -e "s|__SNI_FRONT__|${SHADOWTLS_SNI:-www.microsoft.com}|g" \
+      -e "s|__SS22_ADMIN_PASS__|$ss22_pass|g" "$tpl" > "$out"
+}
+
 # Render /etc/nginx/nginx.conf from the template: expand the shared
 # #MUBX_SS_LOCATIONS# marker (one /ss-<user> location block per user) in
 # both the port-80 and the loopback-TLS server, and substitute the domain

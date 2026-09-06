@@ -68,7 +68,7 @@ mubx_group_close
 
 # --- TCP reachability (connect to TARGET) -----------------------------------
 mubx_group_open "TCP reachability (connect to $TARGET)"
-for spec in "443 TLS+SS split|443" "nginx HTTP|80" "dropbear SSH|2222" "dropbear SSH alt|109" "dropbear SSH 53|53" "openvpn TCP|1194" "vless TLS|8443" "shadowsocks TCP|8388"; do
+for spec in "443 TLS+SS split|443" "nginx HTTP|80" "dropbear SSH|2222" "dropbear SSH alt|109" "dropbear SSH 53|53" "openvpn TCP|1194" "vless TLS|8443" "shadowsocks TCP|8388" "shadowtls v3|8448"; do
   name="${spec%%|*}"; port="${spec##*|}"
   if timeout 4 bash -c 'exec 3<>"/dev/tcp/$1/$2" && exec 3>&-' _ "$TARGET" "$port" 2>/dev/null; then
     mubx_card "  $name" "$(printf '%s%s:%s open%s' "$C_GREEN" "$TARGET" "$port" "$C_RESET")"
@@ -116,7 +116,7 @@ mubx_group_close
 mubx_group_open "Firewall status"
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi "status: active"; then
   mubx_card "  UFW firewall" "$(mubx_dot "$C_YELLOW" '●' 'active')"
-  mubx_hint "UFW is active: ensure ports 443, 80, 2222, 5667, 8443, 8388 are allowed"
+  mubx_hint "UFW is active: ensure ports 443, 80, 2222, 5667, 8443, 8388, 8448 are allowed"
 else
   mubx_card "  UFW firewall" "$(mubx_dot "$C_GREEN" '○' 'inactive')"
 fi

@@ -6,6 +6,7 @@ INSTALL_ROOT="${MUBX_INSTALL_ROOT:-/root/mub-x}"
 XRAY_VERSION="v26.3.27"
 HYSTERIA_VERSION="v2.12.2"
 WSTUNNEL_VERSION="v10.7.1"
+SINGBOX_VERSION="1.14.0"
 
 die() { printf '[!] %s\n' "$*" >&2; exit 1; }
 require_root() { [ "$(id -u)" -eq 0 ] || die "Run this installer as root."; }
@@ -262,7 +263,7 @@ cd "$INSTALL_ROOT"
 for service in apache2 nginx haproxy xray \
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0 \
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 badvpn@7500 badvpn@7600 badvpn@7700 \
-  zivpn hysteria wstunnel mubx-cron.timer mubx-adaptive.timer; do
+  zivpn hysteria wstunnel singbox mubx-cron.timer mubx-adaptive.timer; do
   systemctl is-active --quiet "$service" && services_was_active["$service"]=1 ||
     services_was_active["$service"]=0
   systemctl is-enabled --quiet "$service" && services_was_enabled["$service"]=1 ||
@@ -290,7 +291,7 @@ backup_file /etc/nginx/nginx.conf
 backup_file /etc/telecom-engine.env
 backup_file /etc/sysctl.d/99-mubx-forwarding.conf
 backup_file /etc/sysctl.d/99-mubx-network.conf
-for path in /etc/hysteria/config.yaml /etc/zivpn/config.json \
+for path in /etc/hysteria/config.yaml /etc/zivpn/config.json /etc/sing-box/config.json \
   /etc/openvpn/server/tcp.conf /etc/openvpn/server/tc.key \
   /etc/openvpn/server/udp.conf /etc/openvpn/certs/server.ext \
   /etc/openvpn/client/client.ext /etc/openvpn/certs/ca.crt \
@@ -384,6 +385,17 @@ download_verified \
   "$WSTUNNEL_SHA256" "$download_root/wstunnel.tar.gz"
 tar -xzf "$download_root/wstunnel.tar.gz" -C "$download_root"
 stage_bin "$download_root/wstunnel" /usr/local/bin/wstunnel
+# sing-box powers the ShadowTLS v3 route (Xray has no ShadowTLS support).
+case "$(dpkg --print-architecture)" in
+  amd64) SINGBOX_ASSET="sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz"; SINGBOX_SHA256="2375de6999f4f56ab46b4fc5ddf26a6aba1d3e61a0f4e7ddec2f4690457d5f63" ;;
+  arm64) SINGBOX_ASSET="sing-box-${SINGBOX_VERSION}-linux-arm64.tar.gz"; SINGBOX_SHA256="04d9b40bc98dc55b6f509ce3292145c65478f65866bea64826ebb2f382385088" ;;
+  armhf) SINGBOX_ASSET="sing-box-${SINGBOX_VERSION}-linux-armv7.tar.gz"; SINGBOX_SHA256="1a8a205e9429c6317f30c5ec112d13345966a91348ae942c9c1645d4b6140063" ;;
+esac
+download_verified \
+  "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/${SINGBOX_ASSET}" \
+  "$SINGBOX_SHA256" "$download_root/singbox.tar.gz"
+tar -xzf "$download_root/singbox.tar.gz" -C "$download_root"
+stage_bin "$download_root/sing-box-${SINGBOX_VERSION}-linux-$(case "$(dpkg --print-architecture)" in amd64) echo amd64 ;; arm64) echo arm64 ;; armhf) echo armv7 ;; esac)/sing-box" /usr/local/bin/sing-box
 
 run certbot certonly --standalone --keep-until-expiring --non-interactive --agree-tos \
   --register-unsafely-without-email -d "$DOMAIN"
@@ -557,6 +569,10 @@ printf '%s\n' "$WAN_IF" > /etc/mubx/wan-interface
 run /usr/local/bin/generate-secrets
 sed -i "s/^DOMAIN=.*/DOMAIN=\"$DOMAIN\"/; s|__DOMAIN__|$DOMAIN|g" /etc/telecom-engine.env
 load_secrets
+# ShadowTLS handshake decoy: any TCP:443 TLS site the carrier allows. The
+# server connects out to it during every ShadowTLS handshake, so pick a
+# reliable anycast front (override with MUBX_SHADOWTLS_SNI at install time).
+SHADOWTLS_SNI="${MUBX_SHADOWTLS_SNI:-www.microsoft.com}"
 sed -i "s|__SSH_WS_PATH__|$SSH_WS_PATH|g" /etc/systemd/system/wstunnel.service
 sed -i "s|__DOMAIN__|$DOMAIN|g; s|__HY2_PASS__|$HY2_PASS|g" /etc/hysteria/config.yaml
 # Generate the Xray config (per-user client identities plus the per-user
@@ -565,6 +581,10 @@ sed -i "s|__DOMAIN__|$DOMAIN|g; s|__HY2_PASS__|$HY2_PASS|g" /etc/hysteria/config
 source ./lib/render.sh
 source ./lib/subscribe.sh
 mubx_users_seed
+mubx_ensure_ss2022_keys
+install -d -m 0755 /etc/sing-box
+mubx_singbox_render configs/singbox.json /etc/sing-box/config.json ||
+  die "Failed to render the sing-box (ShadowTLS) config."
 mubx_xray_render configs/xray.json /usr/local/etc/xray/config.json
 mubx_haproxy_render configs/haproxy.cfg /etc/haproxy/haproxy.cfg
 # Nginx gets the same renderer treatment: /ss-<user> Shadowsocks routes are
@@ -707,6 +727,11 @@ fi
 run systemctl enable hysteria
 run systemctl restart hysteria
 systemctl is-active --quiet hysteria || die "hysteria failed to start; inspect journalctl -u hysteria."
+if command -v sing-box >/dev/null 2>&1 && [ -s /etc/sing-box/config.json ]; then
+  run systemctl enable singbox
+  run systemctl restart singbox
+  systemctl is-active --quiet singbox || die "singbox failed to start; inspect journalctl -u singbox."
+fi
 run systemctl enable --now mubx-cron.timer
 run /usr/local/bin/mubx-tune
 run systemctl daemon-reload

@@ -371,6 +371,61 @@ PY
 fi
 rm -rf "$tmp3"
 
+say "sing-box (ShadowTLS) render smoke test"
+tmp4="$(mktemp -d)"
+if command -v jq >/dev/null 2>&1; then
+  (
+    export DOMAIN="example.com" \
+      SSH_WS_PATH="/ssh-ci-9f2a" \
+      HY2_PASS="hy2secret" \
+      MUBX_USERS_FILE="$tmp4/users.json" \
+      MUBX_SS2022_DIR="$tmp4/ss2022" \
+      MUBX_SUB_DIR="$tmp4/sub" \
+      MUBX_SUB_TOKEN_DIR="$tmp4/tokens" \
+      SHADOWTLS_PASS="stlssecret" \
+      SHADOWTLS_SNI="www.microsoft.com" \
+      UUID="11111111-2222-3333-4444-555555555555"
+    printf '[{"name":"admin","uuid":"11111111-2222-3333-4444-555555555555","added":"2026-01-01","expiry":""}]\n' > "$tmp4/users.json"
+    source lib/render.sh
+    source lib/subscribe.sh
+    mubx_ensure_ss2022_keys
+    mubx_singbox_render configs/singbox.json "$tmp4/singbox.json"
+    mubx_sub_generate admin > "$tmp4/url"
+  ) || { echo "singbox render/sub generate failed"; fail=1; }
+  if [ -f "$tmp4/singbox.json" ]; then
+    python3 - "$tmp4/singbox.json" <<'PY' || fail=1
+import json, sys, base64
+cfg = json.load(open(sys.argv[1]))
+stls = [i for i in cfg["inbounds"] if i["type"] == "shadowtls"]
+assert len(stls) == 1, "expected 1 shadowtls inbound"
+st = stls[0]
+assert st["listen_port"] == 8448, st["listen_port"]
+assert st["version"] == 3, st["version"]
+# sing-box v1.10+ carries the ShadowTLS password in users[]; older
+# releases used a top-level "password" field. Accept both layouts.
+stls_pass = st["users"][0]["password"] if "users" in st else st["password"]
+assert stls_pass == "stlssecret", "stls password not substituted"
+assert st["handshake"]["server"] == "www.microsoft.com", st["handshake"]
+assert st["handshake"]["server_port"] == 443
+assert st["detour"] == "ss22-in"
+ss = [i for i in cfg["inbounds"] if i["type"] == "shadowsocks"][0]
+assert ss["listen"] == "127.0.0.1" and ss["listen_port"] == 18500
+assert ss["method"] == "2022-blake3-aes-256-gcm"
+assert len(base64.b64decode(ss["password"])) == 32, "admin key must be 32 bytes"
+print("  sing-box render OK: shadowtls v3 :8448 -> ss2022 127.0.0.1:18500 (32B admin key)")
+PY
+    # The subscription for admin must contain the ShadowTLS node.
+    tok="$(sed 's|https://example.com/sub/||; s|/index.txt||' "$tmp4/url")"
+    if grep -q 'MUBX-ShadowTLS' "$tmp4/sub/$tok/clash.yaml" 2>/dev/null && \
+       python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); tags=[o["tag"] for o in d["outbounds"]]; assert "MUBX-ShadowTLS" in tags and "MUBX-ShadowTLS-wrap" in tags, tags' "$tmp4/sub/$tok/singbox.json" 2>/dev/null; then
+      echo "  ShadowTLS subscription entries OK (clash + sing-box)"
+    else
+      echo "ShadowTLS subscription entries missing or invalid"; fail=1
+    fi
+  fi
+fi
+rm -rf "$tmp4"
+
 if [ "$fail" -eq 0 ]; then
   say "all checks passed"
 else

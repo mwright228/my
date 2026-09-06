@@ -125,6 +125,13 @@ for svc in "${SERVICES[@]}"; do
   systemctl is-active --quiet "$svc"
 done
 
+# The sing-box ShadowTLS route is optional on pre-upgrade hosts: it is
+# revived only when its unit and config exist.
+if [ -f /etc/systemd/system/singbox.service ] && [ -s /etc/sing-box/config.json ] &&
+  [ "${was_active[singbox]:-0}" -eq 1 ] && ! systemctl is-active --quiet singbox; then
+  systemctl restart singbox
+fi
+
 maintenance_success=1
 rm -rf "$tmpdir"
 trap - EXIT

@@ -209,6 +209,21 @@ if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
     block "ss://${SS22_UI}@${DOMAIN}:443?plugin=v2ray-plugin%3Btls%3Bhost%3D${DOMAIN}%3Bpath%3D%2Fss22-${USER_NAME}%3Bmux%3D0#MUBX-SS22-${USER_NAME}"
     note "2022-blake3-aes-256-gcm needs a current client (v2rayNG 1.8.19+, sing-box, Shadowrocket)"
   fi
+  # ShadowTLS v3 + SS-2022 (server-side via sing-box): the strongest
+  # anti-DPI route. Needs NekoBox / sing-box / Shadowrocket-style clients
+  # with a ShadowTLS transport option.
+  if [ -n "${SHADOWTLS_PASS:-}" ] && systemctl is-active --quiet singbox 2>/dev/null; then
+    STLS_SNI="${SHADOWTLS_SNI:-www.microsoft.com}"
+    STLS_KEY="$(mubx_ss2022_psk admin 2>/dev/null || true)"
+    card singbox "ShadowTLS v3 + SS-2022" "(TCP 8448)"
+    sub "NekoBox / sing-box / Shadowrocket"
+    block "server: ${DOMAIN}  port: 8448"
+    block "transport: ShadowTLS v3  password: ${SHADOWTLS_PASS}"
+    block "SNI (handshake decoy): ${STLS_SNI}"
+    block "inner Shadowsocks: 2022-blake3-aes-256-gcm"
+    block "inner password: ${STLS_KEY}"
+    note "import via the subscription URL (clash.yaml / singbox.json) - full config there"
+  fi
 fi
 [ "$BUG" = "$DOMAIN" ] || \
   printf '  %s[!]%s Custom-SNI SS-TLS still terminates with %s'\''s own certificate: with host %s the client must skip certificate verification / set insecure (v2ray-plugin has no verify-off URI flag), or use the own-domain / plain links above.\n' \

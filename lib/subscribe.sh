@@ -143,6 +143,8 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
   jq -n -c \
     --arg dom "$dom" --arg uuid "$uuid" --arg user "$user" \
     --arg hy2pass "${HY2_PASS:-}" --arg hy2range "$hy2_range" --arg psk "$psk" \
+    --arg stls "${SHADOWTLS_PASS:-}" --arg sni "${SHADOWTLS_SNI:-www.microsoft.com}" \
+    --arg adminkey "$(mubx_ss2022_psk admin)" \
     --argjson ssport "$(( ${SS_PLAIN_BASE_PORT:-8388} + idx ))" \
     --argjson isadmin "$([ "$user" = admin ] && printf 1 || printf 0)" '
     def hy2: {
@@ -191,6 +193,13 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
         }
       }]
     + ss22
+    + (if $stls != "" then [{
+        name: "MUBX-ShadowTLS", type: "ss", server: $dom, port: 8448,
+        cipher: "2022-blake3-aes-256-gcm", password: $adminkey, udp: true,
+        plugin: "shadow-tls", "plugin-opts": {
+          version: 3, password: $stls, host: $sni
+        }
+      }] else [] end)
     + [{
         name: "MUBX-SS-TCP", type: "ss", server: $dom, port: $ssport,
         cipher: "aes-256-gcm", password: $uuid, udp: true
@@ -212,6 +221,8 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
     --arg dom "$dom" --arg uuid "$uuid" --arg user "$user" \
     --arg hy2pass "${HY2_PASS:-}" --arg hy2range "$hy2_range" \
     --arg psk "$psk" \
+    --arg stls "${SHADOWTLS_PASS:-}" --arg sni "${SHADOWTLS_SNI:-www.microsoft.com}" \
+    --arg adminkey "$(mubx_ss2022_psk admin)" \
     --argjson ssport "$(( ${SS_PLAIN_BASE_PORT:-8388} + idx ))" \
     --argjson isadmin "$([ "$user" = admin ] && printf 1 || printf 0)" '
     def hop(h): (if $hy2range != "" then {"server_ports": ["4433", $hy2range]} else {} end);
@@ -248,6 +259,14 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
           {type: "shadowsocks", tag: "MUBX-SS-TCP", server: $dom, server_port: $ssport,
            method: "aes-256-gcm", password: $uuid}
         ]
+        + (if $stls != "" then [{
+            type: "shadowtls", tag: "MUBX-ShadowTLS-wrap", server: $dom, server_port: 8448,
+            version: 3, password: $stls,
+            tls: {enabled: true, server_name: $sni}
+          }, {
+            type: "shadowsocks", tag: "MUBX-ShadowTLS", server: $dom, server_port: 8448,
+            method: "2022-blake3-aes-256-gcm", password: $adminkey, detour: "MUBX-ShadowTLS-wrap"
+          }] else [] end)
         + (if $isadmin == 1 then [{
             type: "shadowsocks", tag: "MUBX-SS-443", server: $dom, server_port: 443,
             method: "aes-256-gcm", password: $uuid

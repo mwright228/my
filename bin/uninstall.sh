@@ -44,6 +44,7 @@ restore_path() {
 for path in /etc/systemd/system/badvpn@.service \
   /etc/systemd/system/wstunnel.service \
   /etc/systemd/system/hysteria.service /etc/systemd/system/zivpn.service \
+  /etc/systemd/system/singbox.service \
   /etc/systemd/system/mubx-cron.service /etc/systemd/system/mubx-cron.timer \
   /etc/systemd/system/mubx-adaptive.service /etc/systemd/system/mubx-adaptive.timer \
   /etc/systemd/system/xray.service; do
