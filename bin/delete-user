@@ -15,7 +15,7 @@ IFS=: read -r _ _ uid _ _ home shell <<< "$entry"
 read -r -p "Type the username to confirm deletion: " confirmation
 [ "$confirmation" = "$username" ] || { echo "Deletion cancelled" >&2; exit 1; }
 
-userdel -r "$username"
+userdel -r "$username" 2>/dev/null || userdel "$username"
 # Drop the matching Xray identity so the user can no longer authenticate
 # on any transport either.
 if [ -x /usr/local/bin/mubx-users ] && [ -f /etc/mubx/users.json ]; then

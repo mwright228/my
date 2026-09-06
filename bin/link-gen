@@ -97,7 +97,7 @@ fi
 # --- 1. Hysteria 2 ---------------------------------------------------------
 card hysteria "Hysteria 2" "(UDP 4433)"
 sub "Import"
-block "hysteria2://${HY2_PASS}@${DOMAIN}:4433/?sni=${DOMAIN}&insecure=1#MUBX-Hysteria2"
+block "hysteria2://${HY2_PASS}@${DOMAIN}:4433/?sni=${DOMAIN}#MUBX-Hysteria2"
 
 # --- 2. ZivPN -------------------------------------------------------------
 if command -v zivpn >/dev/null 2>&1 && [ -n "${ZIVPN_PASS:-}" ]; then

@@ -5,8 +5,8 @@ After=network.target
 [Service]
 User=root
 Type=simple
-ExecStart=/root/udp/udp-custom server -exclude 53,5300,2200,4433,7300,51820
-WorkingDirectory=/root/udp/
+ExecStart=/usr/local/bin/udp-custom server -exclude 53,5300,2200,4433,7300,51820
+WorkingDirectory=/etc/udp-custom/
 Restart=always
 RestartSec=2s
 LimitNOFILE=65535

@@ -31,7 +31,7 @@ listener_up() { # $1 tcp|udp  $2 port
 tcp_latency_ms() { # $1 host  $2 port ; echoes latency in ms, or nothing
   local host="$1" port="$2" start now
   start="$(date +%s%N)"
-  if timeout 5 bash -c ":</dev/tcp/$host/$port" 2>/dev/null; then
+  if timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/$2" && exec 3>&-' _ "$host" "$port" 2>/dev/null; then
     now="$(date +%s%N)"
     echo "$(( (now - start) / 1000000 ))"
   fi

@@ -168,7 +168,7 @@ export DEBIAN_FRONTEND=noninteractive
 run apt-get update
 run apt-get install -y ca-certificates curl certbot dnsutils lsof psmisc git jq \
   uuid-runtime openssl nginx dropbear squid haproxy openvpn wireguard-tools \
-  iptables iptables-persistent qrencode netcat-openbsd fail2ban \
+  iptables iptables-persistent qrencode netcat-openbsd fail2ban python3-systemd \
   build-essential cmake libnspr4-dev libnss3-dev unzip iproute2
 install -d -m 0700 /etc/mubx
 firewall_snapshot_tmp="$(mktemp /etc/mubx/firewall.XXXXXX)"
