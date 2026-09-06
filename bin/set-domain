@@ -40,11 +40,6 @@ restore_files() {
 for svc in hysteria zivpn nginx haproxy xray; do
   systemctl is-active --quiet "$svc" && was_active["$svc"]=1 || was_active["$svc"]=0
 done
-# certbot --standalone needs 80/443 free, so stop the TLS/web services.
-# Xray binds 8388/8443 plus loopback inbounds - never public 80/443 (that
-# is HAProxy's 443 splitter) - so it keeps running; its config is re-pointed
-# at the new certificate below.
-systemctl stop hysteria zivpn nginx haproxy 2>/dev/null || true
 cleanup() {
   local status=$?
   if [ "$success" -eq 0 ]; then
@@ -69,8 +64,23 @@ done
 for profile in /etc/openvpn/client/mubx-client-*.ovpn; do
   [ -f "$profile" ] && backup_file "$profile"
 done
-certbot certonly --standalone --keep-until-expiring -d "$d" \
-  --agree-tos --register-unsafely-without-email --non-interactive
+
+# Prefer zero-downtime webroot renewal if Nginx is active on port 80.
+# Fall back to stopping TLS/web services and using standalone if inactive or failed.
+install -d -m 0755 /var/www/html
+cert_obtained=0
+if [ "${was_active[nginx]}" -eq 1 ]; then
+  if certbot certonly --webroot -w /var/www/html --keep-until-expiring -d "$d" \
+       --agree-tos --register-unsafely-without-email --non-interactive; then
+    cert_obtained=1
+  fi
+fi
+
+if [ "$cert_obtained" -eq 0 ]; then
+  systemctl stop hysteria zivpn nginx haproxy 2>/dev/null || true
+  certbot certonly --standalone --keep-until-expiring -d "$d" \
+    --agree-tos --register-unsafely-without-email --non-interactive
+fi
 
 echo "$d" > /usr/local/etc/xray/domain
 if [ -f /etc/telecom-engine.env ]; then

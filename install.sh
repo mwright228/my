@@ -28,11 +28,14 @@ load_secrets() {
   local key value
   while IFS='=' read -r key value; do
     case "$key" in
-      DOMAIN|UUID|REALITY_PRIVKEY|REALITY_PUBKEY|SHORT_ID|HY2_PASS|ZIVPN_PASS|SSH_WS_PATH|REALITY_FRONTS)
+      DOMAIN|UUID|HY2_PASS|ZIVPN_PASS|SSH_WS_PATH)
         value="${value#\"}"
         value="${value%\"}"
         [[ "$value" != *$'\n'* ]] || die "Invalid secret value for $key."
         printf -v "$key" '%s' "$value"
+        ;;
+      REALITY_PRIVKEY|REALITY_PUBKEY|SHORT_ID|REALITY_FRONTS)
+        # Retired Reality keys from legacy installs: ignore silently
         ;;
       '') ;;
       *) die "Unexpected key in /etc/telecom-engine.env: $key" ;;

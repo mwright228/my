@@ -29,11 +29,14 @@ load_mubx_env() {
   [ -r "$env_file" ] || die "Missing MUB-X environment file: $env_file"
   while IFS='=' read -r key value; do
     case "$key" in
-      DOMAIN|UUID|REALITY_PRIVKEY|REALITY_PUBKEY|SHORT_ID|HY2_PASS|ZIVPN_PASS|SSH_WS_PATH|REALITY_FRONTS)
+      DOMAIN|UUID|HY2_PASS|ZIVPN_PASS|SSH_WS_PATH)
         value="${value#\"}"
         value="${value%\"}"
         [[ "$value" != *$'\n'* ]] || die "Invalid newline in $key"
         printf -v "$key" '%s' "$value"
+        ;;
+      REALITY_PRIVKEY|REALITY_PUBKEY|SHORT_ID|REALITY_FRONTS)
+        # Retired Reality keys from legacy installs: ignore silently
         ;;
       '') ;;
       *) die "Unexpected key in $env_file: $key" ;;
