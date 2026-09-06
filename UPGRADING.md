@@ -135,3 +135,31 @@ Roll back at any time from the pre-run snapshots, e.g.
 `cp -a /etc/mubx/backup/etc/nginx/nginx.conf /etc/nginx/nginx.conf`
 (note the doubled `/etc/mubx/backup<path>` layout) — or simply re-run the
 installer, which snapshots and restores automatically.
+
+## Adopting the subscription server (menu 14)
+
+After any update that ships `mubx-sub`, run it once to mint the per-user
+tokens and publish the files:
+
+```bash
+mubx-sub          # or: menu 14
+```
+
+Each line prints `https://<domain>/sub/<token>/index.txt` — import that URL
+into v2rayNG / NekoBox / Shadowrocket (`clash.yaml` for Clash, `singbox.json`
+for sing-box). Regeneration afterwards is automatic: user add/remove,
+`mubx-update`, `mubx-cron` (weekly) and `set-domain` all refresh the files.
+The URLs are HTTPS-only; the token in the path is the only credential.
+
+## Optional features after an upgrade
+
+- **Hysteria2 port hopping** is set at install time via
+  `MUBX_HY2_HOPPING=START:END`. To add it later, write
+  `/etc/mubx/hy2-hopping.conf` with `HY2_HOPPING_RANGE=<start>:<end>` and add
+  the DNAT rule manually (`iptables -t nat -A PREROUTING -i <wan> -p udp
+  --dport <start>:<end> -j DNAT --to-destination :4433`), then
+  `iptables-save > /etc/iptables/rules.v4` — or re-run the installer with
+  the env var set.
+- **SS-2022** keys are minted per user the first time `mubx-sub` runs; the
+  matching inbounds appear on the next Xray re-render (menu 13, or any
+  user add/remove).

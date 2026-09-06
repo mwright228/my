@@ -75,6 +75,7 @@ draw() {
   opt 11 "Bug-host audit"
   opt 12 "Restart failed services"
   opt 13 "Update MUB-X (git pull + re-render)"
+  opt 14 "Regenerate subscriptions"
   opt 0  "Exit"
   mubx_put ''
   mubx_box_line '└' '┘'
@@ -102,6 +103,7 @@ while true; do
     10) /usr/local/bin/mubx-users ;;
     11) /usr/local/bin/mubx-probe ;;
     12) /usr/local/bin/mubx-restart-failed ;;
+    14) /usr/local/bin/mubx-sub ;;
     13) /usr/local/bin/mubx-update ;;
     0|q|Q) exit 0 ;;
     *) echo "  Invalid choice: $opt"; sleep 1; continue ;;

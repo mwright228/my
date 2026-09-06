@@ -114,6 +114,11 @@ mubx_xray_render() { # $1 base_template  $2 out
   mubx_ss_plain_apply "$out" "$(dirname "$base_tpl")/ss-plain-inbound.json" || return 1
   # Shared Shadowsocks on 443 (HAProxy non-TLS frontend -> this inbound).
   mubx_ss_443_apply "$out" "$(dirname "$base_tpl")/ss-443-inbound.json" || return 1
+  # Per-user Shadowsocks 2022 WS inbounds (opt-in: needs /etc/mubx/ss2022-keys).
+  # shellcheck disable=SC2154  # subscribe.sh may not be sourced in CI renders
+  if declare -F mubx_ss2022_psk >/dev/null 2>&1; then
+    mubx_ss2022_apply "$out" "$(dirname "$base_tpl")/ss-2022-inbound.json" || return 1
+  fi
 }
 
 # Emit one tab-separated row per Shadowsocks user: name, uuid (the SS
@@ -170,6 +175,33 @@ mubx_ss_plain_apply() { # $1 rendered config file  $2 ss plain inbound template
     extra="$(jq -cn --argjson arr "$extra" --argjson o "$obj" '$arr + [$o]')" \
       || return 1
   done < <(mubx_ss_plan "$SS_PLAIN_BASE_PORT")
+  if [ "$extra" != '[]' ]; then
+    jq --argjson add "$extra" '.inbounds += $add' "$cfg" > "$cfg.mubx" || return 1
+    mv -f "$cfg.mubx" "$cfg"
+  fi
+}
+
+# Append one Shadowsocks 2022 WS inbound per store user (loopback port
+# SS_BASE_PORT + 1000 + index) using the modern 2022-blake3-aes-256-gcm
+# cipher. Keys come from mubx_ss2022_psk (lib/subscribe.sh), created once
+# and reused so rendered configs stay stable across re-renders. A missing
+# template or missing keys directory simply skips SS-2022 (older setups and
+# CI renders stay valid).
+mubx_ss2022_apply() { # $1 rendered config file  $2 ss-2022 inbound template
+  local cfg="$1" ss_tpl="$2" extra='[]' obj name uuid port path psk
+  [ -f "$ss_tpl" ] || return 0
+  [ -d "${MUBX_SS2022_DIR:-/etc/mubx/ss2022-keys}" ] || return 0
+  while IFS=$'\t' read -r name uuid port path; do
+    [ -n "$name" ] && [ -n "$uuid" ] || continue
+    psk="$(mubx_ss2022_psk "$name")"
+    [ -n "$psk" ] || continue
+    obj="$(sed -e "s|__SS_NAME__|$name|g" \
+               -e "s|__SS_PORT__|$port|g" \
+               -e "s|__SS_PASS__|$psk|g" \
+               -e "s|__SS_PATH__|$path|g" "$ss_tpl")" || return 1
+    extra="$(jq -cn --argjson arr "$extra" --argjson o "$obj" '$arr + [$o]')" \
+      || return 1
+  done < <(mubx_ss_plan $(( SS_BASE_PORT + 1000 )))
   if [ "$extra" != '[]' ]; then
     jq --argjson add "$extra" '.inbounds += $add' "$cfg" > "$cfg.mubx" || return 1
     mv -f "$cfg.mubx" "$cfg"

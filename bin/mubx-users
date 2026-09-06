@@ -138,6 +138,11 @@ cmd_add() { # $1 name  $2 days (optional)
   fi
   rm -f "$backup"
   printf '  [+] %s added (uuid %s, expires %s)\n' "$name" "$uuid" "${expiry:-never}"
+  # Publish/refresh the user's subscription files if the generator exists.
+  if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
+    source /usr/local/lib/mubx/subscribe.sh
+    mubx_sub_generate "$name" >/dev/null 2>&1 || true
+  fi
 }
 
 cmd_remove() { # $1 name
@@ -165,6 +170,13 @@ cmd_remove() { # $1 name
   fi
   rm -f "$backup"
   printf '  [-] %s removed; its UUID no longer authenticates anywhere.\n' "$name"
+  # Drop the user's subscription files and SS-2022 key (best effort).
+  if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
+    source /usr/local/lib/mubx/subscribe.sh
+    tok="$(cat "$MUBX_SUB_TOKEN_DIR/$name" 2>/dev/null || true)"
+    [ -z "$tok" ] || rm -rf "${MUBX_SUB_DIR:?}/$tok"
+    rm -f "$MUBX_SUB_TOKEN_DIR/$name" "$MUBX_SS2022_DIR/$name"
+  fi
 }
 
 cmd_usage() { # $1 name (optional: all users)

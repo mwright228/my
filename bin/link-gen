@@ -97,7 +97,13 @@ fi
 # --- 1. Hysteria 2 ---------------------------------------------------------
 card hysteria "Hysteria 2" "(UDP 4433)"
 sub "Import"
-block "hysteria2://${HY2_PASS}@${DOMAIN}:4433/?sni=${DOMAIN}#MUBX-Hysteria2"
+HY2_HOP_RANGE="$(sed -n 's/^HY2_HOPPING_RANGE=//p' /etc/mubx/hy2-hopping.conf 2>/dev/null | head -n1)"
+if [ -n "$HY2_HOP_RANGE" ]; then
+  block "hysteria2://${HY2_PASS}@${DOMAIN}:4433/?sni=${DOMAIN}&mport=4433%2C${HY2_HOP_RANGE}#MUBX-Hysteria2"
+  note "  port hopping active: UDP ${HY2_HOP_RANGE} hops onto 4433 (re-key past throttling)"
+else
+  block "hysteria2://${HY2_PASS}@${DOMAIN}:4433/?sni=${DOMAIN}#MUBX-Hysteria2"
+fi
 
 # --- 2. ZivPN -------------------------------------------------------------
 if command -v zivpn >/dev/null 2>&1 && [ -n "${ZIVPN_PASS:-}" ]; then
@@ -193,6 +199,17 @@ fi
 sub "Plain TCP route (port ${SS_PLAIN_PORT}, no TLS)"
 block "ss://${SS_UI}@${DOMAIN}:${SS_PLAIN_PORT}#MUBX-SS-${USER_NAME}-tcp"
 note "plain TCP needs no plugin and no cert toggles - works in v2rayNG / sing-box / Shadowrocket"
+# Shadowsocks 2022 route: shown only when the user has an SS-2022 key.
+if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
+  source /usr/local/lib/mubx/subscribe.sh
+  SS22_PSK="$(mubx_ss2022_psk "$USER_NAME" 2>/dev/null || true)"
+  if [ -n "$SS22_PSK" ]; then
+    SS22_UI="$(printf '2022-blake3-aes-256-gcm:%s' "$SS22_PSK" | base64 -w 0 | tr '+/' '-_' | tr -d '=')"
+    sub "SS 2022 route (port 443, modern cipher)"
+    block "ss://${SS22_UI}@${DOMAIN}:443?plugin=v2ray-plugin%3Btls%3Bhost%3D${DOMAIN}%3Bpath%3D%2Fss22-${USER_NAME}%3Bmux%3D0#MUBX-SS22-${USER_NAME}"
+    note "2022-blake3-aes-256-gcm needs a current client (v2rayNG 1.8.19+, sing-box, Shadowrocket)"
+  fi
+fi
 [ "$BUG" = "$DOMAIN" ] || \
   printf '  %s[!]%s Custom-SNI SS-TLS still terminates with %s'\''s own certificate: with host %s the client must skip certificate verification / set insecure (v2ray-plugin has no verify-off URI flag), or use the own-domain / plain links above.\n' \
     "$C_RED" "$C_RESET" "$DOMAIN" "$BUG"

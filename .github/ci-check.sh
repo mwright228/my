@@ -19,11 +19,11 @@ done
 say "JSON validity (templates and examples)"
 for f in configs/*.json examples/*.json; do
   [ -f "$f" ] || continue
-  # ss-inbound.json, ss-plain-inbound.json and ss-443-inbound.json are
-  # per-item fragments with a numeric placeholder ("port": __SS_PORT__), so
-  # standalone JSON parsing does not apply to them; the render smoke tests
-  # below validate the substituted results instead.
-  case "$(basename "$f")" in ss-inbound.json|ss-plain-inbound.json|ss-443-inbound.json) continue ;; esac
+  # ss-inbound.json, ss-plain-inbound.json, ss-443-inbound.json and
+  # ss-2022-inbound.json are per-item fragments with a numeric placeholder
+  # ("port": __SS_PORT__), so standalone JSON parsing does not apply to
+  # them; the render smoke tests below validate the substituted results.
+  case "$(basename "$f")" in ss-inbound.json|ss-plain-inbound.json|ss-443-inbound.json|ss-2022-inbound.json) continue ;; esac
   if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$f" 2>/dev/null; then
     echo "JSON FAIL: $f"
     fail=1
@@ -287,6 +287,89 @@ PY
 else
   echo "  (jq not installed; skipping the render smoke tests)"
 fi
+
+say "Subscription generator smoke test"
+tmp2="$(mktemp -d)"
+cat > "$tmp2/users.json" <<'JSON'
+[
+  {"name": "admin", "uuid": "11111111-2222-3333-4444-555555555555", "added": "2026-01-01", "expiry": ""},
+  {"name": "alice", "uuid": "22222222-3333-4444-5555-666666666666", "added": "2026-01-01", "expiry": ""}
+]
+JSON
+if command -v jq >/dev/null 2>&1; then
+  (
+    export DOMAIN="example.com" \
+      SSH_WS_PATH="/ssh-ci-9f2a" \
+      HY2_PASS="hy2secret" \
+      MUBX_USERS_FILE="$tmp2/users.json" \
+      MUBX_SUB_DIR="$tmp2/sub" \
+      MUBX_SUB_TOKEN_DIR="$tmp2/tokens" \
+      MUBX_SS2022_DIR="$tmp2/ss2022" \
+      UUID="11111111-2222-3333-4444-555555555555"
+    source lib/render.sh
+    source lib/subscribe.sh
+    mubx_sub_generate alice
+  ) > "$tmp2/url" || { echo "mubx_sub_generate failed"; fail=1; }
+  if [ -s "$tmp2/url" ]; then
+    tok="$(sed 's|https://example.com/sub/||; s|/index.txt||' "$tmp2/url")"
+    for f in links.txt index.txt clash.yaml singbox.json; do
+      [ -s "$tmp2/sub/$tok/$f" ] || { echo "subscription file missing: $f"; fail=1; }
+    done
+    (base64 -d < "$tmp2/sub/$tok/index.txt" 2>/dev/null || base64 -D < "$tmp2/sub/$tok/index.txt" 2>/dev/null) | grep -q 'vless://' || {
+      echo "index.txt is not a base64 link list"; fail=1
+    }
+    python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$tmp2/sub/$tok/singbox.json" || {
+      echo "singbox.json invalid"; fail=1
+    }
+    grep -q 'MUBX-SS22-alice' "$tmp2/sub/$tok/links.txt" || {
+      echo "SS22 link missing from subscription"; fail=1
+    }
+    grep -q 'mport' "$tmp2/sub/$tok/links.txt" && {
+      echo "unexpected mport (port hopping is not configured)"; fail=1
+    }
+    grep -q 'MUBX-SS-443' "$tmp2/sub/$tok/links.txt" && {
+      echo "shared SS-443 link must not appear for non-admin users"; fail=1
+    }
+    echo "  subscription files OK for alice (token path verified)"
+  fi
+  rm -rf "$tmp2"
+else
+  rm -rf "$tmp2"
+  echo "  (jq not installed; skipping)"
+fi
+
+say "SS-2022 inbound render smoke test"
+tmp3="$(mktemp -d)"
+if command -v jq >/dev/null 2>&1; then
+  (
+    export DOMAIN="example.com" \
+      SSH_WS_PATH="/ssh-ci-9f2a" \
+      MUBX_USERS_FILE="$tmp3/users.json" \
+      MUBX_SS2022_DIR="$tmp3/ss2022" \
+      UUID="11111111-2222-3333-4444-555555555555"
+    printf '[{"name":"admin","uuid":"11111111-2222-3333-4444-555555555555","added":"2026-01-01","expiry":""},{"name":"bob","uuid":"33333333-4444-5555-6666-777777777777","added":"2026-01-01","expiry":""}]\n' > "$tmp3/users.json"
+    source lib/render.sh
+    source lib/subscribe.sh
+    mubx_ensure_ss2022_keys
+    mubx_xray_render configs/xray.json "$tmp3/xray.json"
+  ) || { echo "ss2022 render failed"; fail=1; }
+  if [ -f "$tmp3/xray.json" ]; then
+    python3 - "$tmp3/xray.json" <<'PY' || fail=1
+import json, sys, base64
+cfg = json.load(open(sys.argv[1]))
+inb = [i for i in cfg["inbounds"] if i["tag"].startswith("ss2022-")]
+assert len(inb) == 2, "expected 2 ss2022 inbounds, got %d" % len(inb)
+for i in inb:
+    assert i["listen"] == "127.0.0.1", i["listen"]
+    assert 11000 <= i["port"] < 11100, i["port"]
+    assert i["settings"]["method"] == "2022-blake3-aes-256-gcm"
+    assert len(base64.b64decode(i["settings"]["password"])) == 32, "key must be 32 bytes"
+    assert i["streamSettings"]["network"] == "ws"
+print("  ss2022 inbounds OK: 2 users, ws on 11006+, 32-byte keys")
+PY
+  fi
+fi
+rm -rf "$tmp3"
 
 if [ "$fail" -eq 0 ]; then
   say "all checks passed"

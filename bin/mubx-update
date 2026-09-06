@@ -202,6 +202,17 @@ install -m 0644 "$tmp/haproxy.cfg" /etc/haproxy/haproxy.cfg
 install -m 0644 "$tmp/nginx.conf" /etc/nginx/nginx.conf
 rm -rf "$tmp"
 
+# Regenerate the per-user subscription files for the new tree (harmless
+# no-op when the user store is absent).
+if [ -r "$ROOT/lib/subscribe.sh" ] && [ -f /etc/mubx/users.json ]; then
+  source "$ROOT/lib/subscribe.sh"
+  load_mubx_env
+  while IFS= read -r sub_user; do
+    [ -n "$sub_user" ] || continue
+    mubx_sub_generate "$sub_user" >/dev/null 2>&1 || true
+  done < <(jq -r '.[].name' /etc/mubx/users.json)
+fi
+
 down=0
 for svc in "${SERVICES[@]}"; do
   systemctl cat "$svc.service" >/dev/null 2>&1 || continue

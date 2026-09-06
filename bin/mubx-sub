@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# MUB-X subscription server: generate / refresh the per-user subscription
+# files served by nginx under /sub/<token>/.
+#
+# One URL imports every node of a user into v2rayNG / NekoBox / Shadowrocket
+# (base64 link list), Clash / Mihomo / Clash Verge (clash.yaml) or sing-box
+# (singbox.json). Files are static; there is no runtime component.
+#
+# Usage:
+#   mubx-sub                 regenerate every user's subscription (prints URLs)
+#   mubx-sub <user>          regenerate one user's subscription (prints URL)
+set -Eeuo pipefail
+
+[ "$(id -u)" -eq 0 ] || { echo "[!] Run mubx-sub as root." >&2; exit 1; }
+
+source /usr/local/lib/mubx/common.sh
+source /usr/local/lib/mubx/render.sh
+source /usr/local/lib/mubx/subscribe.sh
+load_mubx_env
+
+STORE="$MUBX_USERS_FILE"
+
+# The nginx location block for /sub/ is idempotent and matches the marker
+# block install.sh and mubx-update render into nginx.conf.
+nginx_has_sub_location() {
+  grep -q 'location /sub/' /etc/nginx/nginx.conf 2>/dev/null
+}
+
+case "${1:-}" in
+  '')
+    if [ ! -f "$STORE" ]; then
+      echo "[!] No user store; nothing to publish." >&2
+      exit 1
+    fi
+    echo "[*] Generating subscriptions for every user"
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      url="$(mubx_sub_generate "$name")" &&
+        printf '  %-16s %s\n' "$name" "$url"
+    done < <(jq -r '.[].name' "$STORE")
+    ;;
+  help|-h|--help)
+    echo "Usage: mubx-sub [user]"
+    echo "  Regenerate the per-user subscription files under /sub/<token>/."
+    echo "  With no argument, every user in the store is regenerated."
+    ;;
+  *)
+    if [ ! -f "$STORE" ]; then
+      echo "[!] No user store; nothing to publish." >&2
+      exit 1
+    fi
+    url="$(mubx_sub_generate "$1")" &&
+      printf '  %-16s %s\n' "$1" "$url"
+    ;;
+esac
+
+if ! nginx_has_sub_location; then
+  echo "[!] nginx.conf lacks the /sub/ location - run install.sh or mubx-update" >&2
+  echo "    to re-render, or subscriptions will not be reachable via https." >&2
+  exit 0
+fi

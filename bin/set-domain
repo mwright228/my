@@ -123,6 +123,15 @@ for svc in nginx haproxy hysteria zivpn xray; do
     fi
   fi
 done
+# Subscription URLs embed the domain: regenerate them for the new name.
+if [ -r /usr/local/lib/mubx/subscribe.sh ] && [ -f /etc/mubx/users.json ]; then
+  source /usr/local/lib/mubx/subscribe.sh
+  load_mubx_env
+  while IFS= read -r sub_user; do
+    [ -n "$sub_user" ] || continue
+    mubx_sub_generate "$sub_user" >/dev/null 2>&1 || true
+  done < <(jq -r '.[].name' /etc/mubx/users.json)
+fi
 success=1
 rm -rf -- "$backup_dir"
 trap - EXIT

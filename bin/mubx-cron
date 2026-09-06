@@ -104,6 +104,17 @@ renew_hook='systemctl reload nginx 2>/dev/null || true; for s in hysteria zivpn;
 certbot renew --quiet --webroot -w /var/www/html --deploy-hook "$renew_hook" 2>/dev/null || \
   certbot renew --quiet --deploy-hook "$renew_hook" 2>/dev/null || true
 
+# Refresh the per-user subscription files weekly (keeps links in sync with
+# the store even if an add/remove missed its hook).
+if [ -r /usr/local/lib/mubx/subscribe.sh ] && [ -f /etc/mubx/users.json ]; then
+  source /usr/local/lib/mubx/subscribe.sh
+  load_mubx_env 2>/dev/null || true
+  while IFS= read -r sub_user; do
+    [ -n "$sub_user" ] || continue
+    mubx_sub_generate "$sub_user" >/dev/null 2>&1 || true
+  done < <(jq -r '.[].name' /etc/mubx/users.json)
+fi
+
 # Self-heal: revive anything that should be running but is not.
 for svc in "${SERVICES[@]}"; do
   systemctl cat "$svc.service" >/dev/null 2>&1 || continue
