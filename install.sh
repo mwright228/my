@@ -431,7 +431,9 @@ EOF
     -extfile /etc/openvpn/certs/server.ext
 fi
 if [ ! -s /etc/openvpn/server/tc.key ]; then
-  run openvpn --genkey secret /etc/openvpn/server/tc.key
+  # "--genkey --secret FILE" is the only syntax OpenVPN 2.4 accepts; 2.5+
+  # still understands it (only the reversed "--genkey secret FILE" is new).
+  run openvpn --genkey --secret /etc/openvpn/server/tc.key
   chmod 0600 /etc/openvpn/server/tc.key
 fi
 install -m 0644 configs/openvpn-tcp.conf /etc/openvpn/server/tcp.conf
@@ -480,7 +482,6 @@ persist-key
 persist-tun
 remote-cert-tls server
 cipher AES-256-GCM
-data-ciphers AES-256-GCM:CHACHA20-POLY1305
 <ca>
 $(cat /etc/openvpn/certs/ca.crt)
 </ca>

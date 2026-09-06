@@ -3,6 +3,6 @@ DROPBEAR_PORT=2222
 # TCP 53 gives SSH a DNS-flavoured port: many carrier filters exempt port 53
 # (DNSSEC / TCP-DNS fallback), so an SSH session on 53 can pass where other
 # ports are inspected. TCP 53 is a separate socket from UDP 53 (plain DNS).
-DROPBEAR_EXTRA_ARGS="-p 2222 -p 109 -p 53 -w -s"
+DROPBEAR_EXTRA_ARGS="-p 2222 -p 109 -p 53 -w -g"
 DROPBEAR_BANNER=""
 DROPBEAR_RECEIVE_WINDOW=65536
