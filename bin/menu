@@ -71,11 +71,10 @@ draw() {
   opt 7  "Service status (all protocols)"
   opt 8  "Run network diagnostics"
   opt 9  "Show transport recommendation"
-  opt 10 "Reality SNI fronts"
-  opt 11 "Users & traffic"
-  opt 12 "Bug-host audit"
-  opt 13 "Restart failed services"
-  opt 14 "Update MUB-X (git pull + re-render)"
+  opt 10 "Users & traffic"
+  opt 11 "Bug-host audit"
+  opt 12 "Restart failed services"
+  opt 13 "Update MUB-X (git pull + re-render)"
   opt 0  "Exit"
   mubx_put ''
   mubx_box_line '└' '┘'
@@ -100,11 +99,10 @@ while true; do
     7) /usr/local/bin/svc-status ;;
     8) /usr/local/bin/mubx-diagnose ;;
     9) cat /var/lib/mubx/adaptive-recommendation 2>/dev/null || echo "No recommendation yet" ;;
-    10) /usr/local/bin/reality-fronts ;;
-    11) /usr/local/bin/mubx-users ;;
-    12) /usr/local/bin/mubx-probe ;;
-    13) /usr/local/bin/mubx-restart-failed ;;
-    14) /usr/local/bin/mubx-update ;;
+    10) /usr/local/bin/mubx-users ;;
+    11) /usr/local/bin/mubx-probe ;;
+    12) /usr/local/bin/mubx-restart-failed ;;
+    13) /usr/local/bin/mubx-update ;;
     0|q|Q) exit 0 ;;
     *) echo "  Invalid choice: $opt"; sleep 1; continue ;;
   esac

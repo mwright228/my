@@ -31,6 +31,13 @@ else
     exit 1
   }
 fi
+# Raw Shadowsocks TCP on public 443 carries the shared primary identity
+# (a raw SS inbound has no per-user multiplexing without a WS layer), so
+# that link is only printed for admin / the pre-store legacy identity.
+PRIMARY_443=1
+if [ -f /etc/mubx/users.json ] && [ "$USER_NAME" != "admin" ]; then
+  PRIMARY_443=0
+fi
 MYIP=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null || echo "$DOMAIN")
 HY2_PASS="${HY2_PASS:?Missing Hysteria password; rerun the installer}"
 [ -n "${UUID:-}" ] || { echo "[!] Missing UUID; rerun the installer." >&2; exit 1; }
@@ -107,23 +114,27 @@ sub "VLESS WebSocket (TLS)"
 block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-ws#MUBX-VLESS-WS"
 sub "VLESS WebSocket (plain, port 80)"
 block "vless://${UUID}@${BUG}:80?encryption=none&security=none&type=ws&host=${DOMAIN}&path=%2Fvless-ws#MUBX-VLESS-WS-80"
-sub "VLESS HTTPUpgrade"
+sub "VLESS HTTPUpgrade (TLS)"
 block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=httpupgrade&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-httpupgrade#MUBX-HTTPUpgrade"
-sub "VLESS xHTTP"
+sub "VLESS HTTPUpgrade (plain, port 80)"
+block "vless://${UUID}@${BUG}:80?encryption=none&security=none&type=httpupgrade&host=${DOMAIN}&path=%2Fvless-httpupgrade#MUBX-HTTPUpgrade-80"
+sub "VLESS xHTTP (TLS)"
 block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=xhttp&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-xhttp#MUBX-XHTTP"
+sub "VLESS xHTTP (plain, port 80)"
+block "vless://${UUID}@${BUG}:80?encryption=none&security=none&type=xhttp&host=${DOMAIN}&path=%2Fvless-xhttp#MUBX-XHTTP-80"
 sub "VLESS TCP TLS (own cert, port 8443)"
 block "vless://${UUID}@${DOMAIN}:8443?encryption=none&security=tls&type=tcp&sni=${DOMAIN}#MUBX-VLESS-TLS"
-note "  plain VLESS+TLS with your own certificate - no Reality front, no WS; verifies cleanly"
-sub "VLESS Reality (Vision) - one link per SNI front"
-for _front in ${REALITY_FRONTS:-www.apple.com}; do
-  [ -n "$_front" ] || continue
-  block "vless://${UUID}@${DOMAIN}:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${_front}&pbk=${REALITY_PUBKEY}&sid=${SHORT_ID}&spx=%2F&type=tcp#MUBX-Reality-${_front}"
-done
-sub "VMess WebSocket"
+note "  plain VLESS+TLS with your own certificate - no WS, no Reality; verifies cleanly"
+sub "VMess WebSocket (TLS)"
 VJ="{\"v\":\"2\",\"ps\":\"MUBX-VMess\",\"add\":\"${BUG}\",\"port\":\"443\",\"id\":\"${UUID}\",\"aid\":\"0\",\"net\":\"ws\",\"path\":\"/vmess-ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"tls\":\"tls\",\"sni\":\"${BUG}\"}"
 block "vmess://$(echo -n "$VJ" | base64 -w 0)"
-sub "Trojan WebSocket"
+sub "VMess WebSocket (plain, port 80)"
+VJ80="{\"v\":\"2\",\"ps\":\"MUBX-VMess-80\",\"add\":\"${BUG}\",\"port\":\"80\",\"id\":\"${UUID}\",\"aid\":\"0\",\"net\":\"ws\",\"path\":\"/vmess-ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\"}"
+block "vmess://$(echo -n "$VJ80" | base64 -w 0)"
+sub "Trojan WebSocket (TLS)"
 block "trojan://${UUID}@${BUG}:443?security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&path=%2Ftrojan-ws#MUBX-Trojan"
+sub "Trojan WebSocket (plain, port 80)"
+block "trojan://${UUID}@${BUG}:80?security=none&type=ws&host=${DOMAIN}&path=%2Ftrojan-ws#MUBX-Trojan-80"
 
 # --- 4. SSH & injectors ---------------------------------------------------
 card dropbear "Dropbear SSH" "(2222 / 109 / 53)"
@@ -161,17 +172,28 @@ sub "UDP profile"
 block "/etc/openvpn/client/mubx-client-udp.ovpn"
 
 # --- 7. Shadowsocks -------------------------------------------------------
-card xray "Shadowsocks" "(WS + plain TCP, per user)"
+card xray "Shadowsocks" "(WS 443/80 + plain TCP 443 & 8388+)"
 SS_UI="$(printf 'aes-256-gcm:%s' "$UUID" | base64 -w 0 | tr '+/' '-_' | tr -d '=')"
 SS_PLAIN_PORT=$(( ${SS_PLAIN_BASE_PORT:-8388} + ${user_idx:-0} ))
-sub "TLS route (port 443, WebSocket)"
-block "ss://${SS_UI}@${BUG}:443?plugin=v2ray-plugin%3Btls%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
+sub "TLS route (port 443, own-domain SNI)"
+block "ss://${SS_UI}@${DOMAIN}:443?plugin=v2ray-plugin%3Btls%3Bhost%3D${DOMAIN}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
+[ "$BUG" = "$DOMAIN" ] || {
+sub "TLS route with custom SNI (port 443, host ${BUG})"
+block "ss://${SS_UI}@${BUG}:443?plugin=v2ray-plugin%3Btls%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}-${BUG}"
+}
 sub "Plain WS route (port 80)"
 block "ss://${SS_UI}@${BUG}:80?plugin=v2ray-plugin%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
+if [ "$PRIMARY_443" -eq 1 ]; then
+sub "Plain TCP route (port 443, shared primary identity)"
+block "ss://${SS_UI}@${DOMAIN}:443#MUBX-SS-443"
+note "  raw SS TCP on 443 - no TLS/WS/plugin; HAProxy sends every non-TLS 443 connection here, password is the admin/primary identity"
+else
+note "  raw SS TCP on 443 uses the shared 'admin' identity - run link-gen with user admin for that link"
+fi
 sub "Plain TCP route (port ${SS_PLAIN_PORT}, no TLS)"
 block "ss://${SS_UI}@${DOMAIN}:${SS_PLAIN_PORT}#MUBX-SS-${USER_NAME}-tcp"
 note "plain TCP needs no plugin and no cert toggles - works in v2rayNG / sing-box / Shadowrocket"
 [ "$BUG" = "$DOMAIN" ] || \
-  printf '  %s[!]%s The TLS link above needs SNI %s to terminate on this server - if %s is a configured Reality front, use the plain WS or plain TCP link, or the default domain.\n' \
-    "$C_RED" "$C_RESET" "$BUG" "$BUG"
+  printf '  %s[!]%s Custom-SNI SS-TLS still terminates with %s'\''s own certificate: with host %s the client must skip certificate verification / set insecure (v2ray-plugin has no verify-off URI flag), or use the own-domain / plain links above.\n' \
+    "$C_RED" "$C_RESET" "$DOMAIN" "$BUG"
 printf '\n'

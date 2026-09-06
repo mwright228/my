@@ -19,11 +19,11 @@ done
 say "JSON validity (templates and examples)"
 for f in configs/*.json examples/*.json; do
   [ -f "$f" ] || continue
-  # reality-inbound.json, ss-inbound.json and ss-plain-inbound.json are
-  # per-item fragments with a numeric placeholder ("port": __PORT__), so
+  # ss-inbound.json, ss-plain-inbound.json and ss-443-inbound.json are
+  # per-item fragments with a numeric placeholder ("port": __SS_PORT__), so
   # standalone JSON parsing does not apply to them; the render smoke tests
   # below validate the substituted results instead.
-  case "$(basename "$f")" in reality-inbound.json|ss-inbound.json|ss-plain-inbound.json) continue ;; esac
+  case "$(basename "$f")" in ss-inbound.json|ss-plain-inbound.json|ss-443-inbound.json) continue ;; esac
   if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$f" 2>/dev/null; then
     echo "JSON FAIL: $f"
     fail=1
@@ -37,12 +37,9 @@ render_xray() { # $1 tmpdir  $2 users store (may be empty)  -> writes "$1/xray.j
     if [ -n "$users" ]; then
       export MUBX_USERS_FILE="$users"
     fi
-    export UUID="11111111-2222-3333-4444-555555555555" \
-      REALITY_PRIVKEY="dummy-private-key-material" \
-      SHORT_ID="1a2b3c4d" \
-      REALITY_FRONTS="www.apple.com dl.google.com"
-    bash -c 'source lib/reality-build.sh &&
-             mubx_xray_render configs/xray.json configs/reality-inbound.json "$1" &&
+    export UUID="11111111-2222-3333-4444-555555555555"
+    bash -c 'source lib/render.sh &&
+             mubx_xray_render configs/xray.json "$1" &&
              mubx_haproxy_render configs/haproxy.cfg "$2"' \
       x "$tmp/xray.json" "$tmp/haproxy.cfg"
   )
@@ -56,9 +53,8 @@ render_nginx() { # $1 tmpdir  $2 users store (may be empty)  -> writes "$1/nginx
     if [ -n "$users" ]; then
       export MUBX_USERS_FILE="$users"
     fi
-    export UUID="11111111-2222-3333-4444-555555555555" \
-      REALITY_FRONTS="www.apple.com dl.google.com"
-    bash -c 'source lib/reality-build.sh && mubx_nginx_render configs/nginx.conf "$1"' \
+    export UUID="11111111-2222-3333-4444-555555555555"
+    bash -c 'source lib/render.sh && mubx_nginx_render configs/nginx.conf "$1"' \
       x "$tmp/nginx.conf"
   )
 }
@@ -87,7 +83,7 @@ print("  vless TLS TCP OK: :8443 with %d client(s)" % len(clients))
 PY
 }
 
-# The one Shadowsocks inbound every valid render must carry for a user.
+# The one Shadowsocks WS inbound every valid render must carry for a user.
 check_ss_user() { # $1 xray config  $2 name  $3 uuid  $4 port
   python3 - "$1" "$2" "$3" "$4" <<'PY'
 import json, sys
@@ -124,34 +120,74 @@ print("  ss plain TCP OK: %s -> :%d" % (name, port))
 PY
 }
 
-say "Reality render smoke test (multi-front)"
+# The shared SS-443 inbound every render must carry: loopback listener that
+# HAProxy fronts from public 443, carrying the primary (admin) password.
+check_ss443() { # $1 xray config  $2 expected password
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+passwd = sys.argv[2]
+matches = [i for i in cfg["inbounds"] if i["tag"] == "ss-443"]
+assert len(matches) == 1, "expected 1 ss-443 inbound"
+ss = matches[0]
+assert ss["listen"] == "127.0.0.1", ss["listen"]
+assert ss["port"] == 17000, ss["port"]
+assert ss["settings"]["method"] == "aes-256-gcm"
+assert ss["settings"]["password"] == passwd, (ss["settings"]["password"], passwd)
+assert ss["streamSettings"]["network"] == "tcp"
+print("  ss-443 shared inbound OK: 127.0.0.1:17000 (primary password)")
+PY
+}
+
+# No Reality may survive anywhere in the rendered artifacts.
+check_no_reality() { # $1 xray config  $2 haproxy config
+  python3 - "$1" <<'PY'
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+assert not any("reality" in (i.get("tag") or "").lower() or "reality" in str(i.get("streamSettings", {})).lower() for i in cfg["inbounds"]), "reality inbound found"
+print("  xray render is Reality-free")
+PY
+  if grep -qi 'reality\|is_reality\|10443' "$2"; then
+    echo "HAProxy render still mentions Reality"
+    fail=1
+  else
+    echo "  haproxy render is Reality-free"
+  fi
+}
+
+# The static 443 split every HAProxy render must produce: a TLS check routed
+# to the nginx loopback terminator, and a raw/SS fallback to the 17000
+# inbound. The template is installed verbatim by the renderer.
+check_haproxy_split() { # $1 haproxy config
+  grep -q 'use_backend srv_nginx if { req_ssl_hello_type 1 }' "$1" || {
+    echo "HAProxy TLS -> nginx rule missing"
+    fail=1
+  }
+  grep -q 'default_backend srv_ss443' "$1" || {
+    echo "HAProxy default backend (SS-443) missing"
+    fail=1
+  }
+  grep -q 'server srv_ss443 127.0.0.1:17000' "$1" || {
+    echo "HAProxy SS-443 backend target missing"
+    fail=1
+  }
+  grep -q 'server srv_nginx 127.0.0.1:20443' "$1" || {
+    echo "HAProxy nginx backend target missing"
+    fail=1
+  }
+  echo "  haproxy 443 split OK (TLS -> nginx, non-TLS -> ss443)"
+}
+
+say "Render smoke test (legacy single identity)"
 if command -v jq >/dev/null 2>&1; then
   tmp="$(mktemp -d)"
   if render_xray "$tmp" ""; then
-    python3 - "$tmp/xray.json" <<'PY'
-import json, sys
-cfg = json.load(open(sys.argv[1]))
-reality = [i for i in cfg["inbounds"] if i["tag"].startswith("reality")]
-assert len(reality) == 2, "expected 2 reality inbounds, got %d" % len(reality)
-for i in reality:
-    assert i["port"] in (10443, 10444), i["port"]
-    rs = i["streamSettings"]["realitySettings"]
-    assert rs["dest"] == "%s:443" % rs["serverNames"][0], rs
-print("  xray render OK:", sorted((i["port"], i["streamSettings"]["realitySettings"]["dest"]) for i in reality))
-PY
-    rc=$?
-    if [ $rc -ne 0 ]; then fail=1; fi
-    if grep -q 'MUBX_REALITY_RULES#\|MUBX_REALITY_BACKENDS#' "$tmp/haproxy.cfg"; then
-      echo "HAProxy markers were not expanded"
-      fail=1
-    fi
-    grep -q 'acl is_reality_1 req_ssl_sni -i dl.google.com' "$tmp/haproxy.cfg" || {
-      echo "second front ACL missing from HAProxy render"
-      fail=1
-    }
+    check_vless_tls "$tmp/xray.json" 1 || fail=1
     check_ss_user "$tmp/xray.json" admin "11111111-2222-3333-4444-555555555555" 10006 || fail=1
     check_ss_plain_user "$tmp/xray.json" admin "11111111-2222-3333-4444-555555555555" 8388 || fail=1
-    check_vless_tls "$tmp/xray.json" 1 || fail=1
+    check_ss443 "$tmp/xray.json" "11111111-2222-3333-4444-555555555555" || fail=1
+    check_haproxy_split "$tmp/haproxy.cfg" || fail=1
+    check_no_reality "$tmp/xray.json" "$tmp/haproxy.cfg" || fail=1
     if render_nginx "$tmp" ""; then
       grep -q '#MUBX_SS_LOCATIONS#' "$tmp/nginx.conf" && {
         echo "Nginx SS marker was not expanded (legacy admin)"
@@ -163,6 +199,10 @@ PY
       }
       grep -q '__SSH_WS_PATH__\|__DOMAIN__' "$tmp/nginx.conf" && {
         echo "nginx placeholders were not substituted"
+        fail=1
+      }
+      grep -q 'reality' "$tmp/nginx.conf" && {
+        echo "nginx render still mentions Reality"
         fail=1
       }
     else
@@ -191,16 +231,11 @@ assert cfg["policy"]["levels"]["0"]["statsUserUplink"] is True, "policy missing"
 tags = {i["tag"] for i in cfg["inbounds"]}
 assert "api" in tags, "api inbound missing"
 assert cfg["routing"]["rules"][0]["inboundTag"] == ["api"], "api routing missing"
-for tag in ("vless-ws", "vmess-ws", "trojan-ws", "vless-httpupgrade", "vless-xhttp"):
+for tag in ("vless-ws", "vmess-ws", "trojan-ws", "vless-httpupgrade", "vless-xhttp", "vless-tls-tcp"):
     inbound = next(i for i in cfg["inbounds"] if i["tag"] == tag)
     clients = inbound["settings"]["clients"]
     assert len(clients) == len(users), (tag, len(clients))
     assert all(c.get("email") for c in clients), tag
-reality = [i for i in cfg["inbounds"] if i["tag"].startswith("reality")]
-for i in reality:
-    clients = i["settings"]["clients"]
-    assert len(clients) == len(users)
-    assert all(c.get("flow") == "xtls-rprx-vision" for c in clients), i["tag"]
 print("  multi-user render OK: %d users across %d inbounds" % (len(users), len(tags)))
 PY
     rc=$?
@@ -210,6 +245,9 @@ PY
     check_ss_plain_user "$tmp/xray.json" admin "11111111-2222-3333-4444-555555555555" 8388 || fail=1
     check_ss_plain_user "$tmp/xray.json" alice "22222222-3333-4444-5555-666666666666" 8389 || fail=1
     check_vless_tls "$tmp/xray.json" 2 || fail=1
+    check_ss443 "$tmp/xray.json" "11111111-2222-3333-4444-555555555555" || fail=1
+    check_haproxy_split "$tmp/haproxy.cfg" || fail=1
+    check_no_reality "$tmp/xray.json" "$tmp/haproxy.cfg" || fail=1
     if render_nginx "$tmp" "$tmp/users.json"; then
       for route in '/ss-admin' '/ss-alice'; do
         [ "$(grep -c "location $route" "$tmp/nginx.conf")" -eq 2 ] || {
@@ -220,6 +258,12 @@ PY
       for port in 10006 10007; do
         [ "$(grep -c "proxy_pass http://127.0.0.1:$port;" "$tmp/nginx.conf")" -eq 2 ] || {
           echo "SS proxy_pass to $port must appear in both nginx servers"
+          fail=1
+        }
+      done
+      for loc in '/vless-httpupgrade' '/vless-xhttp'; do
+        [ "$(grep -c "location $loc" "$tmp/nginx.conf")" -eq 2 ] || {
+          echo "$loc must appear in both nginx servers (443 TLS + 80 plain)"
           fail=1
         }
       done

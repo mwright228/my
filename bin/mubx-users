@@ -2,10 +2,12 @@
 # Manage per-user Xray identities on this server.
 #
 # Every user in the store gets their own UUID on every transport inbound
-# (VLESS-WS, VLESS-HTTPUpgrade, XHTTP, VMess, Trojan and Reality) plus a
-# Shadowsocks WS inbound/password of their own. Removing a user revokes just
-# that identity; the rest keep working. Xray's stats API is enabled when the
-# store exists, so per-user traffic can be read back for the UUID transports.
+# (VLESS-WS, VLESS-HTTPUpgrade, XHTTP, VMess, Trojan and VLESS TCP TLS on
+# 8443) plus a Shadowsocks WS inbound/password of their own. Removing a user
+# revokes just that identity; the rest keep working. Xray's stats API is
+# enabled when the store exists, so per-user traffic can be read back for
+# the UUID transports. The raw Shadowsocks TCP channel on public 443 carries
+# the shared 'admin' identity (raw SS has no per-user multiplexing).
 #
 # The store lives in /etc/mubx/users.json (override with MUBX_USERS_FILE).
 # The first entry ("admin") carries the legacy UUID from install, so older
@@ -22,7 +24,7 @@ set -Eeuo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "[!] Run mubx-users as root." >&2; exit 1; }
 
 source /usr/local/lib/mubx/common.sh
-source /usr/local/lib/mubx/reality-build.sh
+source /usr/local/lib/mubx/render.sh
 load_mubx_env
 
 STORE="${MUBX_USERS_FILE:-/etc/mubx/users.json}"
@@ -51,8 +53,7 @@ reload_xray() {
   tmpdir="$(mktemp -d)"
   xray_new="$tmpdir/xray.json"
   nginx_new="$tmpdir/nginx.conf"
-  if ! mubx_xray_render "$TPL_DIR/configs/xray.json" \
-      "$TPL_DIR/configs/reality-inbound.json" "$xray_new"; then
+  if ! mubx_xray_render "$TPL_DIR/configs/xray.json" "$xray_new"; then
     echo "[!] Failed to render the Xray config." >&2
     rm -rf "$tmpdir"
     return 1

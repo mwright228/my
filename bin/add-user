@@ -49,6 +49,9 @@ mubx_kvrow "WireGuard"     "51820 (UDP)"
 mubx_kvrow "Hysteria 2"    "4433 (UDP)"
 mubx_kvrow "ZivPN"         "5667 (UDP)"
 mubx_kvrow "UDPGW bridge"  "7100-7700 (UDP)"
+mubx_kvrow "VLESS TLS TCP" "8443 (TCP, own cert)"
+mubx_kvrow "Shadowsocks WS" "443 TLS / 80 plain"
+mubx_kvrow "Shadowsocks TCP" "8388+ (plain, per user)"
 mubx_kvrow "Xray transports" "menu 2 → all links"
 mubx_box_line '└' '┘'
 

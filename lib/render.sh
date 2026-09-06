@@ -1,26 +1,30 @@
 #!/bin/bash
-# Reality multi-front configuration builders.
+# MUB-X configuration renderers (Xray / HAProxy / Nginx).
 #
-# Reality (XTLS) can camouflage against ANY real HTTPS site, not just Apple.
-# Each configured "front" (an SNI host your clients' carriers permit) gets
-# its own Xray Reality inbound on 127.0.0.1:10443+N plus a matching HAProxy
-# SNI route on public port 443, so different users on different SIM
-# networks can each use the front their carrier allows.
+# Xray: renders the base template (VLESS/VMess/Trojan WS, HTTPUpgrade,
+# xHTTP, plain VLESS TCP+TLS on 8443) and then appends the per-user
+# Shadowsocks inbounds (WS loopback + plain public TCP) plus the shared
+# SS-on-443 inbound that HAProxy fronts from public port 443.
 #
-# The active front list lives in REALITY_FRONTS inside
-# /etc/telecom-engine.env (space separated, quoted). It is managed with
-# `reality-fronts` (menu option 10) and seeded during install.sh.
+# HAProxy: owns public 443 and multiplexes by content - TLS ClientHello
+# (any SNI, incl. carrier bug-hosts) goes to the nginx loopback TLS
+# terminator; non-TLS connections (raw Shadowsocks TCP) go to the shared
+# SS-443 Xray inbound. Reality SNI fronts were removed.
 #
-# Sourced by install.sh and bin/reality-fronts. Requires jq, which
-# install.sh always provisions.
+# The per-user overlay (mubx_users_apply) rewrites .settings.clients on
+# every inbound that has one and enables the stats API. The user store
+# lives in MUBX_USERS_FILE (/etc/mubx/users.json by default).
+#
+# Sourced by install.sh, mubx-update, mubx-users and link-gen. Requires jq,
+# which install.sh always provisions.
 
-REALITY_MARKER_RULES='#MUBX_REALITY_RULES#'
-REALITY_MARKER_BACKENDS='#MUBX_REALITY_BACKENDS#'
-REALITY_BASE_PORT=10443
-REALITY_MAX_FRONTS=12
 SS_MARKER='#MUBX_SS_LOCATIONS#'
 SS_BASE_PORT=10006
 SS_PLAIN_BASE_PORT=8388
+# Shared SS-on-443 inbound: HAProxy sends every non-TLS connection on
+# public 443 here, so it is a single (primary) identity by design - raw
+# Shadowsocks has no SNI/path to demultiplex per user on one TCP port.
+SS_443_LOOPBACK_PORT=17000
 
 # Multi-user store. Overridable (MUBX_USERS_FILE) so tests can render
 # against a scratch copy. Each entry: {name, uuid, added, expiry}.
@@ -42,6 +46,18 @@ mubx_users_seed() {
   fi
 }
 
+# Primary (shared) identity: the seeded "admin" UUID when a store exists,
+# else the legacy UUID. Used by the shared SS-443 inbound and for the
+# client links that carry the shared identity.
+mubx_primary_uuid() {
+  if [ -f "$MUBX_USERS_FILE" ]; then
+    local u
+    u="$(jq -r '.[] | select(.name == "admin") | .uuid' "$MUBX_USERS_FILE" 2>/dev/null | head -n 1)"
+    [ -n "$u" ] && printf '%s\n' "$u" && return 0
+  fi
+  printf '%s\n' "${UUID:-}"
+}
+
 # Overlay the per-user client identities onto a rendered Xray config and
 # enable the stats API (policy + dokodemo api inbound + routing) so traffic
 # can be queried per user email with `xray api statsquery`. When the store
@@ -57,17 +73,13 @@ mubx_users_apply() { # $1 rendered config file
     .inbounds |= map(
       if (.settings.clients? == null) then .
       else
-        (.streamSettings.realitySettings? != null) as $reality |
         .settings.clients = (
           if .protocol == "trojan" then
             [ $users[] | {password: .uuid, email: (.name + "@" + $dom)} ]
           elif .protocol == "vmess" then
             [ $users[] | {id: .uuid, alterId: 0, email: (.name + "@" + $dom)} ]
           else
-            [ $users[] |
-              {id: .uuid, email: (.name + "@" + $dom)} +
-              (if $reality then {flow: "xtls-rprx-vision"} else {} end)
-            ]
+            [ $users[] | {id: .uuid, email: (.name + "@" + $dom)} ]
           end
         )
       end
@@ -79,98 +91,17 @@ mubx_users_apply() { # $1 rendered config file
   ' "$1" > "$1.mubx" && mv -f "$1.mubx" "$1"
 }
 
-# Parse a space separated list into the global FRONTS array.
-reality_fronts() { # $1 optional raw list (default: $REALITY_FRONTS or apple)
-  local raw="${1:-${REALITY_FRONTS:-www.apple.com}}"
-  FRONTS=()
-  # shellcheck disable=SC2206
-  read -r -a FRONTS <<< "$raw"
-}
-
-front_syntax_ok() {
-  [[ "$1" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]]
-}
-
-# A front must resolve and answer on TCP 443 from this host: Xray relays
-# probe handshakes and fetches the real certificate chain from dest.
-front_reachable() {
-  local host="$1"
-  getent ahostsv4 "$host" >/dev/null 2>&1 || getent hosts "$host" >/dev/null 2>&1 || return 1
-  timeout 6 bash -c ":</dev/tcp/$host/443" 2>/dev/null
-}
-
-# Validate a whole candidate list; echoes nothing, nonzero on any bad front.
-front_list_validate() {
-  local f
-  for f in "$@"; do
-    front_syntax_ok "$f" || { echo "[!] Invalid front domain: $f" >&2; return 1; }
-    [ "$f" != "${DOMAIN:-}" ] || {
-      echo "[!] A front cannot be your own domain ($f); pick a third-party HTTPS site." >&2
-      return 1
-    }
-    front_reachable "$f" || {
-      echo "[!] $f does not resolve or TCP 443 is unreachable from this host; Reality must relay to it." >&2
-      return 1
-    }
-  done
-}
-
-# Rewrite one key inside the env file, preserving every other key. Keys are
-# whitelisted, so unknown keys can never sneak back in.
-mubx_env_set() { # $1 key  $2 value  [$3 env file]
-  local key="$1" value="$2" env_file="${3:-/etc/telecom-engine.env}"
-  local tmp k v
-  declare -A kv=()
-  [ -f "$env_file" ] || { echo "[!] Missing $env_file" >&2; return 1; }
-  while IFS='=' read -r k v; do
-    case "$k" in
-      DOMAIN|UUID|REALITY_PRIVKEY|REALITY_PUBKEY|SHORT_ID|HY2_PASS|ZIVPN_PASS|SSH_WS_PATH|REALITY_FRONTS)
-        v="${v#\"}"; v="${v%\"}"
-        kv["$k"]="$v"
-        ;;
-    esac
-  done < "$env_file"
-  kv["$key"]="$value"
-  tmp="$(mktemp "${env_file}.XXXXXX")"
-  umask 077
-  for k in DOMAIN UUID REALITY_PRIVKEY REALITY_PUBKEY SHORT_ID \
-           HY2_PASS ZIVPN_PASS SSH_WS_PATH REALITY_FRONTS; do
-    [ -n "${kv[$k]:-}" ] || continue
-    printf '%s="%s"\n' "$k" "${kv[$k]}" >> "$tmp"
-  done
-  chmod 0600 "$tmp"
-  mv -f "$tmp" "$env_file"
-}
-
-# Render /usr/local/etc/xray/config.json from the base template (which keeps
-# the non-Reality inbounds) plus one generated Reality inbound per front.
-mubx_xray_render() { # $1 base_template  $2 inbound_template  $3 out
-  local base_tpl="$1" inbound_tpl="$2" out="$3"
-  local base tmpbase i=0 extra='[]' obj f
+# Render /usr/local/etc/xray/config.json from the base template plus the
+# per-user Shadowsocks inbounds (WS, plain TCP) and the shared SS-443
+# inbound that HAProxy fronts on public port 443.
+mubx_xray_render() { # $1 base_template  $2 out
+  local base_tpl="$1" out="$2"
+  local tmpbase
   tmpbase="$(mktemp /tmp/mubx-xray-base.XXXXXX)"
   sed -e "s|__UUID__|${UUID:?UUID is not loaded; run the installer first}|g" \
       -e "s|__DOMAIN__|${DOMAIN:?DOMAIN is not loaded; run the installer first}|g" \
     "$base_tpl" > "$tmpbase" || { rm -f "$tmpbase"; return 1; }
-  reality_fronts
-  for f in "${FRONTS[@]}"; do
-    [ -n "$f" ] || continue
-    if [ "$i" -ge "$REALITY_MAX_FRONTS" ]; then
-      echo "[!] Too many Reality fronts (max $REALITY_MAX_FRONTS)." >&2
-      rm -f "$tmpbase"
-      return 1
-    fi
-    obj="$(sed -e "s|__PORT__|$((REALITY_BASE_PORT + i))|g" \
-               -e "s|__DEST__|$f|g" \
-               -e "s|__SNI__|$f|g" \
-               -e "s|__UUID__|${UUID}|g" \
-               -e "s|__REALITY_PRIVKEY__|${REALITY_PRIVKEY:?Reality private key missing}|g" \
-               -e "s|__SHORT_ID__|${SHORT_ID:?Reality short id missing}|g" \
-               "$inbound_tpl")" || { rm -f "$tmpbase"; return 1; }
-    extra="$(jq -cn --argjson arr "$extra" --argjson o "$obj" '$arr + [$o]')" \
-      || { rm -f "$tmpbase"; return 1; }
-    i=$((i + 1))
-  done
-  jq --argjson add "$extra" '.inbounds += $add' "$tmpbase" > "$out" || {
+  jq '.' "$tmpbase" > "$out" || {
     rm -f "$tmpbase"
     return 1
   }
@@ -181,10 +112,12 @@ mubx_xray_render() { # $1 base_template  $2 inbound_template  $3 out
   mubx_ss_apply "$out" "$(dirname "$base_tpl")/ss-inbound.json" || return 1
   # Per-user plain Shadowsocks TCP inbounds (one public port per user).
   mubx_ss_plain_apply "$out" "$(dirname "$base_tpl")/ss-plain-inbound.json" || return 1
+  # Shared Shadowsocks on 443 (HAProxy non-TLS frontend -> this inbound).
+  mubx_ss_443_apply "$out" "$(dirname "$base_tpl")/ss-443-inbound.json" || return 1
 }
 
 # Emit one tab-separated row per Shadowsocks user: name, uuid (the SS
-# password), loopback port (10006 + store index) and the ws path
+# password), loopback port (SS_BASE_PORT + store index) and the ws path
 # (/ss-<name>). Without a store (pre-upgrade host) the legacy admin
 # identity is used, matching how xray configs were rendered before.
 mubx_ss_plan() { # $1 base port (default SS_BASE_PORT, i.e. the loopback WS ports)
@@ -243,6 +176,21 @@ mubx_ss_plain_apply() { # $1 rendered config file  $2 ss plain inbound template
   fi
 }
 
+# Append the shared SS-on-443 inbound: a single Shadowsocks listener on the
+# loopback SS_443_LOOPBACK_PORT carrying the primary identity's password.
+# HAProxy sends every non-TLS public-443 connection here, so this is the
+# "Shadowsocks TCP on 443" route that works in any plain SS client.
+mubx_ss_443_apply() { # $1 rendered config file  $2 ss-443 inbound template
+  local cfg="$1" ss_tpl="$2" obj pass
+  [ -f "$ss_tpl" ] || return 0
+  pass="$(mubx_primary_uuid)"
+  [ -n "$pass" ] || return 0
+  obj="$(sed -e "s|__SS_PORT__|$SS_443_LOOPBACK_PORT|g" \
+             -e "s|__SS_PASS__|$pass|g" "$ss_tpl")" || return 1
+  jq --argjson o "$obj" '.inbounds += [$o]' "$cfg" > "$cfg.mubx" || return 1
+  mv -f "$cfg.mubx" "$cfg"
+}
+
 # Render /etc/nginx/nginx.conf from the template: expand the shared
 # #MUBX_SS_LOCATIONS# marker (one /ss-<user> location block per user) in
 # both the port-80 and the loopback-TLS server, and substitute the domain
@@ -270,22 +218,10 @@ mubx_nginx_render() { # $1 template  $2 out
   printf '%s' "$content" > "$out"
 }
 
-# Render /etc/haproxy/haproxy.cfg: expand the two markers in the template
-# with one exact-SNI acl + backend per configured front.
+# Render /etc/haproxy/haproxy.cfg. The template is static (no Reality SNI
+# fronts any more): TLS ClientHello -> nginx loopback terminator; every
+# non-TLS connection on public 443 -> the shared SS-443 inbound.
 mubx_haproxy_render() { # $1 template  $2 out
   local tmpl="$1" out="$2"
-  local content rules='' backends='' i=0 f
-  reality_fronts
-  for f in "${FRONTS[@]}"; do
-    [ -n "$f" ] || continue
-    printf -v rules '%s    # front %s\n    acl is_reality_%d req_ssl_sni -i %s\n    use_backend srv_reality_%d if is_reality_%d\n' \
-      "$rules" "$f" "$i" "$f" "$i" "$i"
-    printf -v backends '%sbackend srv_reality_%d\n    mode tcp\n    server srv_reality_%d 127.0.0.1:%d\n\n' \
-      "$backends" "$i" "$i" "$((REALITY_BASE_PORT + i))"
-    i=$((i + 1))
-  done
-  content="$(< "$tmpl")"
-  content="${content//$REALITY_MARKER_RULES/$rules}"
-  content="${content//$REALITY_MARKER_BACKENDS/$backends}"
-  printf '%s' "$content" > "$out"
+  install -m 0644 "$tmpl" "$out"
 }

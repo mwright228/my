@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # MUB-X service status: one verdict per protocol / transport, not just per
 # systemd unit. Xray transports are enumerated from the live config so every
-# inbound (incl. each Reality SNI front and Shadowsocks user) is listed
-# individually; UDP-only daemons are checked via their listener, TCP ones
-# via their unit + socket.
+# inbound (incl. each per-user Shadowsocks route and the shared SS-443
+# inbound) is listed individually; UDP-only daemons are checked via their
+# listener, TCP ones via their unit + socket.
 #
 # Output uses the same 58-column bordered frame as the menu: one card per
 # group, status flush right per row, and any failing service explains itself
@@ -96,8 +96,6 @@ printf '\n'
 
 # --- Xray transports --------------------------------------------------------
 group_open "Xray transports"
-# reality fronts come back in config order (10443+n); map port -> SNI front.
-read -r -a _fronts <<< "${REALITY_FRONTS:-}"
 while IFS=$'\t' read -r tag proto port; do
   [ -n "$tag" ] || continue
   case "$tag" in
@@ -112,13 +110,7 @@ while IFS=$'\t' read -r tag proto port; do
                    label="Shadowsocks WS ($name)" ;;
     ssplain-*)     name="${tag#ssplain-}"
                    label="Shadowsocks TCP ($name)" ;;
-    reality-*)
-      idx=$((port - 10442))   # 10443 -> front #1
-      sni="${_fronts[$((idx - 1))]:-sni-$idx}"
-      # keep the row inside the 58-column frame for very long SNIs
-      sni_disp="${sni:0:26}"
-      [ "${#sni}" -gt 26 ] && sni_disp="${sni_disp}…"
-      label="Reality ($sni_disp)" ;;
+    ss-443)        label="Shadowsocks TCP (443 shared)" ;;
     *)             label="${tag}" ;;
   esac
   row "Xray · $label" xray tcp "$port"

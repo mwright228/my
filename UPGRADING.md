@@ -1,17 +1,26 @@
 # Upgrading MUB-X
 
 Existing servers upgrade **in place**: nothing is wiped, every secret,
-certificate, user, Reality front, and per-user identity survives.
+certificate, user, and per-user identity survives.
 
 > [!NOTE]
 > DNSTT / SlowDNS was removed from MUB-X - ZivPN covers the UDP-tunnel
 > role. The next update disables and deletes the old `dnstt` unit,
 > binaries and `/etc/dnstt` keys automatically.
 
-## Fastest: menu option `14` (self-update)
+> [!NOTE]
+> Reality (XTLS-Vision) was removed from MUB-X - it needs a reachable
+> third-party SNI front, and the raw **Shadowsocks TCP on 443** route
+> replaced it. The next update deletes `reality-fronts` and re-renders the
+> Xray/HAProxy configs without Reality inbounds; port 443 now splits TLS
+> (Nginx / WebSocket transports) from non-TLS (raw Shadowsocks). Any
+> `REALITY_*` keys left in `/etc/telecom-engine.env` are ignored and
+> stripped on the next installer run.
+
+## Fastest: menu option `13` (self-update)
 
 Once `mubx-update` is installed, updates are one keypress from the control
-panel — menu option `14` — or directly:
+panel — menu option `13` — or directly:
 
 ```bash
 mubx-update
@@ -39,15 +48,15 @@ curl -fsSL https://raw.githubusercontent.com/mwright228/my/main/install.sh | bas
 
 Run as root on the VPS. Ports 80/443 must be free while it runs (it stops
 nginx/HAProxy briefly for certificate handling), and the domain must keep
-resolving to the server. Re-runs are idempotent: they keep `REALITY_FRONTS`,
-`SSH_WS_PATH`, `DOMAIN`, all secrets in `/etc/telecom-engine.env`, the user
+resolving to the server. Re-runs are idempotent: they keep `DOMAIN`, `SSH_WS_PATH`, all secrets in
+`/etc/telecom-engine.env` (stale `REALITY_*` keys are dropped), the user
 store `/etc/mubx/users.json`, WireGuard / OpenVPN keys, and the
 Let's Encrypt certificate.
 
 > [!NOTE]
 > `mubx-update` itself arrives with the first update that carries it: run
-> menu `14`-ready code once by re-running the installer (or copying the
-> repo) after the feature ships, and option `14` is available from then on.
+> menu `13`-ready code once by re-running the installer (or copying the
+> repo) after the feature ships, and option `13` is available from then on.
 
 ---
 
@@ -64,9 +73,9 @@ git pull --ff-only origin main
 
 # Load secrets into shell vars, then render candidates into a temp dir.
 source lib/common.sh && load_mubx_env
-source lib/reality-build.sh && mubx_users_seed
+source lib/render.sh && mubx_users_seed
 tmp="$(mktemp -d)"
-mubx_xray_render   configs/xray.json     configs/reality-inbound.json "$tmp/xray.json"
+mubx_xray_render   configs/xray.json     "$tmp/xray.json"
 mubx_haproxy_render configs/haproxy.cfg  "$tmp/haproxy.cfg"
 mubx_nginx_render  configs/nginx.conf    "$tmp/nginx.conf"
 
@@ -95,19 +104,21 @@ followed by `systemctl daemon-reload`. When in doubt, re-run `install.sh`.
 
 ## Verify after upgrading
 
-1. **Services up** — run `mubx-restart-failed` (menu `13`); every service
+1. **Services up** — run `mubx-restart-failed` (menu `12`); every service
    should report running. Anything still down prints its last journal line
 2. **Full status** — `svc-status` (menu `7`): all rows `Running`. The Xray
    transports list should now include one `Xray Shadowsocks WS (<user>)` and
    one `Xray Shadowsocks TCP (<user>)` row per user (admin plus any others
-   you created), plus a `Xray VLESS TCP TLS (8443)` row, alongside Reality,
-   VLESS/VMess/Trojan WS, HTTPUpgrade and xHTTP.
+   you created), a shared `Xray Shadowsocks TCP (443 shared)` row, and an
+   `Xray VLESS TCP TLS (8443)` row, alongside VLESS/VMess/Trojan WS,
+   HTTPUpgrade and xHTTP. No Reality rows remain.
 3. **New protocol smoke test** — `link-gen` (menu `2`, user `admin`):
-   section `[3] Xray transports` must print a VLESS TCP TLS link on `8443`
-   (`#MUBX-VLESS-TLS`), and section `[8] Shadowsocks` must print a TLS
-   (443), plain WS (80) and plain TCP (8388) `ss://` link. Import the plain
-   TCP one into v2rayNG / Shadowrocket / sing-box — no plugin or TLS toggles
-   required — and confirm a connection.
+   the Xray transports card must print a VLESS TCP TLS link on `8443`
+   (`#MUBX-VLESS-TLS`) plus plain (port 80) twins of HTTPUpgrade, xHTTP,
+   VMess-WS and Trojan-WS, and the Shadowsocks card must print a TLS (443),
+   plain WS (80), plain TCP on 443 (`#MUBX-SS-443`) and plain TCP (8388)
+   `ss://` link. Import the plain TCP ones into v2rayNG / Shadowrocket /
+   sing-box — no plugin or TLS toggles required — and confirm a connection.
 4. **Per-user lifecycle** — `add-user alice` then `link-gen` for alice
    shows `/ss-alice`; after `delete-user alice`, alice's Xray inbound and
    nginx route are gone (`grep -c 'ss-alice' /etc/nginx/nginx.conf` → 0)
@@ -115,7 +126,8 @@ followed by `systemctl daemon-reload`. When in doubt, re-run `install.sh`.
 5. **Config validity** — `xray run -test -config /usr/local/etc/xray/config.json`,
    `nginx -t`, and `haproxy -c -f /etc/haproxy/haproxy.cfg` all pass.
 6. **State preserved** — `/etc/telecom-engine.env` still carries your
-   domain, Reality keys/fronts and secret WS path; `ls /etc/mubx/users.json`
+   domain and secret WS path (any stale `REALITY_*` keys are ignored and
+   are stripped on the next installer run); `ls /etc/mubx/users.json`
    exists with `admin` as the first entry; your certificate did not change
    (renewals only happen close to expiry).
 

@@ -1,0 +1,13 @@
+{
+  "tag": "ss-443",
+  "listen": "127.0.0.1",
+  "port": __SS_PORT__,
+  "protocol": "shadowsocks",
+  "settings": {
+    "method": "aes-256-gcm",
+    "password": "__SS_PASS__"
+  },
+  "streamSettings": {
+    "network": "tcp"
+  }
+}

@@ -37,15 +37,19 @@ restore_files() {
   done
   return "$status"
 }
-for svc in hysteria zivpn nginx haproxy; do
+for svc in hysteria zivpn nginx haproxy xray; do
   systemctl is-active --quiet "$svc" && was_active["$svc"]=1 || was_active["$svc"]=0
 done
+# certbot --standalone needs 80/443 free, so stop the TLS/web services.
+# Xray binds 8388/8443 plus loopback inbounds - never public 80/443 (that
+# is HAProxy's 443 splitter) - so it keeps running; its config is re-pointed
+# at the new certificate below.
 systemctl stop hysteria zivpn nginx haproxy 2>/dev/null || true
 cleanup() {
   local status=$?
   if [ "$success" -eq 0 ]; then
     restore_files || status=1
-    for svc in hysteria zivpn nginx haproxy; do
+    for svc in hysteria zivpn nginx haproxy xray; do
       if [ "${was_active[$svc]}" -eq 1 ] && ! systemctl start "$svc"; then
         printf '[!] Failed to restore %s\n' "$svc" >&2
         status=1
@@ -56,8 +60,8 @@ cleanup() {
   return "$status"
 }
 trap cleanup EXIT
-for path in /usr/local/etc/xray/domain /etc/telecom-engine.env \
-  /etc/nginx/nginx.conf /etc/hysteria/config.yaml \
+for path in /usr/local/etc/xray/domain /usr/local/etc/xray/config.json \
+  /etc/telecom-engine.env /etc/nginx/nginx.conf /etc/hysteria/config.yaml \
   /etc/wireguard/mubx-client.conf \
   /etc/zivpn/zivpn.crt /etc/zivpn/zivpn.key; do
   backup_file "$path"
@@ -79,6 +83,12 @@ if [ -f /etc/hysteria/config.yaml ]; then
   sed -i "s|/etc/letsencrypt/live/[^/]*/|/etc/letsencrypt/live/$d/|g" \
     /etc/hysteria/config.yaml
 fi
+# The rendered Xray config embeds the certificate path for the plain
+# VLESS TCP+TLS (8443) inbound; re-point it at the new domain's cert.
+if [ -f /usr/local/etc/xray/config.json ]; then
+  sed -i "s|/etc/letsencrypt/live/[^/]*/|/etc/letsencrypt/live/$d/|g" \
+    /usr/local/etc/xray/config.json
+fi
 if [ -d /etc/zivpn ]; then
   ln -sfn "/etc/letsencrypt/live/$d/fullchain.pem" /etc/zivpn/zivpn.crt
   ln -sfn "/etc/letsencrypt/live/$d/privkey.pem" /etc/zivpn/zivpn.key
@@ -93,8 +103,9 @@ if [ -f /etc/wireguard/mubx-client.conf ]; then
 fi
 nginx -t
 haproxy -c -f /etc/haproxy/haproxy.cfg
+xray run -test -config /usr/local/etc/xray/config.json
 systemctl daemon-reload
-for svc in nginx haproxy hysteria zivpn; do
+for svc in nginx haproxy hysteria zivpn xray; do
   if [ "${was_active[$svc]}" -eq 1 ]; then
     if ! systemctl restart "$svc" || ! systemctl is-active --quiet "$svc"; then
       printf '[!] Failed to restart %s after domain migration\n' "$svc" >&2

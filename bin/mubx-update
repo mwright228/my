@@ -120,6 +120,10 @@ done
 backup_path /usr/local/etc/xray/config.json
 backup_path /etc/haproxy/haproxy.cfg
 backup_path /etc/nginx/nginx.conf
+# Reality was removed from MUB-X; snapshot anything older installs left so a
+# failed update can restore it, then remove the files below.
+backup_path /usr/local/bin/reality-fronts
+backup_path /usr/local/lib/mubx/reality-build.sh
 
 # 3) Install the refreshed scripts, libs and units. mubx-update itself is
 #    swapped at the very end (it is the script currently running). The
@@ -150,6 +154,10 @@ if [ -e /etc/systemd/system/dnstt.service ]; then
     /usr/local/bin/dnstt-server /usr/local/bin/dnstt-client
   rm -rf /etc/dnstt
 fi
+# Reality (fronts manager + builder lib) was removed upstream; drop stale
+# copies from upgraded hosts. Snapshot above, remove here - the Reality
+# inbounds disappear from the Xray config on the re-render below.
+rm -f /usr/local/bin/reality-fronts /usr/local/lib/mubx/reality-build.sh
 systemctl daemon-reload
 for f in "$ROOT"/bin/*; do
   [ -f "$f" ] || continue
@@ -159,10 +167,10 @@ done
 
 # 4) Re-render the generated configs from the freshly pulled templates.
 #    Each candidate is validated before anything live is replaced.
-source ./lib/reality-build.sh
+source ./lib/render.sh
 mubx_users_seed
 tmp="$(mktemp -d)"
-mubx_xray_render configs/xray.json configs/reality-inbound.json "$tmp/xray.json"
+mubx_xray_render configs/xray.json "$tmp/xray.json"
 mubx_haproxy_render configs/haproxy.cfg "$tmp/haproxy.cfg"
 mubx_nginx_render configs/nginx.conf "$tmp/nginx.conf"
 xray run -test -config "$tmp/xray.json"

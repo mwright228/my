@@ -49,12 +49,15 @@ for path in /usr/local/bin/menu /usr/local/bin/link-gen /usr/local/bin/add-user 
   /usr/local/bin/mubx-tune /usr/local/bin/mubx-adaptive \
   /usr/local/bin/mubx-probe /usr/local/bin/mubx-restart-failed \
   /usr/local/bin/mubx-update /usr/local/bin/set-domain /usr/local/bin/mubx-cron \
-  /usr/local/bin/reality-fronts /usr/local/bin/mubx-users /usr/local/bin/svc-status \
+  /usr/local/bin/mubx-users /usr/local/bin/svc-status \
   /usr/local/bin/generate-secrets /usr/local/bin/uninstall.sh; do
   restore_path "$path"
 done
 restore_path /usr/local/lib/mubx/common.sh
-restore_path /usr/local/lib/mubx/reality-build.sh
+restore_path /usr/local/lib/mubx/render.sh
+# Reality was removed from MUB-X; make sure no stale copy of its manager or
+# builder lib survives the uninstall (nothing restores them).
+rm -f /usr/local/bin/reality-fronts /usr/local/lib/mubx/reality-build.sh
 WAN_IF="$(cat /etc/mubx/wan-interface 2>/dev/null || true)"
 if [ -f /etc/mubx/iptables.previous ]; then
   if ! iptables-restore < /etc/mubx/iptables.previous; then

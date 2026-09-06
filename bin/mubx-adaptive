@@ -41,37 +41,19 @@ HOST="${DOMAIN:-127.0.0.1}"
 
 # Preference order: breaks ties between transports with equal scores and
 # ranks UDP transports, whose latency cannot be measured generically.
-ORDER=(xray-websocket xray-reality wireguard hysteria openvpn-udp)
+ORDER=(xray-websocket wireguard hysteria openvpn-udp)
 
 declare -A score=()
 declare -A detail=()
 
 # --- TCP transports: measured through the public name/address ---
-# Reality and websocket share the same public 443 endpoint (HAProxy), so the
-# connect latency is measured once and applied to both. Reality additionally
-# needs at least one configured front inbound (10443+N) actually listening;
-# without that it scores zero no matter how fast port 443 answers.
-reality_ok=0
-_reality_ports="${REALITY_FRONTS:-www.apple.com}"
-_i=0
-for _front in $_reality_ports; do
-  if listener_up tcp $((10443 + _i)); then
-    reality_ok=1
-    break
-  fi
-  _i=$((_i + 1))
-done
+# Every HTTP/WS transport and the raw Shadowsocks-443 channel share the
+# public 443 endpoint (HAProxy TLS/non-TLS demux), so the connect latency
+# is measured once and applied to xray-websocket.
 if lat="$(tcp_latency_ms "$HOST" 443)"; then
   if [ -n "$lat" ]; then
     score[xray-websocket]=$((100000 - lat))
     detail[xray-websocket]="${lat}ms TCP connect"
-    if [ "$reality_ok" -eq 1 ]; then
-      score[xray-reality]=$((100000 - lat))
-      detail[xray-reality]="${lat}ms TCP connect, front inbound listening"
-    else
-      score[xray-reality]=0
-      detail[xray-reality]="no Reality front inbound is listening"
-    fi
   fi
 fi
 
