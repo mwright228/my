@@ -107,6 +107,7 @@ while IFS=$'\t' read -r tag proto port; do
     trojan-ws)     label="Trojan WebSocket (WS)" ;;
     vless-httpupgrade) label="VLESS HTTPUpgrade" ;;
     vless-xhttp)   label="VLESS xHTTP" ;;
+    vless-tls-tcp) label="VLESS TCP TLS (8443)" ;;
     shadowsocks-*) name="${tag#shadowsocks-}"
                    label="Shadowsocks WS ($name)" ;;
     ssplain-*)     name="${tag#ssplain-}"

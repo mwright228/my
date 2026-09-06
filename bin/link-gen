@@ -102,7 +102,7 @@ if command -v zivpn >/dev/null 2>&1 && [ -n "${ZIVPN_PASS:-}" ]; then
 fi
 
 # --- 3. Xray transports ---------------------------------------------------
-card xray "Xray transports" "(TCP 80 / 443)"
+card xray "Xray transports" "(TCP 80 / 443 / 8443)"
 sub "VLESS WebSocket (TLS)"
 block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-ws#MUBX-VLESS-WS"
 sub "VLESS WebSocket (plain, port 80)"
@@ -111,6 +111,9 @@ sub "VLESS HTTPUpgrade"
 block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=httpupgrade&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-httpupgrade#MUBX-HTTPUpgrade"
 sub "VLESS xHTTP"
 block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=xhttp&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-xhttp#MUBX-XHTTP"
+sub "VLESS TCP TLS (own cert, port 8443)"
+block "vless://${UUID}@${DOMAIN}:8443?encryption=none&security=tls&type=tcp&sni=${DOMAIN}#MUBX-VLESS-TLS"
+note "  plain VLESS+TLS with your own certificate - no Reality front, no WS; verifies cleanly"
 sub "VLESS Reality (Vision) - one link per SNI front"
 for _front in ${REALITY_FRONTS:-www.apple.com}; do
   [ -n "$_front" ] || continue

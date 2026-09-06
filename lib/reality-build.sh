@@ -149,6 +149,7 @@ mubx_xray_render() { # $1 base_template  $2 inbound_template  $3 out
   local base tmpbase i=0 extra='[]' obj f
   tmpbase="$(mktemp /tmp/mubx-xray-base.XXXXXX)"
   sed -e "s|__UUID__|${UUID:?UUID is not loaded; run the installer first}|g" \
+      -e "s|__DOMAIN__|${DOMAIN:?DOMAIN is not loaded; run the installer first}|g" \
     "$base_tpl" > "$tmpbase" || { rm -f "$tmpbase"; return 1; }
   reality_fronts
   for f in "${FRONTS[@]}"; do

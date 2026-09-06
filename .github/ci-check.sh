@@ -33,8 +33,9 @@ done
 render_xray() { # $1 tmpdir  $2 users store (may be empty)  -> writes "$1/xray.json" "$1/haproxy.cfg"
   local tmp="$1" users="$2"
   (
+    export DOMAIN="example.com"
     if [ -n "$users" ]; then
-      export MUBX_USERS_FILE="$users" DOMAIN="example.com"
+      export MUBX_USERS_FILE="$users"
     fi
     export UUID="11111111-2222-3333-4444-555555555555" \
       REALITY_PRIVKEY="dummy-private-key-material" \
@@ -60,6 +61,30 @@ render_nginx() { # $1 tmpdir  $2 users store (may be empty)  -> writes "$1/nginx
     bash -c 'source lib/reality-build.sh && mubx_nginx_render configs/nginx.conf "$1"' \
       x "$tmp/nginx.conf"
   )
+}
+
+# The plain VLESS TCP+TLS inbound every valid render must carry: public
+# bind on 8443, tcp + tls with the cert paths substituted for DOMAIN.
+check_vless_tls() { # $1 xray config  $2 expected client count
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+expected = int(sys.argv[2])
+matches = [i for i in cfg["inbounds"] if i["tag"] == "vless-tls-tcp"]
+assert len(matches) == 1, "expected 1 vless-tls-tcp inbound"
+vt = matches[0]
+assert vt["listen"] == "0.0.0.0", vt["listen"]
+assert vt["port"] == 8443, vt["port"]
+assert vt["protocol"] == "vless"
+assert vt["streamSettings"]["network"] == "tcp"
+assert vt["streamSettings"]["security"] == "tls"
+cert = vt["streamSettings"]["tlsSettings"]["certificates"][0]
+assert cert["certificateFile"] == "/etc/letsencrypt/live/example.com/fullchain.pem", cert
+assert cert["keyFile"] == "/etc/letsencrypt/live/example.com/privkey.pem", cert
+clients = vt["settings"]["clients"]
+assert len(clients) == expected, (len(clients), expected)
+print("  vless TLS TCP OK: :8443 with %d client(s)" % len(clients))
+PY
 }
 
 # The one Shadowsocks inbound every valid render must carry for a user.
@@ -126,6 +151,7 @@ PY
     }
     check_ss_user "$tmp/xray.json" admin "11111111-2222-3333-4444-555555555555" 10006 || fail=1
     check_ss_plain_user "$tmp/xray.json" admin "11111111-2222-3333-4444-555555555555" 8388 || fail=1
+    check_vless_tls "$tmp/xray.json" 1 || fail=1
     if render_nginx "$tmp" ""; then
       grep -q '#MUBX_SS_LOCATIONS#' "$tmp/nginx.conf" && {
         echo "Nginx SS marker was not expanded (legacy admin)"
@@ -183,6 +209,7 @@ PY
     check_ss_user "$tmp/xray.json" alice "22222222-3333-4444-5555-666666666666" 10007 || fail=1
     check_ss_plain_user "$tmp/xray.json" admin "11111111-2222-3333-4444-555555555555" 8388 || fail=1
     check_ss_plain_user "$tmp/xray.json" alice "22222222-3333-4444-5555-666666666666" 8389 || fail=1
+    check_vless_tls "$tmp/xray.json" 2 || fail=1
     if render_nginx "$tmp" "$tmp/users.json"; then
       for route in '/ss-admin' '/ss-alice'; do
         [ "$(grep -c "location $route" "$tmp/nginx.conf")" -eq 2 ] || {

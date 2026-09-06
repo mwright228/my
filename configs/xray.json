@@ -164,6 +164,44 @@
         ],
         "routeOnly": false
       }
+    },
+    {
+      "tag": "vless-tls-tcp",
+      "listen": "0.0.0.0",
+      "port": 8443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "__UUID__"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "certificates": [
+            {
+              "certificateFile": "/etc/letsencrypt/live/__DOMAIN__/fullchain.pem",
+              "keyFile": "/etc/letsencrypt/live/__DOMAIN__/privkey.pem"
+            }
+          ],
+          "alpn": [
+            "http/1.1"
+          ]
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": false
+      }
     }
   ],
   "outbounds": [
