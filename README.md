@@ -30,7 +30,7 @@ release; the upstream project does not publish an armhf binary.
 
 - **HAProxy 443 splitter:** Listens on port 443 and demultiplexes by content with zero decryption. Any TLS ClientHello — your domain, a carrier bug-host, any SNI — goes to the Nginx loopback TLS terminator (the WS-family transports); any non-TLS connection (raw Shadowsocks AEAD packets) goes to the shared SS-443 Xray inbound. No SNI allow-lists, no fronts to manage.
 - **Universal Bug-Host Multiplexer:** Terminates TLS on loopback (`127.0.0.1:20443`) via Nginx, accepting connections regardless of custom carrier SNI mismatches.
-- **Multi-Protocol Core (Xray-core):** Full support for VLESS-WebSocket, VLESS-HTTPUpgrade, VMess, Trojan and Shadowsocks (per user) — plus a plain **VLESS TCP+TLS** inbound on `8443` serving your own Let's Encrypt certificate, a cert-verifying fallback when WebSocket paths are blocked or unsupported by a client.
+- **Multi-Protocol Core (Xray-core):** Full support for VLESS-WebSocket, VLESS-HTTPUpgrade, VMess, Trojan and Shadowsocks (per user). Every TLS transport rides public port **443** (WebSocket transports via the nginx terminator, ShadowTLS via decoy-SNI routing); plain (non-TLS) transports ride **80**.
 - **Per-user identities & usage:** Every user (`mubx-users` / menu `10`, also auto-created with each SSH account) gets their own UUID across every transport — revoke one user without rekeying the rest. Shadowsocks follows the same model: each user gets their own WS inbound (`127.0.0.1:10006+`) and nginx route (`/ss-<user>` on 80/443) keyed to their UUID, plus a plain Shadowsocks TCP inbound (`0.0.0.0:8388+`, no WS/TLS) so any SS client — v2rayNG included — connects without a plugin. Public port 443 is shared between the TLS WebSocket transports and a raw **Shadowsocks TCP** channel: HAProxy sends every non-TLS connection to a shared SS inbound that carries the primary (`admin`) identity, which is the classic "SS on 443" link that works in any client. User add/remove re-renders both Xray and Nginx atomically. Xray's stats API is enabled, so per-user traffic can be read back with `mubx-users usage`. The legacy shared identity survives as the seeded `admin` user, keeping old links valid. `link-gen [bug-host] [user]` prints links for any user.
 - **Squid & SSH Ingestion:** Dropbear SSH via direct ports (`2222`, `109`, `53`) and Squid HTTP CONNECT proxies (`8080` & `3128`).
 - **Mobile UDP Gaming Bridge:** Multi-port BadVPN UDPGW (`7100–7700`) instances forward low-latency UDP traffic for games and VoIP.
@@ -59,7 +59,6 @@ release; the upstream project does not publish an armhf binary.
 | **10006+** | TCP | WebSocket | Xray-core | Shadowsocks WS Inbound (one per user) |
 | **8388+** | TCP | Shadowsocks | Xray-core | Plain SS TCP Inbound (one per user, no WS/TLS) |
 | **443** | TCP | Shadowsocks | HAProxy → Xray | Raw SS TCP on 443 (shared `admin` identity, no WS/TLS/plugin) |
-| **8443** | TCP | TLS | Xray-core | VLESS TCP+TLS Inbound (own cert, no WS) |
 | **1194 / 2200** | TCP / UDP | OpenVPN | OpenVPN | Dual-Stack VPN Tunnel |
 | **51820** | UDP | WireGuard | Kernel | WireGuard L3 Interface |
 | **4433** | UDP | Hysteria 2 | Hysteria | High-performance UDP tunnel |
@@ -119,7 +118,8 @@ only credential.
 - **ShadowTLS v3 (via sing-box):** the strongest anti-DPI route — clients
   complete a real TLS handshake with a decoy SNI (default `www.microsoft.com`,
   override at install with `MUBX_SHADOWTLS_SNI=`) before negotiating the
-  admin identity's SS-2022 session underneath, all on TCP 8448. Xray cannot
+  admin identity's SS-2022 session underneath. It rides public **443** via
+  HAProxy decoy-SNI routing to sing-box on loopback 8448. Xray cannot
   speak ShadowTLS, so MUB-X ships a pinned, checksum-verified sing-box
   (`/usr/local/bin/sing-box`, unit `singbox.service`). Needs NekoBox,
   sing-box or Shadowrocket-style clients; the full client config ships in

@@ -109,12 +109,11 @@ followed by `systemctl daemon-reload`. When in doubt, re-run `install.sh`.
 2. **Full status** — `svc-status` (menu `7`): all rows `Running`. The Xray
    transports list should now include one `Xray Shadowsocks WS (<user>)` and
    one `Xray Shadowsocks TCP (<user>)` row per user (admin plus any others
-   you created), a shared `Xray Shadowsocks TCP (443 shared)` row, and an
-   `Xray VLESS TCP TLS (8443)` row, alongside VLESS/VMess/Trojan WS,
-   HTTPUpgrade and xHTTP. No Reality rows remain.
+   you created), a shared `Xray Shadowsocks TCP (443 shared)` row, alongside
+   VLESS/VMess/Trojan WS, HTTPUpgrade and xHTTP. No Reality rows remain and
+   no VLESS TCP TLS (8443) row remains.
 3. **New protocol smoke test** — `link-gen` (menu `2`, user `admin`):
-   the Xray transports card must print a VLESS TCP TLS link on `8443`
-   (`#MUBX-VLESS-TLS`) plus plain (port 80) twins of HTTPUpgrade, xHTTP,
+   the Xray transports card must print plain (port 80) twins of HTTPUpgrade, xHTTP,
    VMess-WS and Trojan-WS, and the Shadowsocks card must print a TLS (443),
    plain WS (80), plain TCP on 443 (`#MUBX-SS-443`) and plain TCP (8388)
    `ss://` link. Import the plain TCP ones into v2rayNG / Shadowrocket /
@@ -168,5 +167,6 @@ The URLs are HTTPS-only; the token in the path is the only credential.
   `mubx-update` both stage the binary and render `/etc/sing-box/config.json`
   from `SHADOWTLS_PASS` (added to the env file automatically by
   `generate-secrets`) and the admin SS-2022 key. Verify with
-  `systemctl status singbox` and `ss -ltnp | grep 8448`. Client configs are
-  in the subscription files (`MUBX-ShadowTLS` node).
+  `systemctl status singbox` and `ss -ltnp | grep 8448` (loopback only -
+  clients reach it on 443 via the decoy-SNI route). Client configs are
+  in the subscription files (`MUBX-ShadowTLS` node, port 443, decoy SNI).

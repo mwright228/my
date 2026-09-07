@@ -105,7 +105,6 @@ while IFS=$'\t' read -r tag proto port; do
     trojan-ws)     label="Trojan WebSocket (WS)" ;;
     vless-httpupgrade) label="VLESS HTTPUpgrade" ;;
     vless-xhttp)   label="VLESS xHTTP" ;;
-    vless-tls-tcp) label="VLESS TCP TLS (8443)" ;;
     shadowsocks-*) name="${tag#shadowsocks-}"
                    label="Shadowsocks WS ($name)" ;;
     ssplain-*)     name="${tag#ssplain-}"
@@ -132,7 +131,7 @@ row "WireGuard (51820)"   wg-quick@wg0   udp 51820
 row "Hysteria 2 (4433)"   hysteria       udp 4433
 row "ZivPN UDP VPN (5667)" zivpn         udp 5667
 if [ -f /etc/systemd/system/singbox.service ] && [ -s /etc/sing-box/config.json ]; then
-  row "ShadowTLS v3 + SS-2022 (8448)" singbox tcp 8448
+  row "ShadowTLS v3 + SS-2022 (443 via SNI)" singbox tcp 8448
 fi
 row "Dropbear SSH (109, 2222, 53)" dropbear  tcp 2222
 group_close

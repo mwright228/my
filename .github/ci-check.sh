@@ -59,27 +59,21 @@ render_nginx() { # $1 tmpdir  $2 users store (may be empty)  -> writes "$1/nginx
   )
 }
 
-# The plain VLESS TCP+TLS inbound every valid render must carry: public
-# bind on 8443, tcp + tls with the cert paths substituted for DOMAIN.
-check_vless_tls() { # $1 xray config  $2 expected client count
-  python3 - "$1" "$2" <<'PY'
+# The every-TLS-on-443 invariant every valid render must uphold: no Xray
+# TLS inbound on any port other than 443 (WS transports terminate at nginx
+# on loopback 20443; sing-box's ShadowTLS rides 443 via SNI on loopback
+# 8448). Also verifies the vless-tls-tcp inbound is gone.
+check_tls_ports() { # $1 xray config
+  python3 - "$1" <<'PY'
 import json, sys
 cfg = json.load(open(sys.argv[1]))
-expected = int(sys.argv[2])
-matches = [i for i in cfg["inbounds"] if i["tag"] == "vless-tls-tcp"]
-assert len(matches) == 1, "expected 1 vless-tls-tcp inbound"
-vt = matches[0]
-assert vt["listen"] == "0.0.0.0", vt["listen"]
-assert vt["port"] == 8443, vt["port"]
-assert vt["protocol"] == "vless"
-assert vt["streamSettings"]["network"] == "tcp"
-assert vt["streamSettings"]["security"] == "tls"
-cert = vt["streamSettings"]["tlsSettings"]["certificates"][0]
-assert cert["certificateFile"] == "/etc/letsencrypt/live/example.com/fullchain.pem", cert
-assert cert["keyFile"] == "/etc/letsencrypt/live/example.com/privkey.pem", cert
-clients = vt["settings"]["clients"]
-assert len(clients) == expected, (len(clients), expected)
-print("  vless TLS TCP OK: :8443 with %d client(s)" % len(clients))
+bad = [i["tag"] for i in cfg["inbounds"]
+       if (i.get("streamSettings") or {}).get("security") == "tls"
+       and i.get("port") != 443]
+assert not bad, "TLS inbounds on non-443 ports: %s" % bad
+assert not any(i["tag"] == "vless-tls-tcp" for i in cfg["inbounds"]), \
+    "vless-tls-tcp inbound should be removed"
+print("  all Xray TLS inbounds on 443 only")
 PY
 }
 
@@ -163,6 +157,14 @@ check_haproxy_split() { # $1 haproxy config
     echo "HAProxy TLS -> nginx rule missing"
     fail=1
   }
+  grep -q 'use_backend srv_singbox if { req.ssl_sni -i ' "$1" || {
+    echo "HAProxy ShadowTLS decoy-SNI rule missing"
+    fail=1
+  }
+  grep -q 'server srv_singbox 127.0.0.1:8448' "$1" || {
+    echo "HAProxy singbox backend target missing"
+    fail=1
+  }
   grep -q 'default_backend srv_ss443' "$1" || {
     echo "HAProxy default backend (SS-443) missing"
     fail=1
@@ -175,14 +177,14 @@ check_haproxy_split() { # $1 haproxy config
     echo "HAProxy nginx backend target missing"
     fail=1
   }
-  echo "  haproxy 443 split OK (TLS -> nginx, non-TLS -> ss443)"
+  echo "  haproxy 443 split OK (stls-SNI -> singbox, TLS -> nginx, non-TLS -> ss443)"
 }
 
 say "Render smoke test (legacy single identity)"
 if command -v jq >/dev/null 2>&1; then
   tmp="$(mktemp -d)"
   if render_xray "$tmp" ""; then
-    check_vless_tls "$tmp/xray.json" 1 || fail=1
+    check_tls_ports "$tmp/xray.json" || fail=1
     check_ss_user "$tmp/xray.json" admin "11111111-2222-3333-4444-555555555555" 10006 || fail=1
     check_ss_plain_user "$tmp/xray.json" admin "11111111-2222-3333-4444-555555555555" 8388 || fail=1
     check_ss443 "$tmp/xray.json" "11111111-2222-3333-4444-555555555555" || fail=1
@@ -231,7 +233,7 @@ assert cfg["policy"]["levels"]["0"]["statsUserUplink"] is True, "policy missing"
 tags = {i["tag"] for i in cfg["inbounds"]}
 assert "api" in tags, "api inbound missing"
 assert cfg["routing"]["rules"][0]["inboundTag"] == ["api"], "api routing missing"
-for tag in ("vless-ws", "vmess-ws", "trojan-ws", "vless-httpupgrade", "vless-xhttp", "vless-tls-tcp"):
+for tag in ("vless-ws", "vmess-ws", "trojan-ws", "vless-httpupgrade", "vless-xhttp"):
     inbound = next(i for i in cfg["inbounds"] if i["tag"] == tag)
     clients = inbound["settings"]["clients"]
     assert len(clients) == len(users), (tag, len(clients))
@@ -244,7 +246,7 @@ PY
     check_ss_user "$tmp/xray.json" alice "22222222-3333-4444-5555-666666666666" 10007 || fail=1
     check_ss_plain_user "$tmp/xray.json" admin "11111111-2222-3333-4444-555555555555" 8388 || fail=1
     check_ss_plain_user "$tmp/xray.json" alice "22222222-3333-4444-5555-666666666666" 8389 || fail=1
-    check_vless_tls "$tmp/xray.json" 2 || fail=1
+    check_tls_ports "$tmp/xray.json" || fail=1
     check_ss443 "$tmp/xray.json" "11111111-2222-3333-4444-555555555555" || fail=1
     check_haproxy_split "$tmp/haproxy.cfg" || fail=1
     check_no_reality "$tmp/xray.json" "$tmp/haproxy.cfg" || fail=1
@@ -399,6 +401,7 @@ cfg = json.load(open(sys.argv[1]))
 stls = [i for i in cfg["inbounds"] if i["type"] == "shadowtls"]
 assert len(stls) == 1, "expected 1 shadowtls inbound"
 st = stls[0]
+assert st["listen"] == "127.0.0.1", st["listen"]
 assert st["listen_port"] == 8448, st["listen_port"]
 assert st["version"] == 3, st["version"]
 # sing-box v1.10+ carries the ShadowTLS password in users[]; older
@@ -412,11 +415,12 @@ ss = [i for i in cfg["inbounds"] if i["type"] == "shadowsocks"][0]
 assert ss["listen"] == "127.0.0.1" and ss["listen_port"] == 18500
 assert ss["method"] == "2022-blake3-aes-256-gcm"
 assert len(base64.b64decode(ss["password"])) == 32, "admin key must be 32 bytes"
-print("  sing-box render OK: shadowtls v3 :8448 -> ss2022 127.0.0.1:18500 (32B admin key)")
+print("  sing-box render OK: shadowtls v3 loopback :8448 (SNI-routed from 443) -> ss2022 127.0.0.1:18500 (32B admin key)")
 PY
     # The subscription for admin must contain the ShadowTLS node.
     tok="$(sed 's|https://example.com/sub/||; s|/index.txt||' "$tmp4/url")"
     if grep -q 'MUBX-ShadowTLS' "$tmp4/sub/$tok/clash.yaml" 2>/dev/null && \
+       grep -q '\"port\": 443' "$tmp4/sub/$tok/clash.yaml" && \
        python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); tags=[o["tag"] for o in d["outbounds"]]; assert "MUBX-ShadowTLS" in tags and "MUBX-ShadowTLS-wrap" in tags, tags' "$tmp4/sub/$tok/singbox.json" 2>/dev/null; then
       echo "  ShadowTLS subscription entries OK (clash + sing-box)"
     else

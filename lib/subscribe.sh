@@ -106,8 +106,6 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
     "$uuid" "$dom" "$dom" "$dom"
   printf 'vless://%s@%s:443?encryption=none&security=tls&type=xhttp&host=%s&sni=%s&path=%%2Fvless-xhttp#MUBX-XHTTP\n' \
     "$uuid" "$dom" "$dom" "$dom"
-  printf 'vless://%s@%s:8443?encryption=none&security=tls&type=tcp&sni=%s#MUBX-VLESS-TLS\n' \
-    "$uuid" "$dom" "$dom"
   printf 'vmess://%s\n' \
     "$(printf '{"v":"2","ps":"MUBX-VMess","add":"%s","port":"443","id":"%s","aid":"0","net":"ws","path":"/vmess-ws","type":"none","host":"%s","tls":"tls","sni":"%s"}' \
       "$dom" "$uuid" "$dom" "$dom" | mubx_b64url)"
@@ -171,10 +169,6 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
         "ws-opts": {path: "/vless-httpupgrade", headers: {Host: $dom}}
       }]
     + [{
-        name: "MUBX-VLESS-TLS", type: "vless", server: $dom, port: 8443,
-        uuid: $uuid, udp: true, tls: true, servername: $dom, network: "tcp"
-      }]
-    + [{
         name: "MUBX-VMess", type: "vmess", server: $dom, port: 443,
         uuid: $uuid, alterId: 0, cipher: "auto", udp: true, tls: true,
         servername: $dom, network: "ws",
@@ -194,7 +188,7 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
       }]
     + ss22
     + (if $stls != "" then [{
-        name: "MUBX-ShadowTLS", type: "ss", server: $dom, port: 8448,
+        name: "MUBX-ShadowTLS", type: "ss", server: $dom, port: 443,
         cipher: "2022-blake3-aes-256-gcm", password: $adminkey, udp: true,
         plugin: "shadow-tls", "plugin-opts": {
           version: 3, password: $stls, host: $sni
@@ -237,8 +231,6 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
           {type: "vless", tag: "MUBX-HTTPUpgrade", server: $dom, server_port: 443, uuid: $uuid,
            tls: {enabled: true, server_name: $dom},
            transport: {type: "httpupgrade", path: "/vless-httpupgrade", headers: {Host: $dom}}},
-          {type: "vless", tag: "MUBX-VLESS-TLS", server: $dom, server_port: 8443, uuid: $uuid,
-           tls: {enabled: true, server_name: $dom}},
           {type: "vmess", tag: "MUBX-VMess", server: $dom, server_port: 443, uuid: $uuid,
            security: "auto", alter_id: 0,
            tls: {enabled: true, server_name: $dom},
@@ -260,11 +252,11 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
            method: "aes-256-gcm", password: $uuid}
         ]
         + (if $stls != "" then [{
-            type: "shadowtls", tag: "MUBX-ShadowTLS-wrap", server: $dom, server_port: 8448,
+            type: "shadowtls", tag: "MUBX-ShadowTLS-wrap", server: $dom, server_port: 443,
             version: 3, password: $stls,
             tls: {enabled: true, server_name: $sni}
           }, {
-            type: "shadowsocks", tag: "MUBX-ShadowTLS", server: $dom, server_port: 8448,
+            type: "shadowsocks", tag: "MUBX-ShadowTLS", server: $dom, server_port: 443,
             method: "2022-blake3-aes-256-gcm", password: $adminkey, detour: "MUBX-ShadowTLS-wrap"
           }] else [] end)
         + (if $isadmin == 1 then [{

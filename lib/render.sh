@@ -2,7 +2,7 @@
 # MUB-X configuration renderers (Xray / HAProxy / Nginx).
 #
 # Xray: renders the base template (VLESS/VMess/Trojan WS, HTTPUpgrade,
-# xHTTP, plain VLESS TCP+TLS on 8443) and then appends the per-user
+# xHTTP) and then appends the per-user
 # Shadowsocks inbounds (WS loopback + plain public TCP) plus the shared
 # SS-on-443 inbound that HAProxy fronts from public port 443.
 #
@@ -223,7 +223,8 @@ mubx_ss_443_apply() { # $1 rendered config file  $2 ss-443 inbound template
   mv -f "$cfg.mubx" "$cfg"
 }
 
-# Render /etc/sing-box/config.json: ShadowTLS v3 on public 8448 whose
+# Render /etc/sing-box/config.json: ShadowTLS v3 on loopback 8448 (HAProxy
+# SNI-routes the decoy hello there from public 443) whose
 # "detour" carries a bare SS-2022 inbound (the admin/primary identity's
 # 32-byte key from lib/subscribe.sh). Clients speak TLS to a decoy SNI and
 # only then negotiate SS-2022 - the strongest anti-DPI pairing MUB-X ships.
@@ -274,5 +275,6 @@ mubx_nginx_render() { # $1 template  $2 out
 # non-TLS connection on public 443 -> the shared SS-443 inbound.
 mubx_haproxy_render() { # $1 template  $2 out
   local tmpl="$1" out="$2"
-  install -m 0644 "$tmpl" "$out"
+  sed -e "s|__SHADOWTLS_SNI__|${SHADOWTLS_SNI:-www.microsoft.com}|g" \
+    "$tmpl" > "$out"
 }
