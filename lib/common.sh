@@ -44,7 +44,10 @@ die()  { echo -e "${C_CORAL}[✕]${C_RESET} $*" >&2; exit 1; }
 
 load_mubx_env() {
   local env_file="${1:-/etc/telecom-engine.env}" key value
-  [ -r "$env_file" ] || die "Missing MUB-X environment file: $env_file"
+  if [ ! -r "$env_file" ]; then
+    [ -n "${DOMAIN:-}" ] && return 0
+    die "Missing MUB-X environment file: $env_file"
+  fi
   while IFS='=' read -r key value; do
     case "$key" in
       DOMAIN|UUID|HY2_PASS|ZIVPN_PASS|SSH_WS_PATH|SHADOWTLS_PASS|SHADOWTLS_SNI)
@@ -199,7 +202,8 @@ mubx_rule() {
 
 # Status Pill badges
 mubx_pill() { # $1 type (UP|DOWN|WARN|ACTIVE|OFF) $2 custom label
-  local type="${1^^}" label="${2:-}"
+  local type label="${2:-}"
+  type="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
   case "$type" in
     UP|ACTIVE|OK|PASS)
       printf '%s● %s%s' "$C_MINT" "${label:-ONLINE}" "$C_RESET"

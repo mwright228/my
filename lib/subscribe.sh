@@ -92,52 +92,72 @@ mubx_sub_token() { # $1 user name -> token on stdout
 mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
   local user="$1" uuid="$2" idx="$3" dom="$DOMAIN" hy2_range
   # Hysteria 2 (+ port hopping range when configured)
-  hy2_range="$(mubx_hy2_hopping_range)"
-  if [ -n "$hy2_range" ]; then
-    printf 'hysteria2://%s@%s:4433/?sni=%s&mport=4433%%2C%s#MUBX-Hysteria2\n' \
-      "$HY2_PASS" "$dom" "$dom" "$hy2_range"
-  else
-    printf 'hysteria2://%s@%s:4433/?sni=%s#MUBX-Hysteria2\n' "$HY2_PASS" "$dom" "$dom"
+  if mubx_user_has_proto "$user" "hysteria2"; then
+    hy2_range="$(mubx_hy2_hopping_range)"
+    if [ -n "$hy2_range" ]; then
+      printf 'hysteria2://%s@%s:4433/?sni=%s&mport=4433%%2C%s#MUBX-Hysteria2\n' \
+        "$HY2_PASS" "$dom" "$dom" "$hy2_range"
+    else
+      printf 'hysteria2://%s@%s:4433/?sni=%s#MUBX-Hysteria2\n' "$HY2_PASS" "$dom" "$dom"
+    fi
   fi
   # Xray WS-family transports over TLS on 443
-  printf 'vless://%s@%s:443?encryption=none&security=tls&type=ws&host=%s&sni=%s&path=%%2Fvless-ws#MUBX-VLESS-WS\n' \
-    "$uuid" "$dom" "$dom" "$dom"
-  printf 'vless://%s@%s:443?encryption=none&security=tls&type=httpupgrade&host=%s&sni=%s&path=%%2Fvless-httpupgrade#MUBX-HTTPUpgrade\n' \
-    "$uuid" "$dom" "$dom" "$dom"
-  printf 'vless://%s@%s:443?encryption=none&security=tls&type=xhttp&host=%s&sni=%s&path=%%2Fvless-xhttp#MUBX-XHTTP\n' \
-    "$uuid" "$dom" "$dom" "$dom"
-  printf 'vmess://%s\n' \
-    "$(printf '{"v":"2","ps":"MUBX-VMess","add":"%s","port":"443","id":"%s","aid":"0","net":"ws","path":"/vmess-ws","type":"none","host":"%s","tls":"tls","sni":"%s"}' \
-      "$dom" "$uuid" "$dom" "$dom" | mubx_b64url)"
-  printf 'trojan://%s@%s:443?security=tls&type=ws&host=%s&sni=%s&path=%%2Ftrojan-ws#MUBX-Trojan\n' \
-    "$uuid" "$dom" "$dom" "$dom"
+  if mubx_user_has_proto "$user" "vless_ws_tls"; then
+    printf 'vless://%s@%s:443?encryption=none&security=tls&type=ws&host=%s&sni=%s&path=%%2Fvless-ws#MUBX-VLESS-WS\n' \
+      "$uuid" "$dom" "$dom" "$dom"
+  fi
+  if mubx_user_has_proto "$user" "vless_httpupgrade_tls"; then
+    printf 'vless://%s@%s:443?encryption=none&security=tls&type=httpupgrade&host=%s&sni=%s&path=%%2Fvless-httpupgrade#MUBX-HTTPUpgrade\n' \
+      "$uuid" "$dom" "$dom" "$dom"
+  fi
+  if mubx_user_has_proto "$user" "vless_xhttp_tls"; then
+    printf 'vless://%s@%s:443?encryption=none&security=tls&type=xhttp&host=%s&sni=%s&path=%%2Fvless-xhttp#MUBX-XHTTP\n' \
+      "$uuid" "$dom" "$dom" "$dom"
+  fi
+  if mubx_user_has_proto "$user" "vmess_ws_tls"; then
+    printf 'vmess://%s\n' \
+      "$(printf '{"v":"2","ps":"MUBX-VMess","add":"%s","port":"443","id":"%s","aid":"0","net":"ws","path":"/vmess-ws","type":"none","host":"%s","tls":"tls","sni":"%s"}' \
+        "$dom" "$uuid" "$dom" "$dom" | mubx_b64url)"
+  fi
+  if mubx_user_has_proto "$user" "trojan_ws_tls"; then
+    printf 'trojan://%s@%s:443?security=tls&type=ws&host=%s&sni=%s&path=%%2Ftrojan-ws#MUBX-Trojan\n' \
+      "$uuid" "$dom" "$dom" "$dom"
+  fi
   # Shadowsocks WS+TLS (legacy aes-256-gcm) on the per-user nginx route
-  printf 'ss://%s@%s:443/?plugin=v2ray-plugin%%3Btls%%3Bhost%%3D%s%%3Bpath%%3D%%2Fss-%s%%3Bmux%%3D0#MUBX-SS-%s\n' \
-    "$(printf 'aes-256-gcm:%s' "$uuid" | base64 -w 0)" "$dom" "$dom" "$user" "$user"
+  if mubx_user_has_proto "$user" "ss_ws_tls"; then
+    printf 'ss://%s@%s:443/?plugin=v2ray-plugin%%3Btls%%3Bhost%%3D%s%%3Bpath%%3D%%2Fss-%s%%3Bmux%%3D0#MUBX-SS-%s\n' \
+      "$(printf 'aes-256-gcm:%s' "$uuid" | base64 -w 0)" "$dom" "$dom" "$user" "$user"
+  fi
   # Shadowsocks 2022 WS+TLS on the per-user route (when a key exists)
-  local psk
-  psk="$(mubx_ss2022_psk "$user")"
-  if [ -n "$psk" ]; then
-    printf 'ss://%s@%s:443/?plugin=v2ray-plugin%%3Btls%%3Bhost%%3D%s%%3Bpath%%3D%%2Fss22-%s%%3Bmux%%3D0#MUBX-SS22-%s\n' \
-      "$(printf '2022-blake3-aes-256-gcm:%s' "$psk" | base64 -w 0)" "$dom" "$dom" "$user" "$user"
+  if mubx_user_has_proto "$user" "ss_2022"; then
+    local psk
+    psk="$(mubx_ss2022_psk "$user")"
+    if [ -n "$psk" ]; then
+      printf 'ss://%s@%s:443/?plugin=v2ray-plugin%%3Btls%%3Bhost%%3D%s%%3Bpath%%3D%%2Fss22-%s%%3Bmux%%3D0#MUBX-SS22-%s\n' \
+        "$(printf '2022-blake3-aes-256-gcm:%s' "$psk" | base64 -w 0)" "$dom" "$dom" "$user" "$user"
+    fi
   fi
   # Shadowsocks plain TCP on the per-user port
-  printf 'ss://%s@%s:%s#MUBX-SS-%s-tcp\n' \
-    "$(printf 'aes-256-gcm:%s' "$uuid" | base64 -w 0)" \
-    "$dom" "$(( ${SS_PLAIN_BASE_PORT:-8388} + idx ))" "$user"
-  # Raw SS on 443 is the shared primary identity: only for admin.
-  if [ "$user" = "admin" ]; then
+  if mubx_user_has_proto "$user" "ss_tcp"; then
+    printf 'ss://%s@%s:%s#MUBX-SS-%s-tcp\n' \
+      "$(printf 'aes-256-gcm:%s' "$uuid" | base64 -w 0)" \
+      "$dom" "$(( ${SS_PLAIN_BASE_PORT:-8388} + idx ))" "$user"
+  fi
+  # Raw SS on 443 is the shared primary identity: only for admin if ss_tcp is allowed.
+  if [ "$user" = "admin" ] && mubx_user_has_proto "admin" "ss_tcp"; then
     printf 'ss://%s@%s:443#MUBX-SS-443\n' \
       "$(printf 'aes-256-gcm:%s' "$(mubx_primary_uuid)" | base64 -w 0)" "$dom"
   fi
   # ShadowTLS v3 + SS-2022 (when configured)
-  local stls_key
-  if [ -n "${SHADOWTLS_PASS:-}" ]; then
-    stls_key="$(mubx_ss2022_psk admin)"
-    if [ -n "$stls_key" ]; then
-      printf 'ss://%s@%s:443/?plugin=shadow-tls%%3Bhost%%3D%s%%3Bpassword%%3D%s%%3Bversion%%3D3#MUBX-ShadowTLS\n' \
-        "$(printf '2022-blake3-aes-256-gcm:%s' "$stls_key" | base64 -w 0)" "$dom" \
-        "${SHADOWTLS_SNI:-www.microsoft.com}" "$SHADOWTLS_PASS"
+  if mubx_user_has_proto "$user" "shadowtls"; then
+    local stls_key
+    if [ -n "${SHADOWTLS_PASS:-}" ]; then
+      stls_key="$(mubx_ss2022_psk admin)"
+      if [ -n "$stls_key" ]; then
+        printf 'ss://%s@%s:443/?plugin=shadow-tls%%3Bhost%%3D%s%%3Bpassword%%3D%s%%3Bversion%%3D3#MUBX-ShadowTLS\n' \
+          "$(printf '2022-blake3-aes-256-gcm:%s' "$stls_key" | base64 -w 0)" "$dom" \
+          "${SHADOWTLS_SNI:-www.microsoft.com}" "$SHADOWTLS_PASS"
+      fi
     fi
   fi
 }
@@ -145,7 +165,10 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
 # --- Clash (YAML; JSON is a valid YAML subset and Clash parses it) --------
 
 mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on stdout
-  local user="$1" uuid="$2" idx="$3" dom="$DOMAIN" hy2_range psk
+  local user="$1" uuid="$2" idx="$3" dom="$DOMAIN" hy2_range psk user_protos='["all"]'
+  if [ -f "${MUBX_USERS_FILE:-/etc/mubx/users.json}" ]; then
+    user_protos="$(jq -c --arg n "$user" '[.[] | select(.name == $n) | .protocols // ["all"]] | first // ["all"]' "${MUBX_USERS_FILE:-/etc/mubx/users.json}" 2>/dev/null || echo '["all"]')"
+  fi
   hy2_range="$(mubx_hy2_hopping_range)"
   psk="$(mubx_ss2022_psk "$user")"
   jq -n -c \
@@ -153,72 +176,77 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
     --arg hy2pass "${HY2_PASS:-}" --arg hy2range "$hy2_range" --arg psk "$psk" \
     --arg stls "${SHADOWTLS_PASS:-}" --arg sni "${SHADOWTLS_SNI:-www.microsoft.com}" \
     --arg adminkey "$(mubx_ss2022_psk admin)" \
+    --argjson protos "$user_protos" \
     --argjson ssport "$(( ${SS_PLAIN_BASE_PORT:-8388} + idx ))" \
-    --argjson isadmin "$([ "$user" = admin ] && printf 1 || printf 0)" '
+    --argjson isadmin "$([ "$user" = admin ] && printf 1 || printf 0)" "
+    ${JQ_PROTO_DEF}
+    def cur_user: {name: \$user, protocols: \$protos};
     def hy2: {
-      name: "MUBX-Hysteria2", type: "hysteria2", server: $dom, port: 4433,
-      password: $hy2pass, sni: $dom, "skip-cert-verify": false
-    } + (if $hy2range != "" then {"ports": ($hy2range | gsub(":"; "-"))} else {} end);
+      name: \"MUBX-Hysteria2\", type: \"hysteria2\", server: \$dom, port: 4433,
+      password: \$hy2pass, sni: \$dom, \"skip-cert-verify\": false
+    } + (if \$hy2range != \"\" then {\"ports\": (\$hy2range | gsub(\":\"; \"-\"))} else {} end);
     def vws(path; name): {
-      name: name, type: "vless", server: $dom, port: 443, uuid: $uuid,
-      udp: true, tls: true, servername: $dom, network: "ws",
-      "ws-opts": {path: path, headers: {Host: $dom}}
+      name: name, type: \"vless\", server: \$dom, port: 443, uuid: \$uuid,
+      udp: true, tls: true, servername: \$dom, network: \"ws\",
+      \"ws-opts\": {path: path, headers: {Host: \$dom}}
     };
-    def ss22: (if $psk != "" then [{
-      name: "MUBX-SS22", type: "ss", server: $dom, port: 443,
-      cipher: "2022-blake3-aes-256-gcm", password: $psk, udp: true,
-      plugin: "v2ray-plugin", "plugin-opts": {
-        mode: "websocket", tls: true, host: $dom, path: ("/ss22-" + $user), mux: false
+    def ss22: (if (\$psk != \"\" and (cur_user | user_has_proto(\"ss-2022\"))) then [{
+      name: \"MUBX-SS22\", type: \"ss\", server: \$dom, port: 443,
+      cipher: \"2022-blake3-aes-256-gcm\", password: \$psk, udp: true,
+      plugin: \"v2ray-plugin\", \"plugin-opts\": {
+        mode: \"websocket\", tls: true, host: \$dom, path: (\"/ss22-\" + \$user), mux: false
       }}] else [] end);
-    [ hy2 ]
-    + [ vws("/vless-ws"; "MUBX-VLESS-WS")
-      | .name = "MUBX-VLESS-WS" ]
-    + [{
-        name: "MUBX-HTTPUpgrade", type: "vless", server: $dom, port: 443,
-        uuid: $uuid, udp: true, tls: true, servername: $dom, network: "ws",
-        "ws-opts": {path: "/vless-httpupgrade", headers: {Host: $dom}}
-      }]
-    + [{
-        name: "MUBX-VMess", type: "vmess", server: $dom, port: 443,
-        uuid: $uuid, alterId: 0, cipher: "auto", udp: true, tls: true,
-        servername: $dom, network: "ws",
-        "ws-opts": {path: "/vmess-ws", headers: {Host: $dom}}
-      }]
-    + [{
-        name: "MUBX-Trojan", type: "trojan", server: $dom, port: 443,
-        password: $uuid, udp: true, tls: true, sni: $dom, network: "ws",
-        "ws-opts": {path: "/trojan-ws", headers: {Host: $dom}}
-      }]
-    + [{
-        name: "MUBX-SS", type: "ss", server: $dom, port: 443,
-        cipher: "aes-256-gcm", password: $uuid, udp: true,
-        plugin: "v2ray-plugin", "plugin-opts": {
-          mode: "websocket", tls: true, host: $dom, path: ("/ss-" + $user), mux: false
+    (if (cur_user | user_has_proto(\"hysteria2\")) then [ hy2 ] else [] end)
+    + (if (cur_user | user_has_proto(\"vless-ws\")) then [ vws(\"/vless-ws\"; \"MUBX-VLESS-WS\") ] else [] end)
+    + (if (cur_user | user_has_proto(\"vless-httpupgrade\")) then [{
+        name: \"MUBX-HTTPUpgrade\", type: \"vless\", server: \$dom, port: 443,
+        uuid: \$uuid, udp: true, tls: true, servername: \$dom, network: \"ws\",
+        \"ws-opts\": {path: \"/vless-httpupgrade\", headers: {Host: \$dom}}
+      }] else [] end)
+    + (if (cur_user | user_has_proto(\"vmess-ws\")) then [{
+        name: \"MUBX-VMess\", type: \"vmess\", server: \$dom, port: 443,
+        uuid: \$uuid, alterId: 0, cipher: \"auto\", udp: true, tls: true,
+        servername: \$dom, network: \"ws\",
+        \"ws-opts\": {path: \"/vmess-ws\", headers: {Host: \$dom}}
+      }] else [] end)
+    + (if (cur_user | user_has_proto(\"trojan-ws\")) then [{
+        name: \"MUBX-Trojan\", type: \"trojan\", server: \$dom, port: 443,
+        password: \$uuid, udp: true, tls: true, sni: \$dom, network: \"ws\",
+        \"ws-opts\": {path: \"/trojan-ws\", headers: {Host: \$dom}}
+      }] else [] end)
+    + (if (cur_user | user_has_proto(\"ss-ws\")) then [{
+        name: \"MUBX-SS\", type: \"ss\", server: \$dom, port: 443,
+        cipher: \"aes-256-gcm\", password: \$uuid, udp: true,
+        plugin: \"v2ray-plugin\", \"plugin-opts\": {
+          mode: \"websocket\", tls: true, host: \$dom, path: (\"/ss-\" + \$user), mux: false
         }
-      }]
+      }] else [] end)
     + ss22
-    + (if $stls != "" then [{
-        name: "MUBX-ShadowTLS", type: "ss", server: $dom, port: 443,
-        cipher: "2022-blake3-aes-256-gcm", password: $adminkey, udp: true,
-        plugin: "shadow-tls", "plugin-opts": {
-          version: 3, password: $stls, host: $sni
+    + (if (\$stls != \"\" and (cur_user | user_has_proto(\"shadowtls\"))) then [{
+        name: \"MUBX-ShadowTLS\", type: \"ss\", server: \$dom, port: 443,
+        cipher: \"2022-blake3-aes-256-gcm\", password: \$adminkey, udp: true,
+        plugin: \"shadow-tls\", \"plugin-opts\": {
+          version: 3, password: \$stls, host: \$sni
         }
       }] else [] end)
-    + [{
-        name: "MUBX-SS-TCP", type: "ss", server: $dom, port: $ssport,
-        cipher: "aes-256-gcm", password: $uuid, udp: true
-      }]
-    + (if $isadmin == 1 then [{
-        name: "MUBX-SS-443", type: "ss", server: $dom, port: 443,
-        cipher: "aes-256-gcm", password: $uuid, udp: true
+    + (if (cur_user | user_has_proto(\"ss-tcp\")) then [{
+        name: \"MUBX-SS-TCP\", type: \"ss\", server: \$dom, port: \$ssport,
+        cipher: \"aes-256-gcm\", password: \$uuid, udp: true
       }] else [] end)
-  '
+    + (if (\$isadmin == 1 and (cur_user | user_has_proto(\"ss-tcp\"))) then [{
+        name: \"MUBX-SS-443\", type: \"ss\", server: \$dom, port: 443,
+        cipher: \"aes-256-gcm\", password: \$uuid, udp: true
+      }] else [] end)
+  "
 }
 
 # --- sing-box client outbounds --------------------------------------------
 
 mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdout
-  local user="$1" uuid="$2" idx="$3" dom="$DOMAIN" hy2_range psk
+  local user="$1" uuid="$2" idx="$3" dom="$DOMAIN" hy2_range psk user_protos='["all"]'
+  if [ -f "${MUBX_USERS_FILE:-/etc/mubx/users.json}" ]; then
+    user_protos="$(jq -c --arg n "$user" '[.[] | select(.name == $n) | .protocols // ["all"]] | first // ["all"]' "${MUBX_USERS_FILE:-/etc/mubx/users.json}" 2>/dev/null || echo '["all"]')"
+  fi
   hy2_range="$(mubx_hy2_hopping_range)"
   psk="$(mubx_ss2022_psk "$user")"
   jq -n \
@@ -227,56 +255,71 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
     --arg psk "$psk" \
     --arg stls "${SHADOWTLS_PASS:-}" --arg sni "${SHADOWTLS_SNI:-www.microsoft.com}" \
     --arg adminkey "$(mubx_ss2022_psk admin)" \
+    --argjson protos "$user_protos" \
     --argjson ssport "$(( ${SS_PLAIN_BASE_PORT:-8388} + idx ))" \
-    --argjson isadmin "$([ "$user" = admin ] && printf 1 || printf 0)" '
-    def hop(h): (if $hy2range != "" then {"server_ports": ["4433", $hy2range]} else {} end);
+    --argjson isadmin "$([ "$user" = admin ] && printf 1 || printf 0)" "
+    ${JQ_PROTO_DEF}
+    def cur_user: {name: \$user, protocols: \$protos};
+    def hop(h): (if \$hy2range != \"\" then {\"server_ports\": [\"4433\", \$hy2range]} else {} end);
     {
       outbounds: (
-        [
-          {type: "hysteria2", tag: "MUBX-Hysteria2", server: $dom, server_port: 4433,
-           password: $hy2pass, tls: {enabled: true, server_name: $dom}} + hop(1),
-          {type: "vless", tag: "MUBX-VLESS-WS", server: $dom, server_port: 443, uuid: $uuid,
-           tls: {enabled: true, server_name: $dom},
-           transport: {type: "ws", path: "/vless-ws", headers: {Host: $dom}}},
-          {type: "vless", tag: "MUBX-HTTPUpgrade", server: $dom, server_port: 443, uuid: $uuid,
-           tls: {enabled: true, server_name: $dom},
-           transport: {type: "httpupgrade", path: "/vless-httpupgrade", headers: {Host: $dom}}},
-          {type: "vmess", tag: "MUBX-VMess", server: $dom, server_port: 443, uuid: $uuid,
-           security: "auto", alter_id: 0,
-           tls: {enabled: true, server_name: $dom},
-           transport: {type: "ws", path: "/vmess-ws", headers: {Host: $dom}}},
-          {type: "trojan", tag: "MUBX-Trojan", server: $dom, server_port: 443, password: $uuid,
-           tls: {enabled: true, server_name: $dom},
-           transport: {type: "ws", path: "/trojan-ws", headers: {Host: $dom}}},
-          {type: "shadowsocks", tag: "MUBX-SS", server: $dom, server_port: 443,
-           method: "aes-256-gcm", password: $uuid,
-           plugin: "v2ray-plugin",
-           plugin_opts: ("tls;host=" + $dom + ";path=/ss-" + $user + ";mux=0")},
-          (if $psk != "" then {
-            type: "shadowsocks", tag: "MUBX-SS22", server: $dom, server_port: 443,
-            method: "2022-blake3-aes-256-gcm", password: $psk,
-            plugin: "v2ray-plugin",
-            plugin_opts: ("tls;host=" + $dom + ";path=/ss22-" + $user + ";mux=0")
-          } else empty end),
-          {type: "shadowsocks", tag: "MUBX-SS-TCP", server: $dom, server_port: $ssport,
-           method: "aes-256-gcm", password: $uuid}
-        ]
-        + (if $stls != "" then [{
-            type: "shadowtls", tag: "MUBX-ShadowTLS-wrap", server: $dom, server_port: 443,
-            version: 3, password: $stls,
-            tls: {enabled: true, server_name: $sni}
+        (if (cur_user | user_has_proto(\"hysteria2\")) then [{
+          type: \"hysteria2\", tag: \"MUBX-Hysteria2\", server: \$dom, server_port: 4433,
+          password: \$hy2pass, tls: {enabled: true, server_name: \$dom}} + hop(1)
+        ] else [] end)
+        + (if (cur_user | user_has_proto(\"vless-ws\")) then [{
+          type: \"vless\", tag: \"MUBX-VLESS-WS\", server: \$dom, server_port: 443, uuid: \$uuid,
+          tls: {enabled: true, server_name: \$dom},
+          transport: {type: \"ws\", path: \"/vless-ws\", headers: {Host: \$dom}}
+        }] else [] end)
+        + (if (cur_user | user_has_proto(\"vless-httpupgrade\")) then [{
+          type: \"vless\", tag: \"MUBX-HTTPUpgrade\", server: \$dom, server_port: 443, uuid: \$uuid,
+          tls: {enabled: true, server_name: \$dom},
+          transport: {type: \"httpupgrade\", path: \"/vless-httpupgrade\", headers: {Host: \$dom}}
+        }] else [] end)
+        + (if (cur_user | user_has_proto(\"vmess-ws\")) then [{
+          type: \"vmess\", tag: \"MUBX-VMess\", server: \$dom, server_port: 443, uuid: \$uuid,
+          security: \"auto\", alter_id: 0,
+          tls: {enabled: true, server_name: \$dom},
+          transport: {type: \"ws\", path: \"/vmess-ws\", headers: {Host: \$dom}}
+        }] else [] end)
+        + (if (cur_user | user_has_proto(\"trojan-ws\")) then [{
+          type: \"trojan\", tag: \"MUBX-Trojan\", server: \$dom, server_port: 443, password: \$uuid,
+          tls: {enabled: true, server_name: \$dom},
+          transport: {type: \"ws\", path: \"/trojan-ws\", headers: {Host: \$dom}}
+        }] else [] end)
+        + (if (cur_user | user_has_proto(\"ss-ws\")) then [{
+          type: \"shadowsocks\", tag: \"MUBX-SS\", server: \$dom, server_port: 443,
+          method: \"aes-256-gcm\", password: \$uuid,
+          plugin: \"v2ray-plugin\",
+          plugin_opts: (\"tls;host=\" + \$dom + \";path=/ss-\" + \$user + \";mux=0\")
+        }] else [] end)
+        + (if (\$psk != \"\" and (cur_user | user_has_proto(\"ss-2022\"))) then [{
+            type: \"shadowsocks\", tag: \"MUBX-SS22\", server: \$dom, server_port: 443,
+            method: \"2022-blake3-aes-256-gcm\", password: \$psk,
+            plugin: \"v2ray-plugin\",
+            plugin_opts: (\"tls;host=\" + \$dom + \";path=/ss22-\" + \$user + \";mux=0\")
+        }] else [] end)
+        + (if (cur_user | user_has_proto(\"ss-tcp\")) then [{
+          type: \"shadowsocks\", tag: \"MUBX-SS-TCP\", server: \$dom, server_port: \$ssport,
+          method: \"aes-256-gcm\", password: \$uuid
+        }] else [] end)
+        + (if (\$stls != \"\" and (cur_user | user_has_proto(\"shadowtls\"))) then [{
+            type: \"shadowtls\", tag: \"MUBX-ShadowTLS-wrap\", server: \$dom, server_port: 443,
+            version: 3, password: \$stls,
+            tls: {enabled: true, server_name: \$sni}
           }, {
-            type: "shadowsocks", tag: "MUBX-ShadowTLS", server: $dom, server_port: 443,
-            method: "2022-blake3-aes-256-gcm", password: $adminkey, detour: "MUBX-ShadowTLS-wrap"
+            type: \"shadowsocks\", tag: \"MUBX-ShadowTLS\", server: \$dom, server_port: 443,
+            method: \"2022-blake3-aes-256-gcm\", password: \$adminkey, detour: \"MUBX-ShadowTLS-wrap\"
           }] else [] end)
-        + (if $isadmin == 1 then [{
-            type: "shadowsocks", tag: "MUBX-SS-443", server: $dom, server_port: 443,
-            method: "aes-256-gcm", password: $uuid
+        + (if (\$isadmin == 1 and (cur_user | user_has_proto(\"ss-tcp\"))) then [{
+            type: \"shadowsocks\", tag: \"MUBX-SS-443\", server: \$dom, server_port: 443,
+            method: \"aes-256-gcm\", password: \$uuid
           }] else [] end)
       ),
-      route: {final: "MUBX-Hysteria2", auto_detect_interface: true}
+      route: {final: \"MUBX-Hysteria2\", auto_detect_interface: true}
     }
-  '
+  "
 }
 
 # --- top-level writer ------------------------------------------------------
@@ -308,7 +351,36 @@ mubx_sub_generate() { # $1 user name
   cp -f "$out/index.txt" "$out/sub.txt" 2>/dev/null || true
   mubx_sub_clash "$user" "$uuid" "$idx" | jq . > "$out/clash.yaml"
   mubx_sub_singbox "$user" "$uuid" "$idx" | jq . > "$out/singbox.json"
-  chmod 0644 "$out"/*
+
+  # Publish OpenVPN profiles if user is authorized
+  if mubx_user_has_proto "$user" "openvpn"; then
+    if [ -f /etc/openvpn/client/mubx-client-tcp.ovpn ]; then
+      cp -f /etc/openvpn/client/mubx-client-tcp.ovpn "$out/openvpn-tcp.ovpn" 2>/dev/null || true
+      cp -f /etc/openvpn/client/mubx-client-tcp.ovpn "$out/openvpn-1194.ovpn" 2>/dev/null || true
+      cp -f /etc/openvpn/client/mubx-client-tcp.ovpn "$out/mubx-client-tcp.ovpn" 2>/dev/null || true
+    fi
+    if [ -f /etc/openvpn/client/mubx-client-udp.ovpn ]; then
+      cp -f /etc/openvpn/client/mubx-client-udp.ovpn "$out/openvpn-udp.ovpn" 2>/dev/null || true
+      cp -f /etc/openvpn/client/mubx-client-udp.ovpn "$out/openvpn-2200.ovpn" 2>/dev/null || true
+      cp -f /etc/openvpn/client/mubx-client-udp.ovpn "$out/mubx-client-udp.ovpn" 2>/dev/null || true
+    fi
+  else
+    rm -f "$out"/openvpn*.ovpn "$out"/mubx-client*.ovpn 2>/dev/null || true
+  fi
+
+  # Publish WireGuard config if user is authorized
+  if mubx_user_has_proto "$user" "wireguard"; then
+    if [ -f /etc/wireguard/mubx-client.conf ]; then
+      cp -f /etc/wireguard/mubx-client.conf "$out/wireguard.conf" 2>/dev/null || true
+      cp -f /etc/wireguard/mubx-client.conf "$out/wireguard-51820.conf" 2>/dev/null || true
+      cp -f /etc/wireguard/mubx-client.conf "$out/wg.conf" 2>/dev/null || true
+      cp -f /etc/wireguard/mubx-client.conf "$out/mubx-client.conf" 2>/dev/null || true
+    fi
+  else
+    rm -f "$out"/wireguard*.conf "$out"/wg*.conf 2>/dev/null || true
+  fi
+
+  chmod 0644 "$out"/* 2>/dev/null || true
   printf 'https://%s/sub/%s/index.txt\n' "$DOMAIN" "$token"
 }
 

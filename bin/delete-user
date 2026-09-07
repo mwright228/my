@@ -1,37 +1,154 @@
-#!/bin/bash
-set -euo pipefail
-[ "$(id -u)" -eq 0 ] || { echo "[!] Run delete-user as root." >&2; exit 1; }
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[ "$(id -u)" -eq 0 ] || [ "${MUBX_ALLOW_NON_ROOT:-0}" -eq 1 ] || { echo "[!] Run delete-user as root." >&2; exit 1; }
+
 if [ -r /usr/local/lib/mubx/common.sh ]; then
   source /usr/local/lib/mubx/common.sh
+  source /usr/local/lib/mubx/render.sh
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/render.sh"
 fi
+load_mubx_env 2>/dev/null || true
+
+STORE="${MUBX_USERS_FILE:-/etc/mubx/users.json}"
 
 mubx_clear
 mubx_box_top "USER DEPROVISIONING" "DELETE"
-mubx_put "$(printf '  %sSelect a user account to revoke from SSH and Xray:%s' "$C_SLATE" "$C_RESET")"
+mubx_put "$(printf '  %sSelect an account to revoke from SSH, VPNs, and Xray proxies:%s' "$C_SLATE" "$C_RESET")"
 mubx_box_bot
 printf '\n'
 
-printf '  %sUsername to delete: %s' "$C_CORAL" "$C_RESET"
-read -r username
-[[ "$username" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] || die "Bad username"
+# Gather user list from MUB-X store and Linux accounts
+declare -a user_names=()
+declare -a user_expiries=()
+declare -a user_protos=()
+declare -a user_statuses=()
 
-entry="$(getent passwd "$username" || true)"
-[ -n "$entry" ] || die "User '$username' does not exist"
-IFS=: read -r _ _ uid _ _ home shell <<< "$entry"
-[ "$uid" -ge 1000 ] || die "Refusing to delete a system account"
-[ "$shell" = "/bin/false" ] || die "Refusing to delete an account not created for MUB-X access"
-
-printf '  %sType "%s%s%s" to confirm deletion: %s' "$C_AMBER" "$C_BRIGHT" "$username" "$C_AMBER" "$C_RESET"
-read -r confirmation
-[ "$confirmation" = "$username" ] || die "Deletion cancelled"
-
-userdel -r "$username" 2>/dev/null || userdel "$username"
-
-# Drop matching Xray identity
-if [ -x /usr/local/bin/mubx-users ] && [ -f /etc/mubx/users.json ]; then
-  /usr/local/bin/mubx-users remove "$username" >/dev/null 2>&1 ||
-    warn "Xray identity for $username was not removed"
+if [ -f "$STORE" ]; then
+  while IFS=$'\t' read -r u exp proto status; do
+    [ -n "$u" ] || continue
+    [ "$u" != "admin" ] || continue
+    user_names+=("$u")
+    user_expiries+=("${exp:-never}")
+    user_protos+=("${proto:-ALL}")
+    user_statuses+=("${status:-active}")
+  done < <(jq -r '.[] | select(.name != "admin") | [.name, (.expiry // "never"), ((.protocols // ["all"]) | join(",")), (.status // "active")] | @tsv' "$STORE" 2>/dev/null || true)
 fi
 
-log "User account '$username' was successfully deleted."
+# Also check linux users with /bin/false shell that might not be in store
+while IFS=: read -r lu _ luid _ _ _ lshell; do
+  [ -n "$lu" ] || continue
+  [ "$luid" -ge 1000 ] 2>/dev/null || continue
+  [ "$lshell" = "/bin/false" ] || continue
+  [ "$lu" != "nobody" ] || continue
+  
+  # Check if already added from store
+  already_in=false
+  for u in "${user_names[@]:-}"; do
+    if [ "$u" = "$lu" ]; then
+      already_in=true
+      break
+    fi
+  done
+  
+  if [ "$already_in" = false ]; then
+    user_names+=("$lu")
+    user_expiries+=("system")
+    user_protos+=("SSH/Squid")
+    user_statuses+=("active")
+  fi
+done < <(getent passwd 2>/dev/null || cat /etc/passwd 2>/dev/null || true)
 
+count=${#user_names[@]}
+if [ "$count" -eq 0 ]; then
+  warn "No user accounts found to delete."
+  printf '\n'
+  exit 0
+fi
+
+# Render Table Header
+printf '  %s%-5s %-16s %-14s %-18s %-10s%s\n' "$C_PURPLE" "#" "ACCOUNT" "EXPIRY" "PROTOCOLS" "STATUS" "$C_RESET"
+mubx_rule
+
+for ((i=0; i<count; i++)); do
+  u="${user_names[$i]}"
+  exp="${user_expiries[$i]}"
+  raw_proto="${user_protos[$i]}"
+  status="${user_statuses[$i]}"
+  
+  # Format protocol badge
+  proto_badge="$raw_proto"
+  if declare -F mubx_proto_summary >/dev/null 2>&1; then
+    if [[ "$raw_proto" == *","* ]] || [ "$raw_proto" = "all" ] || [ "$raw_proto" = "ALL" ]; then
+      proto_json="$(jq -nc --arg p "$raw_proto" '$p | split(",")')"
+      proto_badge="$(mubx_proto_summary "$proto_json")"
+    fi
+  fi
+  
+  status_pill="$(mubx_pill "$status")"
+  printf '  %s[%d]%s  %-16s %-14s %-18s %b\n' "$C_ELECTRIC" "$((i+1))" "$C_RESET" "$u" "$exp" "$proto_badge" "$status_pill"
+done
+
+printf '\n'
+printf '  %sEnter # or Username to delete (0 to cancel): %s' "$C_CORAL" "$C_RESET"
+read -r choice
+
+[ -n "$choice" ] || exit 0
+[ "$choice" != "0" ] && [ "$choice" != "q" ] && [ "$choice" != "Q" ] || exit 0
+
+target_user=""
+if [[ "$choice" =~ ^[0-9]+$ ]]; then
+  idx=$((choice - 1))
+  if [ "$idx" -ge 0 ] && [ "$idx" -lt "$count" ]; then
+    target_user="${user_names[$idx]}"
+  else
+    die "Invalid selection number: $choice"
+  fi
+else
+  for u in "${user_names[@]}"; do
+    if [ "$u" = "$choice" ]; then
+      target_user="$u"
+      break
+    fi
+  done
+  [ -n "$target_user" ] || die "User '$choice' not found in account list"
+fi
+
+printf '\n'
+printf '  %sAre you sure you want to permanently delete user "%s%s%s"? [y/N]: %s' "$C_AMBER" "$C_BRIGHT" "$target_user" "$C_AMBER" "$C_RESET"
+read -r confirm
+if [[ ! "$confirm" =~ ^[yY]([eE][sS])?$ ]]; then
+  echo "[-] Deletion cancelled."
+  exit 0
+fi
+
+# 1. Delete Linux system account
+if id "$target_user" >/dev/null 2>&1; then
+  userdel -r "$target_user" 2>/dev/null || userdel "$target_user" 2>/dev/null || true
+fi
+
+# 2. Remove from MUB-X store & Xray
+if [ -x /usr/local/bin/mubx-users ] && [ -f "$STORE" ]; then
+  /usr/local/bin/mubx-users remove "$target_user" >/dev/null 2>&1 || true
+elif [ -f "$STORE" ]; then
+  tmp="$(mktemp)"
+  jq --arg n "$target_user" 'del(.[] | select(.name == $n))' "$STORE" > "$tmp" && mv "$tmp" "$STORE"
+fi
+
+# 3. Remove subscription files and tokens
+if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
+  source /usr/local/lib/mubx/subscribe.sh
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/subscribe.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/subscribe.sh"
+fi
+tok="$(cat "${MUBX_SUB_TOKEN_DIR:-/etc/mubx/sub-tokens}/$target_user" 2>/dev/null || true)"
+[ -z "$tok" ] || rm -rf "${MUBX_SUB_DIR:-/var/www/mubx-sub}/$tok"
+rm -f "${MUBX_SUB_TOKEN_DIR:-/etc/mubx/sub-tokens}/$target_user" "${MUBX_SS2022_DIR:-/etc/mubx/ss2022-keys}/$target_user"
+
+printf '\n'
+mubx_box_top "USER DELETED" "SUCCESS"
+mubx_kvrow "Account" "$target_user"
+mubx_kvrow "Status"  "Revoked from SSH, VPNs, Xray, and Subscription server"
+mubx_box_bot
+printf '\n'

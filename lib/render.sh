@@ -59,6 +59,169 @@ mubx_primary_uuid() {
   printf '%s\n' "${UUID:-}"
 }
 
+# --- Protocol Selection & Filtering Engine ---------------------------------
+
+# Universal jq helper definition for protocol filtering
+JQ_PROTO_DEF='
+def user_has_proto($p):
+  if (.protocols == null or .protocols == [] or (.protocols | index("all") != null)) then true
+  elif (.protocols | index($p) != null) then true
+  elif ($p == "vless" and (.protocols | any(startswith("vless")))) then true
+  elif ($p == "vmess" and (.protocols | any(startswith("vmess")))) then true
+  elif ($p == "trojan" and (.protocols | any(startswith("trojan")))) then true
+  elif ($p == "ss" and (.protocols | any(startswith("ss")))) then true
+  elif (($p == "vless-ws" or $p == "vless_ws") and ((.protocols | index("vless") != null) or (.protocols | index("vless_ws") != null) or (.protocols | index("vless_ws_tls") != null) or (.protocols | index("vless_ws_ntls") != null))) then true
+  elif (($p == "vless-httpupgrade" or $p == "vless_httpupgrade") and ((.protocols | index("vless") != null) or (.protocols | index("vless_httpupgrade") != null) or (.protocols | index("vless_httpupgrade_tls") != null) or (.protocols | index("vless_httpupgrade_ntls") != null))) then true
+  elif (($p == "vless-xhttp" or $p == "vless_xhttp") and ((.protocols | index("vless") != null) or (.protocols | index("vless_xhttp") != null) or (.protocols | index("vless_xhttp_tls") != null))) then true
+  elif (($p == "vmess-ws" or $p == "vmess_ws") and ((.protocols | index("vmess") != null) or (.protocols | index("vmess_ws") != null) or (.protocols | index("vmess_ws_tls") != null) or (.protocols | index("vmess_ws_ntls") != null))) then true
+  elif (($p == "trojan-ws" or $p == "trojan_ws") and ((.protocols | index("trojan") != null) or (.protocols | index("trojan_ws") != null) or (.protocols | index("trojan_ws_tls") != null) or (.protocols | index("trojan_ws_ntls") != null))) then true
+  elif (($p == "ss-ws" or $p == "ss_ws") and ((.protocols | index("ss") != null) or (.protocols | index("shadowsocks") != null) or (.protocols | index("ss_ws") != null) or (.protocols | index("ss_ws_tls") != null) or (.protocols | index("ss_ws_ntls") != null))) then true
+  elif (($p == "ss-tcp" or $p == "ss_tcp") and ((.protocols | index("ss") != null) or (.protocols | index("shadowsocks") != null) or (.protocols | index("ss_tcp") != null))) then true
+  elif (($p == "ss-2022" or $p == "ss_2022") and ((.protocols | index("ss") != null) or (.protocols | index("shadowsocks") != null) or (.protocols | index("ss_2022") != null) or (.protocols | index("shadowtls") != null))) then true
+  elif ($p == "shadowtls" and ((.protocols | index("shadowtls") != null) or (.protocols | index("antidpi") != null) or (.protocols | index("stealth") != null))) then true
+  elif ($p == "hysteria2" and ((.protocols | index("hysteria2") != null) or (.protocols | index("hy2") != null) or (.protocols | index("antidpi") != null) or (.protocols | index("stealth") != null))) then true
+  elif ($p == "ssh" and ((.protocols | index("ssh") != null))) then true
+  elif ($p == "openvpn" and ((.protocols | index("openvpn") != null) or (.protocols | index("vpn") != null))) then true
+  elif ($p == "wireguard" and ((.protocols | index("wireguard") != null) or (.protocols | index("wg") != null) or (.protocols | index("vpn") != null))) then true
+  elif ($p == "squid" and ((.protocols | index("squid") != null))) then true
+  elif ($p == "zivpn" and ((.protocols | index("zivpn") != null) or (.protocols | index("antidpi") != null))) then true
+  else false
+  end;
+'
+
+# Normalizes raw user protocol input (numbers, commas, names) into a JSON array string.
+mubx_proto_normalize() { # $1 raw input string -> stdout JSON array
+  local input="${1:-all}"
+  input="${input//,/ }"
+  input="${input//;/ }"
+  input="$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]')"
+  
+  local tags=()
+  for item in $input; do
+    case "$item" in
+      0|all|"") tags+=("all") ;;
+      1|ssh-bundle|ssh-only) tags+=("ssh" "squid") ;;
+      2|vless-bundle|vless) tags+=("vless_ws_tls" "vless_ws_ntls" "vless_httpupgrade_tls" "vless_httpupgrade_ntls" "vless_xhttp_tls" "vless_tcp_tls") ;;
+      3|vmess-bundle|vmess) tags+=("vmess_ws_tls" "vmess_ws_ntls" "vmess_tcp") ;;
+      4|trojan-bundle|trojan) tags+=("trojan_ws_tls" "trojan_ws_ntls" "trojan_tcp") ;;
+      5|ss-bundle|shadowsocks|ss) tags+=("ss_ws_tls" "ss_ws_ntls" "ss_tcp" "ss_2022" "shadowtls") ;;
+      6|antidpi-bundle|antidpi|stealth) tags+=("hysteria2" "shadowtls" "zivpn") ;;
+      7|vpn-bundle|vpn) tags+=("wireguard" "openvpn") ;;
+      10|ssh) tags+=("ssh") ;;
+      11|openvpn|ovpn) tags+=("openvpn") ;;
+      12|wireguard|wg) tags+=("wireguard") ;;
+      13|squid) tags+=("squid") ;;
+      20|vless-ws-tls|vless_ws_tls) tags+=("vless_ws_tls") ;;
+      21|vless-ws-ntls|vless_ws_ntls|vless-ws-80) tags+=("vless_ws_ntls") ;;
+      22|vless-upg-tls|vless_httpupgrade_tls|vless-httpupgrade) tags+=("vless_httpupgrade_tls") ;;
+      23|vless-upg-ntls|vless_httpupgrade_ntls|vless-httpupgrade-80) tags+=("vless_httpupgrade_ntls") ;;
+      24|vless-xhttp-tls|vless_xhttp_tls|vless-xhttp) tags+=("vless_xhttp_tls") ;;
+      25|vless-tcp|vless_tcp_tls|vless-tcp-tls) tags+=("vless_tcp_tls") ;;
+      30|vmess-ws-tls|vmess_ws_tls) tags+=("vmess_ws_tls") ;;
+      31|vmess-ws-ntls|vmess_ws_ntls|vmess-ws-80) tags+=("vmess_ws_ntls") ;;
+      32|vmess-tcp|vmess_tcp) tags+=("vmess_tcp") ;;
+      40|trojan-ws-tls|trojan_ws_tls) tags+=("trojan_ws_tls") ;;
+      41|trojan-ws-ntls|trojan_ws_ntls|trojan-ws-80) tags+=("trojan_ws_ntls") ;;
+      42|trojan-tcp|trojan_tcp) tags+=("trojan_tcp") ;;
+      50|ss-ws-tls|ss_ws_tls) tags+=("ss_ws_tls") ;;
+      51|ss-ws-ntls|ss_ws_ntls|ss-ws-80) tags+=("ss_ws_ntls") ;;
+      52|ss-tcp|ss_tcp) tags+=("ss_tcp") ;;
+      53|ss-2022|ss_2022) tags+=("ss_2022") ;;
+      60|shadowtls|stls) tags+=("shadowtls") ;;
+      61|hysteria2|hy2) tags+=("hysteria2") ;;
+      62|zivpn) tags+=("zivpn") ;;
+      *) tags+=("$item") ;;
+    esac
+  done
+
+  # Convert array to unique JSON list
+  printf '%s\n' "${tags[@]}" | jq -R . | jq -s 'unique'
+}
+
+# Checks if a user in the store has access to a specific protocol tag
+mubx_user_has_proto() { # $1 user_name  $2 protocol_tag -> returns 0 (true) or 1 (false)
+  local user="$1" proto="$2"
+  [ -f "$MUBX_USERS_FILE" ] || return 0
+  local has
+  has="$(jq --arg u "$user" --arg p "$proto" "
+    ${JQ_PROTO_DEF}
+    [.[] | select(.name == \$u)] | if length == 0 then true else (first | user_has_proto(\$p)) end
+  " "$MUBX_USERS_FILE" 2>/dev/null || echo true)"
+  [ "$has" = "true" ]
+}
+
+# Generates a compact badge string for table display
+mubx_proto_summary() { # $1 json_array_or_user_object -> formatted string
+  local raw="$1"
+  if [ -z "$raw" ] || [ "$raw" = "null" ] || [ "$raw" = "[]" ]; then
+    printf 'ALL'
+    return 0
+  fi
+  jq -r '
+    def is_arr: type == "array";
+    (if is_arr then . else (.protocols // ["all"]) end) as $p |
+    if ($p | length == 0) or ($p | index("all") != null) then "ALL"
+    else
+      [
+        (if ($p | index("ssh") != null) then "SSH" else empty end),
+        (if ($p | any(startswith("vless"))) then "VLESS" else empty end),
+        (if ($p | any(startswith("vmess"))) then "VMess" else empty end),
+        (if ($p | any(startswith("trojan"))) then "Trojan" else empty end),
+        (if (($p | index("ss") != null) or ($p | index("shadowsocks") != null) or ($p | any(startswith("ss_"))) or ($p | index("ss_2022") != null)) then "SS" else empty end),
+        (if ($p | index("shadowtls") != null) then "STLS" else empty end),
+        (if ($p | index("hysteria2") != null) then "HY2" else empty end),
+        (if ($p | index("wireguard") != null) then "WG" else empty end),
+        (if ($p | index("openvpn") != null) then "OVPN" else empty end),
+        (if ($p | index("squid") != null) then "Squid" else empty end),
+        (if ($p | index("zivpn") != null) then "ZivPN" else empty end)
+      ] as $cats |
+      if ($cats | length) > 0 then ($cats | join("+"))
+      else ($p | length | tostring + " protos")
+      end
+    end
+  ' <<< "$raw" 2>/dev/null || printf 'ALL'
+}
+
+# Interactive protocol selector dialog
+mubx_proto_picker() { # stdout: normalized JSON array
+  if [ ! -t 0 ]; then
+    printf '["all"]'
+    return 0
+  fi
+  printf '\n'
+  mubx_box_top "PROTOCOL ACCESS CONTROL" "SELECT CAPABILITIES"
+  mubx_put "$(printf '  %s[0]%s ALL Protocols (Full Access Suite - Default)' "$C_ELECTRIC" "$C_RESET")"
+  mubx_box_div "QUICK BUNDLES"
+  mubx_put "$(printf '  %s[1]%s SSH & Squid Proxy    (SSH Direct/WS, Squid HTTP CONNECT)' "$C_PURPLE" "$C_RESET")"
+  mubx_put "$(printf '  %s[2]%s VLESS Suite Only     (WS TLS/Plain, HTTPUpgrade, xHTTP, TCP)' "$C_PURPLE" "$C_RESET")"
+  mubx_put "$(printf '  %s[3]%s VMess Suite Only     (WS TLS/Plain, TCP)' "$C_PURPLE" "$C_RESET")"
+  mubx_put "$(printf '  %s[4]%s Trojan Suite Only    (WS TLS/Plain, TCP)' "$C_PURPLE" "$C_RESET")"
+  mubx_put "$(printf '  %s[5]%s Shadowsocks Family   (WS TLS/Plain, Direct TCP, SS-2022, ShadowTLS)' "$C_PURPLE" "$C_RESET")"
+  mubx_put "$(printf '  %s[6]%s Anti-DPI Stealth     (Hysteria 2, ShadowTLS v3, ZivPN)' "$C_PURPLE" "$C_RESET")"
+  mubx_put "$(printf '  %s[7]%s Full-Tunnel VPNs     (WireGuard, OpenVPN TCP/UDP)' "$C_PURPLE" "$C_RESET")"
+  mubx_box_div "GRANULAR SELECTION (COMBINE E.G. 10,20,21,52)"
+  mubx_put "$(printf '  %s[10]%s SSH Direct & WS         %s[11]%s OpenVPN TCP/UDP' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+  mubx_put "$(printf '  %s[12]%s WireGuard VPN           %s[13]%s Squid HTTP CONNECT' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+  mubx_put "$(printf '  %s[20]%s VLESS WS (TLS 443)      %s[21]%s VLESS WS (Plain 80)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+  mubx_put "$(printf '  %s[22]%s VLESS HTTPUpgrade TLS   %s[23]%s VLESS HTTPUpgrade Plain' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+  mubx_put "$(printf '  %s[24]%s VLESS xHTTP (TLS 443)   %s[25]%s VLESS TCP Direct/TLS' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+  mubx_put "$(printf '  %s[30]%s VMess WS (TLS 443)      %s[31]%s VMess WS (Plain 80)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+  mubx_put "$(printf '  %s[32]%s VMess TCP' "$C_ELECTRIC" "$C_RESET")"
+  mubx_put "$(printf '  %s[40]%s Trojan WS (TLS 443)     %s[41]%s Trojan WS (Plain 80)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+  mubx_put "$(printf '  %s[42]%s Trojan TCP' "$C_ELECTRIC" "$C_RESET")"
+  mubx_put "$(printf '  %s[50]%s Shadowsocks WS (TLS)    %s[51]%s Shadowsocks WS (Plain 80)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+  mubx_put "$(printf '  %s[52]%s Shadowsocks TCP Raw     %s[53]%s Shadowsocks 2022 WS' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+  mubx_put "$(printf '  %s[60]%s ShadowTLS v3 Decoy      %s[61]%s Hysteria 2 (UDP 4433)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+  mubx_put "$(printf '  %s[62]%s ZivPN UDP (5667)' "$C_ELECTRIC" "$C_RESET")"
+  mubx_box_bot
+  printf '\n'
+  printf '  %sEnter selection [0 = All, or numbers/bundle]: %s' "$C_PURPLE" "$C_RESET"
+  local sel
+  read -r sel || sel="0"
+  sel="${sel:-0}"
+  mubx_proto_normalize "$sel"
+}
+
 # Overlay the per-user client identities onto a rendered Xray config and
 # enable the stats API (policy + dokodemo api inbound + routing) so traffic
 # can be queried per user email with `xray api statsquery`. When the store
@@ -66,30 +229,42 @@ mubx_primary_uuid() {
 mubx_users_apply() { # $1 rendered config file
   local users_json n dom
   [ -f "$MUBX_USERS_FILE" ] || return 0
-  users_json="$(jq -c '[.[] | select((.status // "active") != "frozen") | {name: (.name // ""), uuid: (.uuid // "")} | select(.uuid != "")]' "$MUBX_USERS_FILE" 2>/dev/null || true)"
+  users_json="$(jq -c '[.[] | select((.status // "active") != "frozen") | {name: (.name // ""), uuid: (.uuid // ""), protocols: (.protocols // ["all"])} | select(.uuid != "")]' "$MUBX_USERS_FILE" 2>/dev/null || true)"
   n="$(mubx_users_count "$MUBX_USERS_FILE")"
   [ "$n" -ge 1 ] || return 0
   dom="${DOMAIN:-mubx}"
-  jq --argjson users "$users_json" --arg dom "$dom" '
+  jq --argjson users "$users_json" --arg dom "$dom" "
+    ${JQ_PROTO_DEF}
     .inbounds |= map(
       if (.settings.clients? == null) then .
       else
-        .settings.clients = (
-          if .protocol == "trojan" then
-            [ $users[] | {password: .uuid, email: (.name + "@" + $dom)} ]
-          elif .protocol == "vmess" then
-            [ $users[] | {id: .uuid, alterId: 0, email: (.name + "@" + $dom)} ]
+        (
+          .tag as \$tag |
+          .protocol as \$proto |
+          (
+            if \$tag == \"trojan-ws\" or \$proto == \"trojan\" then \"trojan-ws\"
+            elif \$tag == \"vmess-ws\" or \$proto == \"vmess\" then \"vmess-ws\"
+            elif \$tag == \"vless-httpupgrade\" then \"vless-httpupgrade\"
+            elif \$tag == \"vless-xhttp\" then \"vless-xhttp\"
+            else \"vless-ws\"
+            end
+          ) as \$req_proto |
+          [ \$users[] | select(user_has_proto(\$req_proto)) ] as \$matching_users |
+          if .protocol == \"trojan\" then
+            .settings.clients = [ \$matching_users[] | {password: .uuid, email: (.name + \"@\" + \$dom)} ]
+          elif .protocol == \"vmess\" then
+            .settings.clients = [ \$matching_users[] | {id: .uuid, alterId: 0, email: (.name + \"@\" + \$dom)} ]
           else
-            [ $users[] | {id: .uuid, email: (.name + "@" + $dom)} ]
+            .settings.clients = [ \$matching_users[] | {id: .uuid, email: (.name + \"@\" + \$dom)} ]
           end
         )
       end
     )
-    | .api = {tag: "api", services: ["HandlerService", "StatsService"]}
-    | .policy = {levels: {"0": {statsUserUplink: true, statsUserDownlink: true}}}
-    | .inbounds += [{tag: "api", listen: "127.0.0.1", port: 10085, protocol: "dokodemo-door", settings: {address: "127.0.0.1", network: "tcp"}}]
-    | .routing = {rules: [{type: "field", inboundTag: ["api"], outboundTag: "direct"}]}
-  ' "$1" > "$1.mubx" && mv -f "$1.mubx" "$1"
+    | .api = {tag: \"api\", services: [\"HandlerService\", \"StatsService\"]}
+    | .policy = {levels: {\"0\": {statsUserUplink: true, statsUserDownlink: true}}}
+    | .inbounds += [{tag: \"api\", listen: \"127.0.0.1\", port: 10085, protocol: \"dokodemo-door\", settings: {address: \"127.0.0.1\", network: \"tcp\"}}]
+    | .routing = {rules: [{type: \"field\", inboundTag: [\"api\"], outboundTag: \"direct\"}]}
+  " "$1" > "$1.mubx" && mv -f "$1.mubx" "$1"
 }
 
 # Overlay Cloudflare WARP WireGuard smart outbound and streaming routing rules
@@ -169,12 +344,14 @@ mubx_xray_render() { # $1 base_template  $2 out
 mubx_ss_plan() { # $1 base port (default SS_BASE_PORT, i.e. the loopback WS ports)
   local base="${1:-$SS_BASE_PORT}"
   if [ -f "$MUBX_USERS_FILE" ]; then
-    jq -r --argjson base "$base" \
-      'range(0; length) as $i | .[$i] |
-       select((.status // "active") != "frozen") |
-       select((.uuid // "") != "") |
-       [.name, .uuid, ($base + $i), ("/ss-" + .name)] | @tsv' \
-      "$MUBX_USERS_FILE" 2>/dev/null || true
+    jq -r --argjson base "$base" "
+      ${JQ_PROTO_DEF}
+      range(0; length) as \$i | .[\$i] |
+      select((.status // \"active\") != \"frozen\") |
+      select((.uuid // \"\") != \"\") |
+      select(user_has_proto(\"ss-ws\")) |
+      [.name, .uuid, (\$base + \$i), (\"/ss-\" + .name)] | @tsv
+    " "$MUBX_USERS_FILE" 2>/dev/null || true
   else
     printf '%s\t%s\t%s\t%s\n' "admin" "${UUID:-}" "$base" "/ss-admin"
   fi
@@ -185,12 +362,14 @@ mubx_ss_plan() { # $1 base port (default SS_BASE_PORT, i.e. the loopback WS port
 mubx_ss2022_plan() { # $1 base port (default SS_BASE_PORT + 1000)
   local base="${1:-$(( SS_BASE_PORT + 1000 ))}"
   if [ -f "$MUBX_USERS_FILE" ]; then
-    jq -r --argjson base "$base" \
-      'range(0; length) as $i | .[$i] |
-       select((.status // "active") != "frozen") |
-       select((.uuid // "") != "") |
-       [.name, .uuid, ($base + $i), ("/ss22-" + .name)] | @tsv' \
-      "$MUBX_USERS_FILE" 2>/dev/null || true
+    jq -r --argjson base "$base" "
+      ${JQ_PROTO_DEF}
+      range(0; length) as \$i | .[\$i] |
+      select((.status // \"active\") != \"frozen\") |
+      select((.uuid // \"\") != \"\") |
+      select(user_has_proto(\"ss-2022\")) |
+      [.name, .uuid, (\$base + \$i), (\"/ss22-\" + .name)] | @tsv
+    " "$MUBX_USERS_FILE" 2>/dev/null || true
   else
     printf '%s\t%s\t%s\t%s\n' "admin" "${UUID:-}" "$base" "/ss22-admin"
   fi
@@ -217,11 +396,7 @@ mubx_ss_apply() { # $1 rendered config file  $2 ss inbound template
 }
 
 # Append one plain Shadowsocks TCP inbound (raw SS, no WebSocket / no TLS)
-# per store user, binding publicly on SS_PLAIN_BASE_PORT + index. This lets
-# any Shadowsocks client - v2rayNG, sing-box, Shadowrocket - connect without
-# a plugin or any certificate handling, and doubles as an odd-port channel
-# past carrier filters that only police 80/443/8080. A missing template
-# simply skips plain SS (older templates stay valid).
+# per store user, binding publicly on SS_PLAIN_BASE_PORT + index.
 mubx_ss_plain_apply() { # $1 rendered config file  $2 ss plain inbound template
   local cfg="$1" ss_tpl="$2" extra='[]' obj name uuid port path
   [ -f "$ss_tpl" ] || return 0
@@ -232,7 +407,20 @@ mubx_ss_plain_apply() { # $1 rendered config file  $2 ss plain inbound template
                -e "s|__SS_PASS__|$uuid|g" "$ss_tpl")" || return 1
     extra="$(jq -cn --argjson arr "$extra" --argjson o "$obj" '$arr + [$o]')" \
       || return 1
-  done < <(mubx_ss_plan "$SS_PLAIN_BASE_PORT")
+  done < <(
+    if [ -f "$MUBX_USERS_FILE" ]; then
+      jq -r --argjson base "${SS_PLAIN_BASE_PORT:-8388}" "
+        ${JQ_PROTO_DEF}
+        range(0; length) as \$i | .[\$i] |
+        select((.status // \"active\") != \"frozen\") |
+        select((.uuid // \"\") != \"\") |
+        select(user_has_proto(\"ss-tcp\")) |
+        [.name, .uuid, (\$base + \$i), (\"/ss-\" + .name)] | @tsv
+      " "$MUBX_USERS_FILE" 2>/dev/null || true
+    else
+      printf '%s\t%s\t%s\t%s\n' "admin" "${UUID:-}" "${SS_PLAIN_BASE_PORT:-8388}" "/ss-admin"
+    fi
+  )
   if [ "$extra" != '[]' ]; then
     jq --argjson add "$extra" '.inbounds += $add' "$cfg" > "$cfg.mubx" || return 1
     mv -f "$cfg.mubx" "$cfg"
@@ -242,9 +430,7 @@ mubx_ss_plain_apply() { # $1 rendered config file  $2 ss plain inbound template
 # Append one Shadowsocks 2022 WS inbound per store user (loopback port
 # SS_BASE_PORT + 1000 + index) using the modern 2022-blake3-aes-256-gcm
 # cipher. Keys come from mubx_ss2022_psk (lib/subscribe.sh), created once
-# and reused so rendered configs stay stable across re-renders. A missing
-# template or missing keys directory simply skips SS-2022 (older setups and
-# CI renders stay valid).
+# and reused so rendered configs stay stable across re-renders.
 mubx_ss2022_apply() { # $1 rendered config file  $2 ss-2022 inbound template
   local cfg="$1" ss_tpl="$2" extra='[]' obj name uuid port path psk
   [ -f "$ss_tpl" ] || return 0

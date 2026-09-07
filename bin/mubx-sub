@@ -5,20 +5,42 @@ set -Eeuo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "[!] Run mubx-sub as root." >&2; exit 1; }
 
-source /usr/local/lib/mubx/common.sh
-source /usr/local/lib/mubx/render.sh
-source /usr/local/lib/mubx/subscribe.sh
-load_mubx_env
+if [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+  source /usr/local/lib/mubx/render.sh
+  source /usr/local/lib/mubx/subscribe.sh
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/render.sh"
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/subscribe.sh"
+fi
+load_mubx_env 2>/dev/null || true
 
-STORE="$MUBX_USERS_FILE"
+STORE="${MUBX_USERS_FILE:-/etc/mubx/users.json}"
 
 nginx_has_sub_location() {
   grep -q 'location /sub/' /etc/nginx/nginx.conf 2>/dev/null
 }
 
+show_user_sub() {
+  local name="$1" url token
+  url="$(mubx_sub_generate "$name")" || return 1
+  token="$(mubx_sub_token "$name" 2>/dev/null || true)"
+  printf '  %s%-14s%s %s%s%s\n' "$C_BRIGHT" "$name" "$C_RESET" "$C_ELECTRIC" "$url" "$C_RESET"
+  if [ -n "$token" ] && [ -n "${DOMAIN:-}" ]; then
+    if mubx_user_has_proto "$name" "openvpn"; then
+      printf '  %s%-14s%s %s↳ OpenVPN TCP (1194):%s https://%s/sub/%s/openvpn-tcp.ovpn\n' "" "" "" "$C_SLATE" "$C_RESET" "$DOMAIN" "$token"
+      printf '  %s%-14s%s %s↳ OpenVPN UDP (2200):%s https://%s/sub/%s/openvpn-udp.ovpn\n' "" "" "" "$C_SLATE" "$C_RESET" "$DOMAIN" "$token"
+    fi
+    if mubx_user_has_proto "$name" "wireguard"; then
+      printf '  %s%-14s%s %s↳ WireGuard (51820): %s https://%s/sub/%s/wireguard.conf\n' "" "" "" "$C_SLATE" "$C_RESET" "$DOMAIN" "$token"
+    fi
+  fi
+}
+
 mubx_clear
 mubx_box_top "1-CLICK SUBSCRIPTION GENERATOR" "CLIENT ENDPOINTS"
-mubx_put "$(printf '  %sPublishing multi-client subscription files for proxy clients:%s' "$C_SLATE" "$C_RESET")"
+mubx_put "$(printf '  %sPublishing multi-client subscription files for proxy & VPN clients:%s' "$C_SLATE" "$C_RESET")"
 mubx_box_bot
 printf '\n'
 
@@ -32,8 +54,7 @@ case "${1:-}" in
     mubx_rule
     while IFS= read -r name; do
       [ -n "$name" ] || continue
-      url="$(mubx_sub_generate "$name")" &&
-        printf '  %s%-14s%s %s%s%s\n' "$C_BRIGHT" "$name" "$C_RESET" "$C_ELECTRIC" "$url" "$C_RESET"
+      show_user_sub "$name"
     done < <(jq -r '.[].name' "$STORE")
     ;;
   help|-h|--help)
@@ -46,8 +67,7 @@ case "${1:-}" in
       warn "No user store at $STORE; nothing to publish."
       exit 1
     fi
-    url="$(mubx_sub_generate "$1")" &&
-      printf '  %s%-14s%s %s%s%s\n' "$C_BRIGHT" "$1" "$C_RESET" "$C_ELECTRIC" "$url" "$C_RESET"
+    show_user_sub "$1"
     ;;
 esac
 
