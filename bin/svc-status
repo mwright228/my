@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
-# MUB-X service status: one verdict per protocol / transport, not just per
-# systemd unit. Xray transports are enumerated from the live config so every
-# inbound (incl. each per-user Shadowsocks route and the shared SS-443
-# inbound) is listed individually; UDP-only daemons are checked via their
-# listener, TCP ones via their unit + socket.
-#
-# Output uses the same 58-column bordered frame as the menu: one card per
-# group, status flush right per row, and any failing service explains itself
-# (port conflict / last journal line) in a note right under the card.
+# MUB-X service status & transport matrix.
 set -Eeuo pipefail
 
 source /usr/local/lib/mubx/common.sh
@@ -17,9 +9,8 @@ load_mubx_env 2>/dev/null || true
 XRAY_CONF=/usr/local/etc/xray/config.json
 [ -f "$XRAY_CONF" ] || { echo "[!] Run install.sh first"; exit 1; }
 
-# verdict: unit active (and, when given, listener on proto/port)
-# returns 0 online, 1 offline; caller formats the text.
-check() { # $1 unit  $2 protocol(tcp|udp)  $3 port (empty = unit-only)
+# Verdict check: unit active + socket listening
+check() { # $1 unit  $2 protocol(tcp|udp)  $3 port
   local unit="$1" proto="$2" port="${3:-}"
   systemctl is-active --quiet "$unit" 2>/dev/null || return 1
   if [ -n "$port" ]; then
@@ -28,18 +19,16 @@ check() { # $1 unit  $2 protocol(tcp|udp)  $3 port (empty = unit-only)
   return 0
 }
 
-# Explain why a service is down: for listener-backed rows, whether
-# anything is actually bound to the expected port, plus the last
-# journal line from the unit itself.
-failure_hint() { # $1 unit  $2 protocol(tcp|udp)  $3 port (empty = unit-only)
+# Failure explanation helper
+failure_hint() { # $1 unit  $2 protocol(tcp|udp)  $3 port
   local unit="$1" proto="$2" port="${3:-}"
   local msg='' holder last
   if [ -n "$port" ] && ! ss -H -l"${proto:0:1}"n "sport = :$port" 2>/dev/null | grep -q .; then
     holder="$(ss -H -l"${proto:0:1}"n -p "sport = :$port" 2>/dev/null | head -n 1)"
     if [ -n "$holder" ]; then
-      msg="port $port is held by another listener: $holder"
+      msg="port $port held by other process: $holder"
     else
-      msg="no ${proto^^}/$port listener"
+      msg="no ${proto^^}/$port socket listening"
     fi
   fi
   last="$(journalctl -u "$unit" -n 2 --no-pager -o cat 2>/dev/null | tail -n 1 || true)"
@@ -52,104 +41,103 @@ failure_hint() { # $1 unit  $2 protocol(tcp|udp)  $3 port (empty = unit-only)
 # --- presentation -----------------------------------------------------------
 declare -a _hints=()
 
-group_open() { # $1 section title
+group_open() { # $1 section title  $2 meta
   _hints=()
-  mubx_box_line '┌' '┐'
-  mubx_put "$(printf '  %s%s%s' "$C_BOLD" "$1" "$C_RESET")"
-  mubx_box_line '├' '┤'
+  mubx_box_top "$1" "${2:-}"
 }
 
 group_close() {
-  mubx_box_line '└' '┘'
+  mubx_box_bot
   local h
   if [ "${#_hints[@]}" -gt 0 ]; then
     for h in "${_hints[@]}"; do
-      printf '  %s↳ %s%s\n' "$C_DIM" "${h:0:96}" "$C_RESET"
+      printf '  %s↳ %s%s\n' "$C_SLATE" "${h:0:96}" "$C_RESET"
     done
+    printf '\n'
   fi
-  printf '\n'
 }
 
-# One status row; a failing service registers its explanation in _hints.
+# One status row
 row() { # $1 label  $2 unit  $3 tcp|udp  $4 port
-  local label="$1" unit="$2" proto="$3" port="${4:-}" right col
+  local label="$1" unit="$2" proto="$3" port="${4:-}" right
   if check "$unit" "$proto" "$port"; then
-    col="$C_GREEN"
-    right="$(printf '%s●%s  %s%s%s' "$col" "$C_RESET" "$col" 'up  ' "$C_RESET")"
+    right="$(mubx_pill UP "ONLINE")"
   else
-    col="$C_RED"
-    right="$(printf '%s○%s  %s%s%s' "$col" "$C_RESET" "$col" 'down' "$C_RESET")"
+    right="$(mubx_pill DOWN "OFFLINE")"
     _hints+=("$(failure_hint "$unit" "$proto" "$port")")
   fi
-  mubx_card "$(printf '  %s' "$label")" "$right"
+  mubx_card "  $label" "$right"
 }
 
 mubx_clear
-# --- summary box ------------------------------------------------------------
-mubx_box_line '┌' '┐'
-mubx_put "$(printf '  %sMUB-X%s · %sservice information%s' "$C_BOLD" "$C_RESET" "$C_CYAN" "$C_RESET")"
-mubx_box_line '├' '┤'
-mubx_kvrow "Domain"    "${DOMAIN:-UNCONFIGURED}"
-mubx_kvrow "Timestamp" "$(date '+%Y-%m-%d %H:%M:%S %Z')"
-mubx_box_line '└' '┘'
+
+# --- Summary Box ------------------------------------------------------------
+mubx_box_top "MUB-X SERVICE MATRIX" "TELEMETRY"
+mubx_kvrow "Gateway Host" "${DOMAIN:-UNCONFIGURED}"
+mubx_kvrow "Uptime"       "$(mubx_sys_uptime)"
+mubx_kvrow "System Load"  "$(mubx_sys_cpu)"
+mubx_kvrow "RAM Usage"    "$(mubx_sys_ram)"
+mubx_kvrow "Timestamp"    "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+mubx_box_bot
 printf '\n'
 
-# --- Xray transports --------------------------------------------------------
-group_open "Xray transports"
+# --- Xray Transports --------------------------------------------------------
+group_open "XRAY TRANSPORTS" "INGRESS"
 while IFS=$'\t' read -r tag proto port; do
   [ -n "$tag" ] || continue
   case "$tag" in
     socks-local|api) continue ;;
-    vless-ws)      label="VLESS WebSocket (WS)" ;;
-    vmess-ws)      label="VMess WebSocket (WS)" ;;
-    trojan-ws)     label="Trojan WebSocket (WS)" ;;
+    vless-ws)          label="VLESS WebSocket (TLS 443 / 80)" ;;
+    vmess-ws)          label="VMess WebSocket (TLS 443 / 80)" ;;
+    trojan-ws)         label="Trojan WebSocket (TLS 443 / 80)" ;;
     vless-httpupgrade) label="VLESS HTTPUpgrade" ;;
-    vless-xhttp)   label="VLESS xHTTP" ;;
-    shadowsocks-*) name="${tag#shadowsocks-}"
-                   label="Shadowsocks WS ($name)" ;;
-    ss2022-*)      name="${tag#ss2022-}"
-                   label="Shadowsocks 2022 WS ($name)" ;;
-    ssplain-*)     name="${tag#ssplain-}"
-                   label="Shadowsocks TCP ($name)" ;;
-    ss-443)        label="Shadowsocks TCP (443 shared)" ;;
-    *)             label="${tag}" ;;
+    vless-xhttp)       label="VLESS xHTTP" ;;
+    shadowsocks-*)     name="${tag#shadowsocks-}"
+                       label="Shadowsocks WS ($name)" ;;
+    ss2022-*)          name="${tag#ss2022-}"
+                       label="Shadowsocks 2022 WS ($name)" ;;
+    ssplain-*)         name="${tag#ssplain-}"
+                       label="Shadowsocks TCP ($name)" ;;
+    ss-443)            label="Shadowsocks TCP (443 Primary)" ;;
+    *)                 label="${tag}" ;;
   esac
-  row "Xray · $label" xray tcp "$port"
+  row "$label" xray tcp "$port"
 done < <(jq -r '.inbounds[] | select(.tag != "socks-local" and .tag != "api") | [.tag, (.protocol // "-"), (.port // 0)] | @tsv' "$XRAY_CONF" 2>/dev/null)
 group_close
 
+# --- VPN & Stealth Tunnels --------------------------------------------------
+group_open "STEALTH & TUNNELS" "CORE"
+row "Hysteria 2 (UDP 4433)"      hysteria           udp 4433
+if [ -f /etc/systemd/system/singbox.service ] && [ -s /etc/sing-box/config.json ]; then
+  row "ShadowTLS v3 + SS-2022"    singbox            tcp 8448
+fi
+row "ZivPN UDP Tunnel (5667)"    zivpn              udp 5667
+row "WireGuard (UDP 51820)"      wg-quick@wg0       udp 51820
+row "OpenVPN TCP (1194)"         openvpn-server@tcp tcp 1194
+row "OpenVPN UDP (2200)"         openvpn-server@udp udp 2200
+row "Dropbear SSH (2222/109/53)" dropbear           tcp 2222
+row "wstunnel SSH-over-WS"       wstunnel           tcp 18080
+group_close
+
+# --- Ingress & Proxy Layer --------------------------------------------------
+group_open "INGRESS & PROXY" "PORTS"
+row "HAProxy 443 Demux"          haproxy tcp 443
+row "Nginx Web & TLS (20443)"    nginx   tcp 20443
+row "Nginx HTTP (80)"            nginx   tcp 80
+row "Squid CONNECT (8080/3128)"  squid   tcp 8080
+row "Fail2ban Defense"           fail2ban "" ""
+group_close
+
 # --- BadVPN UDPGW -----------------------------------------------------------
-group_open "BadVPN UDPGW ports"
+group_open "UDPGW GAMING BRIDGES" "PORTS 7100-7700"
 for p in 7100 7200 7300 7400 7500 7600 7700; do
-  row "BadVPN UDPGW $p" "badvpn@$p" udp "$p"
+  row "BadVPN UDPGW Port $p" "badvpn@$p" tcp "$p"
 done
 group_close
 
-# --- VPN & tunnel services --------------------------------------------------
-group_open "VPN & tunnel services"
-row "OpenVPN TCP (1194)"  openvpn-server@tcp tcp 1194
-row "OpenVPN UDP (2200)"  openvpn-server@udp udp 2200
-row "WireGuard (51820)"   wg-quick@wg0   udp 51820
-row "Hysteria 2 (4433)"   hysteria       udp 4433
-row "ZivPN UDP VPN (5667)" zivpn         udp 5667
-if [ -f /etc/systemd/system/singbox.service ] && [ -s /etc/sing-box/config.json ]; then
-  row "ShadowTLS v3 + SS-2022 (443 via SNI)" singbox tcp 8448
-fi
-row "Dropbear SSH (109, 2222, 53)" dropbear  tcp 2222
+# --- Maintenance Timers -----------------------------------------------------
+group_open "AUTOMATION TIMERS" "CRON"
+row "Weekly Maintenance" mubx-cron.timer "" ""
+row "Adaptive Optimizer" mubx-adaptive.timer "" ""
 group_close
 
-# --- Web / proxy layer ------------------------------------------------------
-group_open "Proxy & web services"
-row "HAProxy 443 split (TLS/SS)" haproxy tcp 443
-row "Nginx TLS terminator"    nginx   tcp 20443
-row "Nginx plain HTTP (80)"   nginx   tcp 80
-row "Squid CONNECT proxy (8080, 3128)" squid tcp 8080
-row "wstunnel SSH-over-WS"    wstunnel tcp 18080
-row "fail2ban (dropbear jail)" fail2ban "" ""
-group_close
-
-# --- Maintenance timers -----------------------------------------------------
-group_open "Maintenance timers"
-row "mubx weekly cron"     mubx-cron.timer "" ""
-row "mubx adaptive probe"  mubx-adaptive.timer "" ""
-group_close

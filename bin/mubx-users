@@ -105,26 +105,41 @@ store_write_backup() { # $1 backup path
 cmd_list() {
   store_require
   if [ "$(mubx_users_count "$STORE")" -eq 0 ]; then
-    echo "  no users configured"
+    mubx_put "$(printf '  %sNo users configured yet in store.%s' "$C_SLATE" "$C_RESET")"
     return
   fi
-  printf '  %-16s %-38s %-12s %s\n' "name" "uuid" "added" "expiry"
+  printf '  %s%-12s %-38s %-12s %s%s\n' "$C_PURPLE" "USERNAME" "UUID" "CREATED" "EXPIRY" "$C_RESET"
+  mubx_rule
   jq -r '.[] | [.name, .uuid, (.added // ""), (.expiry // "")] | @tsv' "$STORE" |
     while IFS=$'\t' read -r n u a e; do
-      printf '  %-16s %-38s %-12s %s\n' "$n" "$u" "$a" "${e:-never}"
+      local exp_str="${e:-never}"
+      local exp_col="$C_MINT"
+      if [ "$exp_str" != "never" ]; then
+        if [[ "$(date -d "$exp_str" +%s 2>/dev/null || echo 0)" -lt "$(date +%s)" ]]; then
+          exp_col="$C_CORAL"
+          exp_str="$exp_str (EXPIRED)"
+        else
+          exp_col="$C_AMBER"
+        fi
+      fi
+      printf '  %s%-12s%s %s%-38s%s %s%-12s%s %s%s%s\n' \
+        "$C_BRIGHT" "$n" "$C_RESET" \
+        "$C_ELECTRIC" "$u" "$C_RESET" \
+        "$C_SLATE" "$a" "$C_RESET" \
+        "$exp_col" "$exp_str" "$C_RESET"
     done
 }
 
 cmd_add() { # $1 name  $2 days (optional)
   local name="$1" days="${2:-}" backup new uuid expiry added
   store_require
-  name_ok "$name" || { echo "[!] Bad username (lowercase, 3-32 chars, [a-z0-9_-])" >&2; return 1; }
-  user_exists "$name" && { echo "[!] User '$name' already exists." >&2; return 1; }
+  name_ok "$name" || { warn "Bad username (3-32 chars, lowercase, [a-z0-9_-])"; return 1; }
+  user_exists "$name" && { warn "User '$name' already exists."; return 1; }
   uuid="$(cat /proc/sys/kernel/random/uuid)"
   added="$(date -u '+%Y-%m-%d')"
   expiry=""
   if [ -n "$days" ]; then
-    [[ "$days" =~ ^[1-9][0-9]*$ ]] || { echo "[!] Days must be a positive integer" >&2; return 1; }
+    [[ "$days" =~ ^[1-9][0-9]*$ ]] || { warn "Days must be a positive integer"; return 1; }
     expiry="$(date -d "+${days} days" '+%Y-%m-%d')"
   fi
   backup="$(mktemp)"
@@ -140,8 +155,8 @@ cmd_add() { # $1 name  $2 days (optional)
     return 1
   fi
   rm -f "$backup"
-  printf '  [+] %s added (uuid %s, expires %s)\n' "$name" "$uuid" "${expiry:-never}"
-  # Publish/refresh the user's subscription files if the generator exists.
+  log "User $name provisioned (UUID: $uuid | Expires: ${expiry:-never})"
+  # Publish/refresh subscription files
   if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
     source /usr/local/lib/mubx/subscribe.sh
     mubx_sub_generate "$name" >/dev/null 2>&1 || true
@@ -152,13 +167,11 @@ cmd_remove() { # $1 name
   local name="$1" backup new
   store_require
   if ! user_exists "$name"; then
-    # Idempotent: accounts created before the user store had no identity.
-    printf '  (no Xray identity for %s)\n' "$name"
+    printf '  %s↳ No Xray identity found for %s%s\n' "$C_SLATE" "$name" "$C_RESET"
     return 0
   fi
   [ "$name" != "admin" ] || {
-    echo "[!] Refusing to remove 'admin' (it carries the legacy shared identity)." >&2
-    return 1
+    die "Refusing to remove 'admin' (carries legacy shared identity)."
   }
   backup="$(mktemp)"
   new="$(mktemp)"
@@ -172,8 +185,7 @@ cmd_remove() { # $1 name
     return 1
   fi
   rm -f "$backup"
-  printf '  [-] %s removed; its UUID no longer authenticates anywhere.\n' "$name"
-  # Drop the user's subscription files and SS-2022 key (best effort).
+  log "User $name revoked; UUID no longer authenticates."
   if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
     source /usr/local/lib/mubx/subscribe.sh
     tok="$(cat "$MUBX_SUB_TOKEN_DIR/$name" 2>/dev/null || true)"
@@ -182,47 +194,82 @@ cmd_remove() { # $1 name
   fi
 }
 
-cmd_usage() { # $1 name (optional: all users)
+cmd_usage() { # $1 name (optional)
   store_require
   local name="${1:-}" pattern label u e
   if [ -z "$name" ]; then
-    jq -r '.[].name' "$STORE" | while read -r n; do cmd_usage "$n"; done
+    mubx_box_top "XRAY TRAFFIC TELEMETRY" "ALL USERS"
+    jq -r '.[].name' "$STORE" | while read -r n; do
+      cmd_usage "$n"
+    done
+    mubx_box_bot
     return
   fi
-  user_exists "$name" || { echo "[!] User '$name' does not exist." >&2; return 1; }
-  printf '%s:\n' "$name"
-  for kind in uplink downlink; do
-    pattern="user>>>${name}@${DOMAIN:-mubx}>>>traffic>>>${kind}"
-    out="$(xray api statsquery --server=127.0.0.1:10085 --pattern="$pattern" 2>/dev/null || true)"
-    value="$(printf '%s\n' "$out" | jq -r '.. | objects | select(.name? == $pat) | .value' --arg pat "$pattern" 2>/dev/null | head -n 1 || true)"
-    printf '  %-9s %s bytes\n' "$kind" "${value:-0}"
-  done
+  user_exists "$name" || { warn "User '$name' does not exist."; return 1; }
+  
+  local up_val=0 down_val=0
+  pattern="user>>>${name}@${DOMAIN:-mubx}>>>traffic>>>uplink"
+  out="$(xray api statsquery --server=127.0.0.1:10085 --pattern="$pattern" 2>/dev/null || true)"
+  up_val="$(printf '%s\n' "$out" | jq -r '.. | objects | select(.name? == $pat) | .value' --arg pat "$pattern" 2>/dev/null | head -n 1 || true)"
+  
+  pattern="user>>>${name}@${DOMAIN:-mubx}>>>traffic>>>downlink"
+  out="$(xray api statsquery --server=127.0.0.1:10085 --pattern="$pattern" 2>/dev/null || true)"
+  down_val="$(printf '%s\n' "$out" | jq -r '.. | objects | select(.name? == $pat) | .value' --arg pat "$pattern" 2>/dev/null | head -n 1 || true)"
+  
+  fmt_bytes() {
+    local b="${1:-0}"
+    if [ "$b" -ge 1073741824 ]; then
+      printf '%.2f GB' "$(awk "BEGIN {print $b/1073741824}")"
+    elif [ "$b" -ge 1048576 ]; then
+      printf '%.2f MB' "$(awk "BEGIN {print $b/1048576}")"
+    elif [ "$b" -ge 1024 ]; then
+      printf '%.2f KB' "$(awk "BEGIN {print $b/1024}")"
+    else
+      printf '%d B' "$b"
+    fi
+  }
+
+  mubx_put "$(printf '  %s%-12s%s ▲ %-10s  ▼ %-10s' "$C_BRIGHT" "$name" "$C_RESET" "$(fmt_bytes "${up_val:-0}")" "$(fmt_bytes "${down_val:-0}")")"
 }
 
 interactive() {
   local action input name days
   while true; do
     mubx_clear
-    printf '%sMUB-X users%s\n' "$C_BOLD" "$C_RESET"
-    mubx_rule
+    mubx_box_top "MUB-X IDENTITY STORE" "USERS & TRAFFIC"
+    mubx_kvrow "Store Path" "$STORE"
+    mubx_kvrow "User Count" "$(mubx_users_count "$STORE")"
+    mubx_box_bot
+    printf '\n'
+    
     cmd_list
-    printf '\n  %sa%s  add    %sr%s  remove    %su%s  usage    %sq%s  quit\n\n' \
-      "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
-    read -r -p "  Choose: " action || break
+    printf '\n  %s[a]%s Add User   %s[r]%s Remove User   %s[u]%s Usage Stats   %s[q]%s Exit\n\n' \
+      "$C_ELECTRIC" "$C_RESET" "$C_CORAL" "$C_RESET" "$C_AMBER" "$C_RESET" "$C_SLATE" "$C_RESET"
+    printf '  %s❯%s ' "$C_ELECTRIC" "$C_RESET"
+    read -r action || break
     case "${action,,}" in
       a|add)
-        read -r -p "  Username: " name
-        read -r -p "  Expiry days (blank = never): " days
+        printf '  Username: '
+        read -r name
+        printf '  Expiry days (blank = never): '
+        read -r days
         cmd_add "$name" "$days" || true
         ;;
       r|remove)
-        read -r -p "  Username to remove: " name
+        printf '  Username to remove: '
+        read -r name
         cmd_remove "$name" || true
         ;;
-      u|usage) cmd_usage || true ;;
+      u|usage)
+        printf '\n'
+        cmd_usage || true
+        ;;
       q|quit|0) exit 0 ;;
     esac
-    read -r -p "  Press Enter to continue... " _ || true
+    if [ -t 0 ]; then
+      printf '\n'
+      read -r -p "  Press Enter to continue... " _ || true
+    fi
   done
 }
 
@@ -235,3 +282,4 @@ case "$cmd" in
   interactive) interactive ;;
   *) echo "Unknown command: $cmd (use list/add/remove/usage)" >&2; exit 1 ;;
 esac
+

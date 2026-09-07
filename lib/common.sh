@@ -2,13 +2,17 @@
 # Shared helpers for MUB-X scripts.
 #
 # Colors only light up when stdout is a terminal, so piped output and logs
-# stay clean. Scripts should source this file instead of defining their own
-# palettes.
+# stay clean. Scripts source this file for cohesive visual styling across
+# all CLI tools, status monitors, and link generators.
 
 if [ -t 1 ]; then
   C_RESET=$'\033[0m'
   C_BOLD=$'\033[1m'
   C_DIM=$'\033[2m'
+  C_ITALIC=$'\033[3m'
+  C_UNDER=$'\033[4m'
+
+  # Core 16-color palette
   C_RED=$'\033[31m'
   C_GREEN=$'\033[32m'
   C_YELLOW=$'\033[33m'
@@ -16,13 +20,27 @@ if [ -t 1 ]; then
   C_MAGENTA=$'\033[35m'
   C_CYAN=$'\033[36m'
   C_WHITE=$'\033[37m'
+
+  # Modern 256-color accents
+  C_ELECTRIC=$'\033[38;5;51m'    # Vibrant Electric Cyan
+  C_PURPLE=$'\033[38;5;141m'     # Neon Violet / Lavender
+  C_MINT=$'\033[38;5;48m'        # Cyber Mint Green
+  C_AMBER=$'\033[38;5;214m'      # Warm Amber Gold
+  C_CORAL=$'\033[38;5;203m'      # Neon Coral Red
+  C_SLATE=$'\033[38;5;244m'      # Medium Slate Gray
+  C_BORDER=$'\033[38;5;240m'     # Dark Slate Border
+  C_BRIGHT=$'\033[1;37m'         # Crisp Pure White
+  C_BG_CARD=$'\033[48;5;236m'    # Dark Card Background
+  C_BG_ACCENT=$'\033[48;5;24m'   # Deep Blue-Cyan Accent BG
 else
-  C_RESET= C_BOLD= C_DIM= C_RED= C_GREEN= C_YELLOW= C_BLUE= C_MAGENTA= C_CYAN= C_WHITE=
+  C_RESET= C_BOLD= C_DIM= C_ITALIC= C_UNDER=
+  C_RED= C_GREEN= C_YELLOW= C_BLUE= C_MAGENTA= C_CYAN= C_WHITE=
+  C_ELECTRIC= C_PURPLE= C_MINT= C_AMBER= C_CORAL= C_SLATE= C_BORDER= C_BRIGHT= C_BG_CARD= C_BG_ACCENT=
 fi
 
-log()  { echo -e "${C_GREEN}[*]${C_RESET} $*"; }
-warn() { echo -e "${C_YELLOW}[!]${C_RESET} $*" >&2; }
-die()  { warn "$*"; exit 1; }
+log()  { echo -e "${C_MINT}[✓]${C_RESET} $*"; }
+warn() { echo -e "${C_AMBER}[!]${C_RESET} $*" >&2; }
+die()  { echo -e "${C_CORAL}[✕]${C_RESET} $*" >&2; exit 1; }
 
 load_mubx_env() {
   local env_file="${1:-/etc/telecom-engine.env}" key value
@@ -44,34 +62,194 @@ load_mubx_env() {
   done < "$env_file"
 }
 
-# --- presentation helpers -------------------------------------------------
-
-# A subtle full-width divider.
-mubx_rule() {
-  printf '%s%s%s\n' "$C_DIM" '────────────────────────────────────────────' "$C_RESET"
+# --- System Telemetry Helpers ---------------------------------------------
+mubx_sys_ram() {
+  if [ -r /proc/meminfo ]; then
+    local total free avail used pct
+    total=$(awk '/MemTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+    avail=$(awk '/MemAvailable:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+    if [ "$total" -gt 0 ]; then
+      used=$((total - avail))
+      pct=$((used * 100 / total))
+      printf '%d/%d MB (%d%%)' "$used" "$total" "$pct"
+      return
+    fi
+  fi
+  echo "n/a"
 }
 
-# One section heading.
-mubx_title() {
-  printf '\n%s%s%s\n' "$C_BOLD" "$1" "$C_RESET"
-}
-
-# "label: value" row, label dim, value cyan.
-mubx_kv() {
-  printf '  %s%-13s%s %s%s%s\n' "$C_DIM" "$1:" "$C_RESET" "$C_CYAN" "$2" "$C_RESET"
-}
-
-# Colored ●/○ status dot for a systemd unit.
-svc_dot() {
-  if systemctl is-active --quiet "$1" 2>/dev/null; then
-    printf '%s●%s' "$C_GREEN" "$C_RESET"
+mubx_sys_cpu() {
+  if [ -r /proc/loadavg ]; then
+    awk '{print $1, $2, $3}' /proc/loadavg 2>/dev/null || echo "n/a"
   else
-    printf '%s○%s' "$C_RED" "$C_RESET"
+    echo "n/a"
   fi
 }
 
-# Clean-screen helper: no-op when output is not a terminal. Always returns
-# success so callers under `set -e` survive non-tty (piped/cron) runs.
+mubx_sys_uptime() {
+  if [ -r /proc/uptime ]; then
+    local s d h m
+    s=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 0)
+    d=$((s / 86400))
+    h=$(( (s % 86400) / 3600 ))
+    m=$(( (s % 3600) / 60 ))
+    if [ "$d" -gt 0 ]; then
+      printf '%dd %dh %dm' "$d" "$h" "$m"
+    elif [ "$h" -gt 0 ]; then
+      printf '%dh %dm' "$h" "$m"
+    else
+      printf '%dm' "$m"
+    fi
+  else
+    echo "n/a"
+  fi
+}
+
+# --- Presentation & Box Drawing Engine -----------------------------------
+# Inner width of bordered panels: 58 cols inner + 2 borders = 60 total
+MUBX_IW="${MUBX_IW:-58}"
+
+# Strip ANSI codes for exact character measurement
+mubx_vis_len() {
+  printf '%s' "$1" | LC_ALL=C.UTF-8 sed -e $'s/\x1b\\[[0-9;]*[a-zA-Z]//g' | LC_ALL=C.UTF-8 wc -m
+}
+
+# Rounded box top header: optional title ($1) and optional tag ($2)
+mubx_box_top() {
+  local title="${1:-}" tag="${2:-}"
+  if [ -z "$title" ]; then
+    printf '%s╭%s╮%s\n' "$C_BORDER" "$(printf '─%.0s' $(seq 1 "$MUBX_IW"))" "$C_RESET"
+    return
+  fi
+  local t_str=" ${C_BRIGHT}${title}${C_RESET} "
+  local t_len; t_len=$(mubx_vis_len "$t_str")
+  
+  if [ -n "$tag" ]; then
+    local tag_str=" ${C_SLATE}${tag}${C_RESET} "
+    local tag_len; tag_len=$(mubx_vis_len "$tag_str")
+    local rem=$((MUBX_IW - 2 - t_len - tag_len - 1))
+    [ "$rem" -lt 1 ] && rem=1
+    printf '%s╭─%s%s%s%s%s─╮%s\n' "$C_BORDER" "$t_str" "$C_BORDER" "$(printf '─%.0s' $(seq 1 "$rem"))" "$tag_str" "$C_BORDER" "$C_RESET"
+  else
+    local rem=$((MUBX_IW - 2 - t_len))
+    [ "$rem" -lt 1 ] && rem=1
+    printf '%s╭─%s%s%s╮%s\n' "$C_BORDER" "$t_str" "$C_BORDER" "$(printf '─%.0s' $(seq 1 "$rem"))" "$C_RESET"
+  fi
+}
+
+# Rounded box divider line: optional section label ($1)
+mubx_box_div() {
+  local title="${1:-}"
+  if [ -z "$title" ]; then
+    printf '%s├%s┤%s\n' "$C_BORDER" "$(printf '─%.0s' $(seq 1 "$MUBX_IW"))" "$C_RESET"
+    return
+  fi
+  local t_str=" ${C_PURPLE}${title}${C_RESET} "
+  local t_len; t_len=$(mubx_vis_len "$t_str")
+  local rem=$((MUBX_IW - 2 - t_len))
+  [ "$rem" -lt 1 ] && rem=1
+  printf '%s├─%s%s%s┤%s\n' "$C_BORDER" "$t_str" "$C_BORDER" "$(printf '─%.0s' $(seq 1 "$rem"))" "$C_RESET"
+}
+
+# Rounded box bottom
+mubx_box_bot() {
+  printf '%s╰%s╯%s\n' "$C_BORDER" "$(printf '─%.0s' $(seq 1 "$MUBX_IW"))" "$C_RESET"
+}
+
+# Legacy compatibility wrapper
+mubx_box_line() {
+  case "$1" in
+    '┌'|'╭') mubx_box_top ;;
+    '├')     mubx_box_div ;;
+    '└'|'╰') mubx_box_bot ;;
+    *)       printf '%s%s%s%s%s\n' "$1" "$C_BORDER" "$(printf '─%.0s' $(seq 1 "$MUBX_IW"))" "$C_RESET" "$2" ;;
+  esac
+}
+
+# One panel row: perfectly padded so right border is aligned
+mubx_put() {
+  local line="${1:-}" vis len pad
+  vis="$(printf '%s' "$line" | LC_ALL=C.UTF-8 sed -e $'s/\x1b\\[[0-9;]*[a-zA-Z]//g')"
+  len=$(printf '%s' "$vis" | LC_ALL=C.UTF-8 wc -m)
+  pad=$((MUBX_IW - len))
+  [ "$pad" -lt 0 ] && pad=0
+  printf '%s│%s%s%*s%s│%s\n' "$C_BORDER" "$C_RESET" "$line" "$pad" "" "$C_BORDER" "$C_RESET"
+}
+
+# Left + Right dual aligned card row
+mubx_card() {
+  local left="$1" right="$2" lw rw pad
+  lw=$(mubx_vis_len "$left")
+  rw=$(mubx_vis_len "$right")
+  pad=$((MUBX_IW - lw - rw))
+  [ "$pad" -lt 0 ] && pad=0
+  mubx_put "$left$(printf '%*s' "$pad" '')$right"
+}
+
+# Key-Value row with sleek colors
+mubx_kvrow() {
+  local key="$1" val="$2"
+  mubx_put "$(printf '  %s%-13s%s %s%s%s' "$C_SLATE" "$key" "$C_RESET" "$C_ELECTRIC" "$val" "$C_RESET")"
+}
+
+# Subtle horizontal rule
+mubx_rule() {
+  printf '%s%s%s\n' "$C_BORDER" "$(printf '─%.0s' $(seq 1 $((MUBX_IW + 2))))" "$C_RESET"
+}
+
+# Status Pill badges
+mubx_pill() { # $1 type (UP|DOWN|WARN|ACTIVE|OFF) $2 custom label
+  local type="${1^^}" label="${2:-}"
+  case "$type" in
+    UP|ACTIVE|OK|PASS)
+      printf '%s● %s%s' "$C_MINT" "${label:-ONLINE}" "$C_RESET"
+      ;;
+    DOWN|FAIL|OFF)
+      printf '%s○ %s%s' "$C_CORAL" "${label:-OFFLINE}" "$C_RESET"
+      ;;
+    WARN|PARTIAL)
+      printf '%s◐ %s%s' "$C_AMBER" "${label:-PARTIAL}" "$C_RESET"
+      ;;
+    *)
+      printf '%s· %s%s' "$C_SLATE" "${label:-$type}" "$C_RESET"
+      ;;
+  esac
+}
+
+# Single service status dot
+svc_dot() {
+  if systemctl is-active --quiet "$1" 2>/dev/null; then
+    printf '%s●%s' "$C_MINT" "$C_RESET"
+  else
+    printf '%s○%s' "$C_CORAL" "$C_RESET"
+  fi
+}
+
+# Group card helpers with hint accumulation
+declare -a _mubx_hints=()
+
+mubx_group_open() { # $1 section title
+  _mubx_hints=()
+  mubx_box_top "$1"
+}
+
+mubx_hint() { _mubx_hints+=("$1"); }
+
+mubx_group_close() {
+  mubx_box_bot
+  local h
+  if [ "${#_mubx_hints[@]}" -gt 0 ]; then
+    for h in "${_mubx_hints[@]}"; do
+      printf '  %s↳ %s%s\n' "$C_SLATE" "${h:0:96}" "$C_RESET"
+    done
+    printf '\n'
+  fi
+}
+
+mubx_dot() { # $1 color  $2 glyph  $3 word
+  printf '%s%s%s  %s%-4s%s' "$1" "$2" "$C_RESET" "$1" "$3" "$C_RESET"
+}
+
 mubx_clear() {
   if [ -t 1 ]; then
     clear || true
@@ -79,71 +257,3 @@ mubx_clear() {
   return 0
 }
 
-# --- bordered panel primitives (shared with the control menu) -----------
-# Panels are 60 columns wide: two │ borders around a 58-column inner area,
-# so they render cleanly on any terminal from 80 columns up.
-MUBX_IW="${MUBX_IW:-58}"
-
-mubx_box_line() { # $1 left corner  $2 right corner
-  printf '%s%s%s%s%s\n' "$1" "$C_DIM" "$(printf '─%.0s' $(seq 1 "$MUBX_IW"))" "$C_RESET" "$2"
-}
-
-# One panel row: pads so the right border stays flush even when the line
-# carries ANSI colors or multi-byte glyphs.
-mubx_put() { # $1 row content
-  local line="$1" vis pad
-  vis="$(printf '%s' "$line" | LC_ALL=C.UTF-8 sed -e $'s/\x1b\[[0-9;]*m//g')"
-  pad=$((MUBX_IW - $(printf '%s' "$vis" | LC_ALL=C.UTF-8 wc -m)))
-  [ "$pad" -lt 0 ] && pad=0
-  printf '│%s%*s│\n' "$line" "$pad" ""
-}
-
-# Visible (ANSI-stripped) column count of a string.
-mubx_vis_len() {
-  printf '%s' "$1" | LC_ALL=C.UTF-8 sed -e $'s/\x1b\[[0-9;]*m//g' | LC_ALL=C.UTF-8 wc -m
-}
-
-# A title row with a right-aligned suffix (used for the per-protocol
-# cards in link-gen): left and right content, separated by padding.
-mubx_card() { # $1 left text  $2 right text
-  local left="$1" right="$2" lw rw pad
-  lw="$(mubx_vis_len "$left")"
-  rw="$(mubx_vis_len "$right")"
-  pad=$((MUBX_IW - lw - rw))
-  [ "$pad" -lt 0 ] && pad=0
-  mubx_put "$left$(printf '%*s' "$pad" '')$right"
-}
-
-# A dim "label: value" row inside a panel (value cyan).
-mubx_kvrow() { # $1 label  $2 value
-  mubx_put "$(printf '  %s%-12s%s %s%s%s' "$C_DIM" "$1:" "$C_RESET" "$C_CYAN" "$2" "$C_RESET")"
-}
-
-# --- grouped card helpers -----------------------------------------------
-# One open group card: title row, divider, then rows via mubx_card/mubx_put.
-# Explanations for individual rows can be registered with mubx_hint; they
-# are printed as borderless notes when the card closes.
-mubx_group_open() { # $1 section title
-  _mubx_hints=()
-  mubx_box_line '┌' '┐'
-  mubx_put "$(printf '  %s%s%s' "$C_BOLD" "$1" "$C_RESET")"
-  mubx_box_line '├' '┤'
-}
-
-mubx_hint() { _mubx_hints+=("$1"); }
-
-mubx_group_close() {
-  mubx_box_line '└' '┘'
-  local h
-  if [ "${#_mubx_hints[@]}" -gt 0 ]; then
-    for h in "${_mubx_hints[@]}"; do
-      printf '  %s↳ %s%s\n' "$C_DIM" "${h:0:96}" "$C_RESET"
-    done
-  fi
-  printf '\n'
-}
-
-# A right-flush status made of a colored dot and a four-column word.
-mubx_dot() { # $1 color  $2 glyph  $3 word
-  printf '%s%s%s  %s%-4s%s' "$1" "$2" "$C_RESET" "$1" "$3" "$C_RESET"
-}

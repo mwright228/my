@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MUB-X control panel.
+# MUB-X control panel & telemetry dashboard.
 if [ ! -f /etc/telecom-engine.env ]; then
   echo "[!] Run install.sh first"; exit 1
 fi
@@ -8,19 +8,15 @@ source /usr/local/lib/mubx/common.sh
 DOMAIN=
 load_mubx_env 2>/dev/null || true
 
-# ---- presentation ---------------------------------------------------
-# Bordered-panel drawing (mubx_box_line / mubx_put / mubx_card) lives in
-# lib/common.sh so every screen shares the same 58-column frame.
+MYIP=$(curl -4 -s --max-time 3 ifconfig.me 2>/dev/null || echo "127.0.0.1")
 
 # Two service entries per row, right column aligned.
 row() { # $1 unit1 $2 label1 $3 unit2 $4 label2
-  mubx_put "$(printf '  %s %-14s  %s %s' "$(svc_dot "$1")" "$2" "$(svc_dot "$3")" "$4")"
+  mubx_put "$(printf '  %s %-13s   %s %s' "$(svc_dot "$1")" "$2" "$(svc_dot "$3")" "$4")"
 }
 
-# Status for a set of templated units (the badvpn@7100..7700 instances):
-# green ● when all are active, yellow ◐ when some are, red ○ when none are.
-# Callers pass the exact instance list so we never probe empty ports.
-svc_dot_set() { # $1 unit name  remaining args: instance ports to check
+# Status for badvpn@7100..7700 instances
+svc_dot_set() {
   local unit="$1" port up=0 down=0
   shift
   for port in "$@"; do
@@ -31,88 +27,92 @@ svc_dot_set() { # $1 unit name  remaining args: instance ports to check
     fi
   done
   if [ "$down" -eq 0 ]; then
-    printf '%s●%s' "$C_GREEN" "$C_RESET"
+    printf '%s●%s' "$C_MINT" "$C_RESET"
   elif [ "$up" -eq 0 ]; then
-    printf '%s○%s' "$C_RED" "$C_RESET"
+    printf '%s○%s' "$C_CORAL" "$C_RESET"
   else
-    printf '%s◐%s' "$C_YELLOW" "$C_RESET"
+    printf '%s◐%s' "$C_AMBER" "$C_RESET"
   fi
 }
 
 draw() {
   mubx_clear
-  mubx_box_line '┌' '┐'
-  mubx_put "$(printf '  %sMUB-X%s · %s%s%s' "$C_BOLD" "$C_RESET" "$C_CYAN" "${DOMAIN:-UNCONFIGURED}" "$C_RESET")"
-  mubx_put "$(printf '  %s%s%s' "$C_DIM" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$C_RESET")"
-  mubx_box_line '├' '┤'
-  mubx_put ''
-  mubx_put "$(printf '  %sServices%s' "$C_BOLD" "$C_RESET")"
-  row haproxy    "HAProxy"       nginx                "Nginx"
-  row xray       "Xray"          dropbear             "Dropbear"
-  row wstunnel   "SSH over WS"   squid                "Squid proxy"
-  row hysteria   "Hysteria 2"    wg-quick@wg0         "WireGuard"
+  local ram cpu up
+  ram="$(mubx_sys_ram)"
+  cpu="$(mubx_sys_cpu)"
+  up="$(mubx_sys_uptime)"
+
+  # Header Card
+  mubx_box_top "MUB-X TELECOM ENGINE" "v2.5"
+  mubx_put "$(printf '  %sHost:%s %s%-20s%s %sIPv4:%s %s%s%s' "$C_SLATE" "$C_RESET" "$C_ELECTRIC" "${DOMAIN:-UNCONFIGURED}" "$C_RESET" "$C_SLATE" "$C_RESET" "$C_BRIGHT" "$MYIP" "$C_RESET")"
+  mubx_put "$(printf '  %sRAM:%s  %s%-20s%s %sLoad:%s %s%s%s' "$C_SLATE" "$C_RESET" "$C_MINT" "$ram" "$C_RESET" "$C_SLATE" "$C_RESET" "$C_AMBER" "$cpu" "$C_RESET")"
+  mubx_put "$(printf '  %sUp:%s   %s%-20s%s %sTime:%s %s%s%s' "$C_SLATE" "$C_RESET" "$C_PURPLE" "$up" "$C_RESET" "$C_SLATE" "$C_RESET" "$C_SLATE" "$(date '+%H:%M:%S %Z')" "$C_RESET")"
+  
+  # Service Matrix
+  mubx_box_div "SERVICE MATRIX"
+  row haproxy    "HAProxy 443"   nginx        "Nginx Web/TLS"
+  row xray       "Xray Core"     dropbear     "Dropbear SSH"
+  row wstunnel   "SSH over WS"   squid        "Squid Proxy"
+  row hysteria   "Hysteria 2"    wg-quick@wg0 "WireGuard"
   row openvpn-server@tcp "OpenVPN TCP" openvpn-server@udp "OpenVPN UDP"
-  row zivpn      "ZivPN"         singbox              "ShadowTLS"
-  mubx_put "$(printf '  %s %s' \
-    "$(svc_dot_set badvpn 7100 7200 7300 7400 7500 7600 7700)" "UDPGW bridge (7100-7700)")"
-  mubx_put "$(printf '  %s●%s all up   %s◐%s partial   %s○%s down' \
-    "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_RED" "$C_RESET")"
-  mubx_put ''
-  mubx_put "$(printf '  %sCommands%s' "$C_BOLD" "$C_RESET")"
-  opt() { # $1 number $2 description
-    mubx_put "$(printf '  %s%-2s%s   %s' "$C_CYAN" "$1" "$C_RESET" "$2")"
+  row zivpn      "ZivPN UDP"     singbox      "ShadowTLS v3"
+  mubx_put "$(printf '  %s %-13s   %s●%s up  %s◐%s part  %s○%s down' \
+    "$(svc_dot_set badvpn 7100 7200 7300 7400 7500 7600 7700)" "UDPGW Bridge" \
+    "$C_MINT" "$C_RESET" "$C_AMBER" "$C_RESET" "$C_CORAL" "$C_RESET")"
+
+  # Command Deck (Dual Column)
+  mubx_box_div "COMMAND DECK"
+  copt() { # $1 num1 $2 desc1 $3 num2 $4 desc2
+    local n1="$1" d1="$2" n2="$3" d2="$4"
+    if [ -n "$n2" ]; then
+      mubx_put "$(printf '  %s[%02d]%s %-19s  %s[%02d]%s %s' "$C_ELECTRIC" "$n1" "$C_RESET" "$d1" "$C_ELECTRIC" "$n2" "$C_RESET" "$d2")"
+    else
+      mubx_put "$(printf '  %s[%02d]%s %-19s' "$C_ELECTRIC" "$n1" "$C_RESET" "$d1")"
+    fi
   }
-  opt 1  "Set domain / renew certificate"
-  opt 2  "Generate client links"
-  opt 3  "Show OpenVPN client profile"
-  opt 4  "Add SSH user"
-  opt 5  "Delete SSH user"
-  opt 6  "Restart services"
-  opt 7  "Service status (all protocols)"
-  opt 8  "Run network diagnostics"
-  opt 9  "Show transport recommendation"
-  opt 10 "Users & traffic"
-  opt 11 "Bug-host audit"
-  opt 12 "Restart failed services"
-  opt 13 "Update MUB-X (git pull + re-render)"
-  opt 14 "Regenerate subscriptions"
-  opt 0  "Exit"
-  mubx_put ''
-  mubx_box_line '└' '┘'
+  
+  copt 1  "Domain & SSL Cert"   8  "Network Diagnose"
+  copt 2  "Client Links Gen"    9  "Transport Recommend"
+  copt 3  "OpenVPN Profiles"    10 "Users & Traffic"
+  copt 4  "Add User Account"    11 "Bug-Host Probe"
+  copt 5  "Delete User"         12 "Restart Failed Svcs"
+  copt 6  "Restart All Svcs"    13 "Update MUB-X Engine"
+  copt 7  "Service Status"      14 "Regen Subscriptions"
+  mubx_put "$(printf '  %s[00]%s %-19s' "$C_CORAL" "$C_RESET" "Exit Control Panel")"
+  mubx_box_bot
 }
 
 while true; do
   draw
-  read -r -p "  Choose: " opt || exit 0
+  printf '  %s❯%s ' "$C_ELECTRIC" "$C_RESET"
+  read -r opt || exit 0
   case "$opt" in
-    1) /usr/local/bin/set-domain ;;
-    2) read -r -p "  Bug-host [${DOMAIN:-}]: " b
-       read -r -p "  User [admin]: " mu
-       /usr/local/bin/link-gen "${b:-$DOMAIN}" "${mu:-admin}" ;;
-    3) cat /etc/openvpn/client/mubx-client-tcp.ovpn 2>/dev/null || echo "OpenVPN client config not found" ;;
-    4) /usr/local/bin/add-user ;;
-    5) /usr/local/bin/delete-user ;;
-    6) systemctl restart haproxy nginx xray dropbear squid wstunnel hysteria \
-         zivpn singbox wg-quick@wg0 openvpn-server@tcp openvpn-server@udp \
-         badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 \
-         badvpn@7500 badvpn@7600 badvpn@7700 2>/dev/null || true
-       echo "  [*] Core services restarted" ;;
-    7) /usr/local/bin/svc-status ;;
-    8) /usr/local/bin/mubx-diagnose ;;
-    9) cat /var/lib/mubx/adaptive-recommendation 2>/dev/null || echo "No recommendation yet" ;;
-    10) /usr/local/bin/mubx-users ;;
-    11) /usr/local/bin/mubx-probe ;;
-    12) /usr/local/bin/mubx-restart-failed ;;
-    14) /usr/local/bin/mubx-sub ;;
-    13) /usr/local/bin/mubx-update ;;
-    0|q|Q) exit 0 ;;
+    1|01)   /usr/local/bin/set-domain ;;
+    2|02)   read -r -p "  Bug-host [${DOMAIN:-}]: " b
+            read -r -p "  User [admin]: " mu
+            /usr/local/bin/link-gen "${b:-$DOMAIN}" "${mu:-admin}" ;;
+    3|03)   cat /etc/openvpn/client/mubx-client-tcp.ovpn 2>/dev/null || echo "OpenVPN client config not found" ;;
+    4|04)   /usr/local/bin/add-user ;;
+    5|05)   /usr/local/bin/delete-user ;;
+    6|06)   systemctl restart haproxy nginx xray dropbear squid wstunnel hysteria \
+             zivpn singbox wg-quick@wg0 openvpn-server@tcp openvpn-server@udp \
+             badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 \
+             badvpn@7500 badvpn@7600 badvpn@7700 2>/dev/null || true
+            echo "  [✓] All core services restarted" ;;
+    7|07)   /usr/local/bin/svc-status ;;
+    8|08)   /usr/local/bin/mubx-diagnose ;;
+    9|09)   cat /var/lib/mubx/adaptive-recommendation 2>/dev/null || echo "No recommendation yet" ;;
+    10)     /usr/local/bin/mubx-users ;;
+    11)     /usr/local/bin/mubx-probe ;;
+    12)     /usr/local/bin/mubx-restart-failed ;;
+    13)     /usr/local/bin/mubx-update ;;
+    14)     /usr/local/bin/mubx-sub ;;
+    0|00|q|Q) exit 0 ;;
     *) echo "  Invalid choice: $opt"; sleep 1; continue ;;
   esac
-  # Pause so the output of the chosen command stays readable. Reads from
-  # stdin like every other prompt in this menu: /dev/tty is not guaranteed
-  # to be interactive in every terminal, and a hung read would leave the
-  # panel frozen after a command finishes.
   if [ -t 0 ]; then
-    read -r -p "  Press Enter to return to the menu... " _ || true
+    printf '\n'
+    read -r -p "  Press Enter to return to menu... " _ || true
   fi
 done
+

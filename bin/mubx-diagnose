@@ -12,31 +12,29 @@ TARGET="${1:-${DOMAIN:-1.1.1.1}}"
 ENDPOINTS=("1.1.1.1" "8.8.8.8" "9.9.9.9")
 
 mubx_clear
-mubx_box_line '┌' '┐'
-mubx_put "$(printf '  %sMUB-X%s · %snetwork diagnostics%s' "$C_BOLD" "$C_RESET" "$C_CYAN" "$C_RESET")"
-mubx_box_line '├' '┤'
-mubx_kvrow "Target"    "$TARGET"
-mubx_kvrow "Timestamp" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-mubx_box_line '└' '┘'
+mubx_box_top "NETWORK & SYSTEM DIAGNOSTICS" "AUDIT"
+mubx_kvrow "Audit Target" "$TARGET"
+mubx_kvrow "Timestamp"    "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+mubx_box_bot
 printf '\n'
 
-# --- host information -------------------------------------------------------
-ipv4="$(curl -4 --fail --silent --max-time 5 https://api.ipify.org 2>/dev/null || echo unavailable)"
-ipv6="$(curl -6 --fail --silent --max-time 5 https://api64.ipify.org 2>/dev/null || echo unavailable)"
+# --- Host Information -------------------------------------------------------
+ipv4="$(curl -4 --fail --silent --max-time 3 https://api.ipify.org 2>/dev/null || echo unavailable)"
+ipv6="$(curl -6 --fail --silent --max-time 3 https://api64.ipify.org 2>/dev/null || echo unavailable)"
 cc="$(cat /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || echo unavailable)"
 qdisc="$(cat /proc/sys/net/core/default_qdisc 2>/dev/null || echo unavailable)"
 route="$(ip route show default 2>/dev/null | head -n 1 || echo unavailable)"
 
-mubx_group_open "Host"
-mubx_kvrow "IPv4"      "$ipv4"
-mubx_kvrow "IPv6"      "$ipv6"
-mubx_kvrow "Congestion" "$cc"
-mubx_kvrow "Default qdisc" "$qdisc"
-mubx_put "$(printf '  %s%-12s%s %s%s%s' "$C_DIM" 'Default route:' "$C_RESET" "$C_CYAN" "${route:0:44}" "$C_RESET")"
+mubx_group_open "HOST KERNEL & NETWORK STACK"
+mubx_kvrow "Public IPv4" "$ipv4"
+mubx_kvrow "Public IPv6" "$ipv6"
+mubx_kvrow "TCP Congestion" "$cc"
+mubx_kvrow "Default Qdisc" "$qdisc"
+mubx_put "$(printf '  %s%-13s%s %s%s%s' "$C_SLATE" 'Default Route' "$C_RESET" "$C_ELECTRIC" "${route:0:42}" "$C_RESET")"
 mubx_group_close
 
-# --- ICMP latency / loss ----------------------------------------------------
-mubx_group_open "ICMP latency & loss"
+# --- ICMP Latency / Loss ----------------------------------------------------
+mubx_group_open "ICMP LATENCY & PACKET LOSS"
 for endpoint in "${ENDPOINTS[@]}"; do
   res="$(ping -n -c 5 -W 2 "$endpoint" 2>/dev/null | \
     awk '/packet loss/ {loss=$6} /^rtt/ {split($4, a, "/"); avg=a[2]} \
@@ -48,90 +46,78 @@ for endpoint in "${ENDPOINTS[@]}"; do
     avg="${res#*|}"
   fi
   if [ "$avg" != "n/a" ]; then
-    mubx_card "  $endpoint" "$(printf '%sloss %s   avg %sms%s' "$C_GREEN" "$loss" "$avg" "$C_RESET")"
+    mubx_card "  $endpoint" "$(printf '%s%sms%s  %sloss %s%s' "$C_MINT" "$avg" "$C_RESET" "$C_SLATE" "$loss" "$C_RESET")"
   else
-    mubx_card "  $endpoint" "$(printf '%sloss %s   avg %sms%s' "$C_RED" "$loss" "$avg" "$C_RESET")"
+    mubx_card "  $endpoint" "$(printf '%sunreachable%s' "$C_CORAL" "$C_RESET")"
   fi
 done
 mubx_group_close
 
-# --- DNS reachability -------------------------------------------------------
-mubx_group_open "DNS reachability"
+# --- DNS Reachability -------------------------------------------------------
+mubx_group_open "DNS RESOLUTION"
 for endpoint in "${ENDPOINTS[@]}"; do
   if timeout 5 getent hosts "$endpoint" >/dev/null 2>&1; then
-    mubx_card "  $endpoint" "$(mubx_dot "$C_GREEN" '●' 'up')"
+    mubx_card "  $endpoint" "$(mubx_pill OK "RESOLVED")"
   else
-    mubx_card "  $endpoint" "$(mubx_dot "$C_RED" '○' 'down')"
+    mubx_card "  $endpoint" "$(mubx_pill FAIL "TIMEOUT")"
   fi
 done
 mubx_group_close
 
-# --- TCP reachability (connect to TARGET) -----------------------------------
-mubx_group_open "TCP reachability (connect to $TARGET)"
-for spec in "443 TLS+SS split|443" "nginx HTTP|80" "dropbear SSH|2222" "dropbear SSH alt|109" "dropbear SSH 53|53" "openvpn TCP|1194" "shadowsocks TCP|8388"; do
+# --- TCP Reachability -------------------------------------------------------
+mubx_group_open "TCP PORTS ON $TARGET"
+for spec in "HAProxy 443 (TLS/SS)|443" "Nginx Web (80)|80" "Dropbear SSH (2222)|2222" "Dropbear Alt (109)|109" "Dropbear DNS (53)|53" "OpenVPN TCP (1194)|1194" "Shadowsocks TCP (8388)|8388"; do
   name="${spec%%|*}"; port="${spec##*|}"
   if timeout 4 bash -c 'exec 3<>"/dev/tcp/$1/$2" && exec 3>&-' _ "$TARGET" "$port" 2>/dev/null; then
-    mubx_card "  $name" "$(printf '%s%s:%s open%s' "$C_GREEN" "$TARGET" "$port" "$C_RESET")"
+    mubx_card "  $name" "$(mubx_pill UP "OPEN")"
   else
-    mubx_card "  $name" "$(printf '%s%s:%s unavailable%s' "$C_RED" "$TARGET" "$port" "$C_RESET")"
+    mubx_card "  $name" "$(mubx_pill DOWN "CLOSED")"
   fi
 done
 mubx_group_close
 
-# --- UDP listeners (local check) --------------------------------------------
-mubx_group_open "UDP listeners (local)"
-# badvpn-udpgw accepts client connections over TCP (it forwards UDP on
-# their behalf), so probe TCP listeners, not UDP.
-for spec in "openvpn UDP|2200" "hysteria 2|4433" "wireguard|51820" "zivpn|5667"; do
+# --- UDP Listeners ----------------------------------------------------------
+mubx_group_open "LOCAL UDP LISTENERS"
+for spec in "OpenVPN UDP (2200)|2200" "Hysteria 2 QUIC (4433)|4433" "WireGuard (51820)|51820" "ZivPN Tunnel (5667)|5667"; do
   name="${spec%%|*}"; port="${spec##*|}"
   if ss -H -uln "sport = :$port" 2>/dev/null | grep -q .; then
-    mubx_card "  $name" "$(printf '%s%s listening%s' "$C_GREEN" "$port" "$C_RESET")"
+    mubx_card "  $name" "$(mubx_pill UP "ACTIVE")"
   else
-    mubx_card "  $name" "$(printf '%s%s not listening%s' "$C_RED" "$port" "$C_RESET")"
+    mubx_card "  $name" "$(mubx_pill DOWN "OFFLINE")"
   fi
 done
 for port in 7100 7500 7700; do
   if ss -H -tln "sport = :$port" 2>/dev/null | grep -q .; then
-    mubx_card "  badvpn udpgw" "$(printf '%s%s listening (TCP)%s' "$C_GREEN" "$port" "$C_RESET")"
+    mubx_card "  BadVPN UDPGW ($port)" "$(mubx_pill UP "ACTIVE")"
   else
-    mubx_card "  badvpn udpgw" "$(printf '%s%s not listening%s' "$C_RED" "$port" "$C_RESET")"
+    mubx_card "  BadVPN UDPGW ($port)" "$(mubx_pill DOWN "OFFLINE")"
   fi
 done
 mubx_group_close
 
-# --- Path MTU probes ---------------------------------------------------------
-mubx_group_open "Path MTU probes (to $TARGET)"
+# --- Path MTU Probes --------------------------------------------------------
+mubx_group_open "PATH MTU DISCOVERY (TO $TARGET)"
 for size in 1280 1360 1420 1472; do
   if ping -n -c 1 -W 2 -M do -s "$((size - 28))" "$TARGET" >/dev/null 2>&1; then
-    mubx_card "  MTU $size" "$(mubx_dot "$C_GREEN" '●' 'pass')"
+    mubx_card "  Packet size $size bytes" "$(mubx_pill PASS "NO FRAG")"
   else
-    mubx_card "  MTU $size" "$(mubx_dot "$C_RED" '○' 'fail')"
+    mubx_card "  Packet size $size bytes" "$(mubx_pill FAIL "FRAG REQ")"
   fi
 done
 mubx_group_close
 
-# --- MUB-X services ----------------------------------------------------------
-mubx_group_open "MUB-X services"
-for service in haproxy nginx xray hysteria dropbear squid wg-quick@wg0; do
-  if systemctl is-active --quiet "$service" 2>/dev/null; then
-    mubx_card "  $service" "$(mubx_dot "$C_GREEN" '●' 'up')"
-  else
-    mubx_card "  $service" "$(mubx_dot "$C_RED" '○' 'down')"
-  fi
-done
-mubx_group_close
-
-# --- Firewall & packet filters -----------------------------------------------
-mubx_group_open "Firewall status"
+# --- Firewall Status --------------------------------------------------------
+mubx_group_open "FIREWALL & NAT RULES"
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi "status: active"; then
-  mubx_card "  UFW firewall" "$(mubx_dot "$C_YELLOW" '●' 'active')"
+  mubx_card "  UFW Firewall" "$(mubx_pill WARN "ENABLED")"
   mubx_hint "UFW is active: ensure ports 443, 80, 2222, 5667, 8443, 8388, 8448 are allowed"
 else
-  mubx_card "  UFW firewall" "$(mubx_dot "$C_GREEN" '○' 'inactive')"
+  mubx_card "  UFW Firewall" "$(mubx_pill OK "UNRESTRICTED")"
 fi
 if iptables -t nat -L PREROUTING -n 2>/dev/null | grep -q "5667"; then
-  mubx_card "  ZivPN UDP DNAT" "$(mubx_dot "$C_GREEN" '●' 'active')"
+  mubx_card "  ZivPN UDP DNAT" "$(mubx_pill UP "REDIRECTING")"
 else
-  mubx_card "  ZivPN UDP DNAT" "$(mubx_dot "$C_DIM" '○' 'off')"
+  mubx_card "  ZivPN UDP DNAT" "$(mubx_pill OFF "DISABLED")"
 fi
 mubx_group_close
+

@@ -1,25 +1,37 @@
 #!/bin/bash
 set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "[!] Run delete-user as root." >&2; exit 1; }
-read -r -p "Username to delete: " username
-[[ "$username" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] ||
-  { echo "Bad username" >&2; exit 1; }
+if [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+fi
+
+mubx_clear
+mubx_box_top "USER DEPROVISIONING" "DELETE"
+mubx_put "$(printf '  %sSelect a user account to revoke from SSH and Xray:%s' "$C_SLATE" "$C_RESET")"
+mubx_box_bot
+printf '\n'
+
+printf '  %sUsername to delete: %s' "$C_CORAL" "$C_RESET"
+read -r username
+[[ "$username" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] || die "Bad username"
 
 entry="$(getent passwd "$username" || true)"
-[ -n "$entry" ] || { echo "User does not exist" >&2; exit 1; }
+[ -n "$entry" ] || die "User '$username' does not exist"
 IFS=: read -r _ _ uid _ _ home shell <<< "$entry"
-[ "$uid" -ge 1000 ] || { echo "Refusing to delete a system account" >&2; exit 1; }
-[ "$shell" = "/bin/false" ] ||
-  { echo "Refusing to delete an account not created for MUB-X access" >&2; exit 1; }
+[ "$uid" -ge 1000 ] || die "Refusing to delete a system account"
+[ "$shell" = "/bin/false" ] || die "Refusing to delete an account not created for MUB-X access"
 
-read -r -p "Type the username to confirm deletion: " confirmation
-[ "$confirmation" = "$username" ] || { echo "Deletion cancelled" >&2; exit 1; }
+printf '  %sType "%s%s%s" to confirm deletion: %s' "$C_AMBER" "$C_BRIGHT" "$username" "$C_AMBER" "$C_RESET"
+read -r confirmation
+[ "$confirmation" = "$username" ] || die "Deletion cancelled"
 
 userdel -r "$username" 2>/dev/null || userdel "$username"
-# Drop the matching Xray identity so the user can no longer authenticate
-# on any transport either.
+
+# Drop matching Xray identity
 if [ -x /usr/local/bin/mubx-users ] && [ -f /etc/mubx/users.json ]; then
-  /usr/local/bin/mubx-users remove "$username" ||
-    echo "[!] Xray identity for $username was not removed" >&2
+  /usr/local/bin/mubx-users remove "$username" >/dev/null 2>&1 ||
+    warn "Xray identity for $username was not removed"
 fi
-echo "[-] Deleted $username"
+
+log "User account '$username' was successfully deleted."
+

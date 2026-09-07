@@ -4,16 +4,14 @@
 #   legacy shared identity). With a user store, pass any user name to print
 #   that user's links (per-user UUIDs on every transport).
 #
-# Output is drawn as one bordered card per protocol (same 58-column frame
-# as the control menu): card header carries the service title + live status
-# on the right, and every copyable value is printed below its card as a
-# single full-width line so links survive terminal soft-wrapping.
+# Output is drawn as categorized modern cards with protocol badges and
+# clean, full-width copyable link blocks.
 source /usr/local/lib/mubx/common.sh
 load_mubx_env
 BUG="${1:-$DOMAIN}"
 USER_NAME="${2:-admin}"
-# Resolve the per-user UUID and store index when a store exists. The index
-# maps to the plain Shadowsocks TCP port (8388 + index) the renderer assigns.
+
+# Resolve the per-user UUID and store index when a store exists.
 user_idx=0
 if [ -f /etc/mubx/users.json ]; then
   read -r user_uuid user_idx < <(jq -r --arg n "$USER_NAME" \
@@ -31,200 +29,233 @@ else
     exit 1
   }
 fi
-# Raw Shadowsocks TCP on public 443 carries the shared primary identity
-# (a raw SS inbound has no per-user multiplexing without a WS layer), so
-# that link is only printed for admin / the pre-store legacy identity.
+
 PRIMARY_443=1
 if [ -f /etc/mubx/users.json ] && [ "$USER_NAME" != "admin" ]; then
   PRIMARY_443=0
 fi
+
 MYIP=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null || echo "$DOMAIN")
 HY2_PASS="${HY2_PASS:?Missing Hysteria password; rerun the installer}"
 [ -n "${UUID:-}" ] || { echo "[!] Missing UUID; rerun the installer." >&2; exit 1; }
 
-# --- presentation helpers -------------------------------------------------
-# (mubx_box_line / mubx_put / mubx_card / mubx_kvrow live in common.sh)
-# One protocol card: unit (or space separated units, all must be active),
-# title, meta text; status dot + word flush right.
-card() {
-  local units="$1" title="$2" meta="$3" left right col word up=1 u
+# --- Presentation Helpers -------------------------------------------------
+card_header() { # $1 units $2 title $3 meta
+  local units="$1" title="$2" meta="$3" up=1 u col pill
   for u in $units; do
     systemctl is-active --quiet "$u" 2>/dev/null || up=0
   done
-  left="$(printf '  %s%s%s' "$C_BOLD" "$title" "$C_RESET")"
-  [ -n "$meta" ] && left="$left $(printf '%s%s%s' "$C_DIM" "$meta" "$C_RESET")"
   if [ "$up" -eq 1 ]; then
-    col="$C_GREEN"; word='up  '; dot='●'
+    pill="$(mubx_pill UP "ONLINE")"
   else
-    col="$C_RED"; word='down'; dot='○'
+    pill="$(mubx_pill DOWN "OFFLINE")"
   fi
-  right="$(printf '%s%s%s  %s%s%s' "$col" "$dot" "$C_RESET" "$col" "$word" "$C_RESET")"
-  mubx_box_line '┌' '┐'
-  mubx_card "$left" "$right"
-  mubx_box_line '└' '┘'
+  mubx_box_top "$title" "$meta"
 }
-sub()   { printf '\n  %s%s%s\n' "$C_BOLD" "$1" "$C_RESET"; }
-block() { printf '  %s%s%s\n' "$C_CYAN" "$1" "$C_RESET"; }
-note()  { printf '  %s%s%s\n' "$C_DIM" "$1" "$C_RESET"; }
+
+item() { # $1 tag $2 label
+  printf '\n  %s[%s]%s %s%s%s\n' "$C_PURPLE" "$1" "$C_RESET" "$C_BRIGHT" "$2" "$C_RESET"
+}
+
+block() {
+  printf '  %s%s%s\n' "$C_ELECTRIC" "$1" "$C_RESET"
+}
+
+note() {
+  printf '  %s↳ %s%s\n' "$C_SLATE" "$1" "$C_RESET"
+}
 
 mubx_clear
-# --- summary box ----------------------------------------------------------
-mubx_box_line '┌' '┐'
-mubx_put "$(printf '  %sMUB-X%s · %sclient links%s' "$C_BOLD" "$C_RESET" "$C_CYAN" "$C_RESET")"
-mubx_box_line '├' '┤'
-mubx_kvrow "Gateway"    "$DOMAIN"
-mubx_kvrow "Public IPv4" "$MYIP"
-mubx_kvrow "Bug host"   "$BUG"
-mubx_kvrow "Identity"   "$USER_NAME"
-mubx_box_line '└' '┘'
 
-# A bug host that does not resolve (or resolves elsewhere) silently breaks
-# every link that uses it; surface that before anything gets copied out.
+# --- Summary Box ----------------------------------------------------------
+mubx_box_top "MUB-X CLIENT PROFILE" "CREDENTIALS"
+mubx_kvrow "Gateway Host" "$DOMAIN"
+mubx_kvrow "Public IPv4"  "$MYIP"
+mubx_kvrow "Bug Host"     "$BUG"
+mubx_kvrow "User Account" "$USER_NAME"
+mubx_kvrow "User UUID"    "$UUID"
+mubx_box_bot
+
+# Warn if bug-host does not resolve
 if [ "$BUG" != "$DOMAIN" ]; then
   bug_ip="$(getent ahostsv4 "$BUG" 2>/dev/null | awk 'NR==1 { print $1 }')"
   if [ -z "$bug_ip" ]; then
-    printf '\n  %s[!]%s "%s" does not resolve - links below using it will not connect.\n' \
-      "$C_RED" "$C_RESET" "$BUG"
-    printf '  %s    Pass a real bug-host domain, or omit it to default to %s.\n' \
-      "$C_RED" "$C_RESET" "$DOMAIN"
+    printf '\n  %s[!] WARNING:%s "%s" does not resolve - links using this bug-host may fail.\n' \
+      "$C_CORAL" "$C_RESET" "$BUG"
   elif printf '%s' "$MYIP" | grep -Eq '^[0-9.]+$' && [ "$bug_ip" != "$MYIP" ]; then
-    printf '\n  %s[!]%s "%s" resolves to %s but this server is %s - TLS/WS links\n' \
-      "$C_RED" "$C_RESET" "$BUG" "$bug_ip" "$MYIP"
-    printf '  %s    will fail unless that address routes to this server.\n' "$C_RED" "$C_RESET"
+    printf '\n  %s[!] NOTE:%s "%s" resolves to %s (Server IP: %s) - CDN routing active.\n' \
+      "$C_AMBER" "$C_RESET" "$BUG" "$bug_ip" "$MYIP"
   fi
 fi
 
-# --- 1. Hysteria 2 ---------------------------------------------------------
-card hysteria "Hysteria 2" "(UDP 4433)"
-sub "Import"
+# ============================================================================
+# 1. ANTI-DPI & STEALTH PROTOCOLS
+# ============================================================================
+card_header "hysteria singbox" "ANTI-DPI & STEALTH PROTOCOLS" "NEXT-GEN"
+
+# Hysteria 2
 HY2_HOP_RANGE="$(sed -n 's/^HY2_HOPPING_RANGE=//p' /etc/mubx/hy2-hopping.conf 2>/dev/null | head -n1)"
+item "HY2" "Hysteria 2 (QUIC / UDP 4433)"
 if [ -n "$HY2_HOP_RANGE" ]; then
   block "hysteria2://${HY2_PASS}@${DOMAIN}:4433/?sni=${DOMAIN}&mport=4433%2C${HY2_HOP_RANGE}#MUBX-Hysteria2"
-  note "  port hopping active: UDP ${HY2_HOP_RANGE} hops onto 4433 (re-key past throttling)"
+  note "Port hopping active: UDP ${HY2_HOP_RANGE} → 4433 (bypass ISP rate-limiting)"
 else
   block "hysteria2://${HY2_PASS}@${DOMAIN}:4433/?sni=${DOMAIN}#MUBX-Hysteria2"
 fi
 
-# --- 2. ZivPN -------------------------------------------------------------
-if command -v zivpn >/dev/null 2>&1 && [ -n "${ZIVPN_PASS:-}" ]; then
-  card zivpn "ZivPN UDP VPN" "(UDP 5667)"
-  sub "Server"
-  block "${DOMAIN} (${MYIP})"
-  sub "Password"
-  block "$ZIVPN_PASS"
+# ShadowTLS v3 + SS-2022
+if [ -n "${SHADOWTLS_PASS:-}" ] && systemctl is-active --quiet singbox 2>/dev/null; then
+  STLS_SNI="${SHADOWTLS_SNI:-www.microsoft.com}"
+  if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
+    source /usr/local/lib/mubx/subscribe.sh
+    STLS_KEY="$(mubx_ss2022_psk admin 2>/dev/null || true)"
+    if [ -n "$STLS_KEY" ]; then
+      STLS_B64="$(printf '2022-blake3-aes-256-gcm:%s' "$STLS_KEY" | base64 -w 0 | tr '+/' '-_' | tr -d '=')"
+      item "STLS" "ShadowTLS v3 + SS-2022 Decoy Route (Port 443)"
+      block "ss://${STLS_B64}@${DOMAIN}:443?plugin=shadow-tls%3Bhost%3D${STLS_SNI}%3Bpassword%3D${SHADOWTLS_PASS}%3Bversion%3D3#MUBX-ShadowTLS"
+      note "Decoy SNI: ${STLS_SNI} (HAProxy multiplexes directly to sing-box on 443)"
+      note "Supported in Shadowrocket, sing-box, NekoBox, Clash.Meta"
+    fi
+  fi
 fi
 
-# --- 3. Xray transports ---------------------------------------------------
-card xray "Xray transports" "(TCP 80 / 443 / 8443)"
-sub "VLESS WebSocket (TLS)"
+# ZivPN
+if command -v zivpn >/dev/null 2>&1 && [ -n "${ZIVPN_PASS:-}" ]; then
+  item "ZIVPN" "ZivPN UDP Tunnel (UDP 5667)"
+  block "Server: ${DOMAIN} (${MYIP})  |  Port: 5667  |  Password: ${ZIVPN_PASS}"
+fi
+mubx_box_bot
+
+# ============================================================================
+# 2. XRAY MULTI-TRANSPORT INGRESS
+# ============================================================================
+card_header "xray" "XRAY TRANSPORTS" "TLS & HTTP/80"
+
+item "VLESS-WS" "VLESS WebSocket (TLS 443)"
 block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-ws#MUBX-VLESS-WS"
-sub "VLESS WebSocket (plain, port 80)"
+
+item "VLESS-WS-80" "VLESS WebSocket (Plain HTTP 80)"
 block "vless://${UUID}@${BUG}:80?encryption=none&security=none&type=ws&host=${DOMAIN}&path=%2Fvless-ws#MUBX-VLESS-WS-80"
-sub "VLESS HTTPUpgrade (TLS)"
+
+item "VLESS-UPG" "VLESS HTTPUpgrade (TLS 443)"
 block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=httpupgrade&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-httpupgrade#MUBX-HTTPUpgrade"
-sub "VLESS HTTPUpgrade (plain, port 80)"
+
+item "VLESS-UPG-80" "VLESS HTTPUpgrade (Plain HTTP 80)"
 block "vless://${UUID}@${BUG}:80?encryption=none&security=none&type=httpupgrade&host=${DOMAIN}&path=%2Fvless-httpupgrade#MUBX-HTTPUpgrade-80"
-sub "VLESS xHTTP (TLS)"
+
+item "VLESS-XHTTP" "VLESS xHTTP (TLS 443)"
 block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=xhttp&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-xhttp#MUBX-XHTTP"
-sub "VLESS xHTTP (plain, port 80)"
-block "vless://${UUID}@${BUG}:80?encryption=none&security=none&type=xhttp&host=${DOMAIN}&path=%2Fvless-xhttp#MUBX-XHTTP-80"
-sub "VMess WebSocket (TLS)"
+
+item "VMESS-WS" "VMess WebSocket (TLS 443)"
 VJ="{\"v\":\"2\",\"ps\":\"MUBX-VMess\",\"add\":\"${BUG}\",\"port\":\"443\",\"id\":\"${UUID}\",\"aid\":\"0\",\"net\":\"ws\",\"path\":\"/vmess-ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"tls\":\"tls\",\"sni\":\"${BUG}\"}"
 block "vmess://$(echo -n "$VJ" | base64 -w 0)"
-sub "VMess WebSocket (plain, port 80)"
+
+item "VMESS-WS-80" "VMess WebSocket (Plain HTTP 80)"
 VJ80="{\"v\":\"2\",\"ps\":\"MUBX-VMess-80\",\"add\":\"${BUG}\",\"port\":\"80\",\"id\":\"${UUID}\",\"aid\":\"0\",\"net\":\"ws\",\"path\":\"/vmess-ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\"}"
 block "vmess://$(echo -n "$VJ80" | base64 -w 0)"
-sub "Trojan WebSocket (TLS)"
+
+item "TROJAN-WS" "Trojan WebSocket (TLS 443)"
 block "trojan://${UUID}@${BUG}:443?security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&path=%2Ftrojan-ws#MUBX-Trojan"
-sub "Trojan WebSocket (plain, port 80)"
+
+item "TROJAN-WS-80" "Trojan WebSocket (Plain HTTP 80)"
 block "trojan://${UUID}@${BUG}:80?security=none&type=ws&host=${DOMAIN}&path=%2Ftrojan-ws#MUBX-Trojan-80"
+mubx_box_bot
 
-# --- 4. SSH & injectors ---------------------------------------------------
-card dropbear "Dropbear SSH" "(2222 / 109 / 53)"
-sub "Direct"
-block "${MYIP}:2222"
-note "  alternate ports: ${MYIP}:109, ${MYIP}:53"
-card wstunnel "SSH over WebSocket" "(80 / 443)"
-sub "TLS (wss)"
-block "ssh -o ProxyCommand='wstunnel client -L stdio://%h:%p wss://${DOMAIN}${SSH_WS_PATH}' user@${DOMAIN}"
-sub "Plain (ws)"
-block "ssh -o ProxyCommand='wstunnel client -L stdio://%h:%p ws://${DOMAIN}${SSH_WS_PATH}' user@${DOMAIN}"
-card squid "Squid CONNECT proxy" "(8080 / 3128)"
-sub "Proxy"
-block "${MYIP}:8080  (alt ${MYIP}:3128)"
-sub "HTTP payload"
-block "CONNECT [host_port] HTTP/1.1[crlf]Host: ${BUG}[crlf]Connection: Keep-Alive[crlf][crlf]"
+# ============================================================================
+# 3. SHADOWSOCKS FAMILY
+# ============================================================================
+card_header "xray haproxy" "SHADOWSOCKS FAMILY" "WS & RAW TCP"
 
-# --- 5. WireGuard ---------------------------------------------------------
-card wg-quick@wg0 "WireGuard" "(UDP 51820)"
-WG_CONF=/etc/wireguard/mubx-client.conf
-if [ -f "$WG_CONF" ]; then
-  sub "Scan the QR code"
-  qrencode -t ansiutf8 < "$WG_CONF"
-elif systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
-  note "  WireGuard active on 51820. Profile: $WG_CONF"
-else
-  note "  WireGuard installed but inactive (systemctl status wg-quick@wg0)"
-fi
-
-# --- 6. OpenVPN -----------------------------------------------------------
-card "openvpn-server@tcp openvpn-server@udp" "OpenVPN" "(TCP 1194 / UDP 2200)"
-sub "TCP profile"
-block "/etc/openvpn/client/mubx-client-tcp.ovpn"
-sub "UDP profile"
-block "/etc/openvpn/client/mubx-client-udp.ovpn"
-
-# --- 7. Shadowsocks -------------------------------------------------------
-card xray "Shadowsocks" "(WS 443/80 + plain TCP 443 & 8388+)"
 SS_UI="$(printf 'aes-256-gcm:%s' "$UUID" | base64 -w 0 | tr '+/' '-_' | tr -d '=')"
 SS_PLAIN_PORT=$(( ${SS_PLAIN_BASE_PORT:-8388} + ${user_idx:-0} ))
-sub "TLS route (port 443, own-domain SNI)"
+
+item "SS-WS-TLS" "Shadowsocks WS (Port 443 TLS)"
 block "ss://${SS_UI}@${DOMAIN}:443?plugin=v2ray-plugin%3Btls%3Bhost%3D${DOMAIN}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
-[ "$BUG" = "$DOMAIN" ] || {
-sub "TLS route with custom SNI (port 443, host ${BUG})"
-block "ss://${SS_UI}@${BUG}:443?plugin=v2ray-plugin%3Btls%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}-${BUG}"
-}
-sub "Plain WS route (port 80)"
-block "ss://${SS_UI}@${BUG}:80?plugin=v2ray-plugin%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
-if [ "$PRIMARY_443" -eq 1 ]; then
-sub "Plain TCP route (port 443, shared primary identity)"
-block "ss://${SS_UI}@${DOMAIN}:443#MUBX-SS-443"
-note "  raw SS TCP on 443 - no TLS/WS/plugin; HAProxy sends every non-TLS 443 connection here, password is the admin/primary identity"
-else
-note "  raw SS TCP on 443 uses the shared 'admin' identity - run link-gen with user admin for that link"
+
+if [ "$BUG" != "$DOMAIN" ]; then
+  item "SS-WS-SNI" "Shadowsocks WS (Port 443 SNI Bug-Host)"
+  block "ss://${SS_UI}@${BUG}:443?plugin=v2ray-plugin%3Btls%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}-${BUG}"
 fi
-sub "Plain TCP route (port ${SS_PLAIN_PORT}, no TLS)"
+
+item "SS-WS-80" "Shadowsocks WS (Port 80 Plain)"
+block "ss://${SS_UI}@${BUG}:80?plugin=v2ray-plugin%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
+
+if [ "$PRIMARY_443" -eq 1 ]; then
+  item "SS-TCP-443" "Shadowsocks Raw TCP (Port 443 Shared Primary)"
+  block "ss://${SS_UI}@${DOMAIN}:443#MUBX-SS-443"
+  note "Direct raw TCP on 443 without plugin/TLS; multiplexed automatically by HAProxy"
+fi
+
+item "SS-TCP" "Shadowsocks Raw TCP (Port ${SS_PLAIN_PORT} Direct)"
 block "ss://${SS_UI}@${DOMAIN}:${SS_PLAIN_PORT}#MUBX-SS-${USER_NAME}-tcp"
-note "plain TCP needs no plugin and no cert toggles - works in v2rayNG / sing-box / Shadowrocket"
-# Shadowsocks 2022 route: shown only when the user has an SS-2022 key.
+note "Zero-overhead standalone port - instant connection in v2rayNG / Shadowrocket / sing-box"
+
 if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
   source /usr/local/lib/mubx/subscribe.sh
   SS22_PSK="$(mubx_ss2022_psk "$USER_NAME" 2>/dev/null || true)"
   if [ -n "$SS22_PSK" ]; then
     SS22_UI="$(printf '2022-blake3-aes-256-gcm:%s' "$SS22_PSK" | base64 -w 0 | tr '+/' '-_' | tr -d '=')"
-    sub "SS 2022 route (port 443, modern cipher)"
+    item "SS-2022" "Shadowsocks 2022 WS (Port 443 BLAKE3 Cipher)"
     block "ss://${SS22_UI}@${DOMAIN}:443?plugin=v2ray-plugin%3Btls%3Bhost%3D${DOMAIN}%3Bpath%3D%2Fss22-${USER_NAME}%3Bmux%3D0#MUBX-SS22-${USER_NAME}"
-    note "2022-blake3-aes-256-gcm needs a current client (v2rayNG 1.8.19+, sing-box, Shadowrocket)"
-  fi
-  # ShadowTLS v3 + SS-2022 (server-side via sing-box): the strongest
-  # anti-DPI route. Needs NekoBox / sing-box / Shadowrocket-style clients
-  # with a ShadowTLS transport option.
-  if [ -n "${SHADOWTLS_PASS:-}" ] && systemctl is-active --quiet singbox 2>/dev/null; then
-    STLS_SNI="${SHADOWTLS_SNI:-www.microsoft.com}"
-    STLS_KEY="$(mubx_ss2022_psk admin 2>/dev/null || true)"
-    card singbox "ShadowTLS v3 + SS-2022" "(TCP 443, decoy-SNI route)"
-    sub "NekoBox / sing-box / Shadowrocket"
-    block "server: ${DOMAIN}  port: 443"
-    block "transport: ShadowTLS v3  password: ${SHADOWTLS_PASS}"
-    block "SNI (handshake decoy): ${STLS_SNI}"
-    STLS_B64="$(printf '2022-blake3-aes-256-gcm:%s' "$STLS_KEY" | base64 -w 0 | tr '+/' '-_' | tr -d '=')"
-    sub "1-Click Share Link (Shadowrocket / NekoBox / sing-box)"
-    block "ss://${STLS_B64}@${DOMAIN}:443?plugin=shadow-tls%3Bhost%3D${STLS_SNI}%3Bpassword%3D${SHADOWTLS_PASS}%3Bversion%3D3#MUBX-ShadowTLS"
-    note "client SNI must be the decoy (${STLS_SNI}) - HAProxy routes that hello to sing-box on 443"
-    note "import via the subscription URL (clash.yaml / singbox.json) - full config there"
   fi
 fi
-[ "$BUG" = "$DOMAIN" ] || \
-  printf '  %s[!]%s Custom-SNI SS-TLS still terminates with %s'\''s own certificate: with host %s the client must skip certificate verification / set insecure (v2ray-plugin has no verify-off URI flag), or use the own-domain / plain links above.\n' \
-    "$C_RED" "$C_RESET" "$DOMAIN" "$BUG"
+mubx_box_bot
+
+# ============================================================================
+# 4. SSH, INJECTORS & PROXIES
+# ============================================================================
+card_header "dropbear wstunnel squid" "SSH & PAYLOAD INJECTORS" "PORTS"
+
+item "SSH" "Dropbear SSH Direct (Ports 2222 / 109 / 53)"
+block "${MYIP}:2222  (or ${MYIP}:109 / ${MYIP}:53)"
+
+item "SSH-WSS" "SSH over WebSocket (TLS 443 wss)"
+block "ssh -o ProxyCommand='wstunnel client -L stdio://%h:%p wss://${DOMAIN}${SSH_WS_PATH}' ${USER_NAME}@${DOMAIN}"
+
+item "SSH-WS" "SSH over WebSocket (Plain 80 ws)"
+block "ssh -o ProxyCommand='wstunnel client -L stdio://%h:%p ws://${DOMAIN}${SSH_WS_PATH}' ${USER_NAME}@${DOMAIN}"
+
+item "SQUID" "Squid HTTP CONNECT Proxy (Ports 8080 / 3128)"
+block "${MYIP}:8080  |  Alt Port: 3128"
+
+item "PAYLOAD" "HTTP Injector / Custom Payload Template"
+block "CONNECT [host_port] HTTP/1.1[crlf]Host: ${BUG}[crlf]Connection: Keep-Alive[crlf][crlf]"
+mubx_box_bot
+
+# ============================================================================
+# 5. FULL-TUNNEL VPN PROFILES
+# ============================================================================
+card_header "wg-quick@wg0 openvpn-server@tcp" "FULL-TUNNEL VPNS" "PROFILES"
+
+WG_CONF=/etc/wireguard/mubx-client.conf
+if [ -f "$WG_CONF" ]; then
+  item "WG" "WireGuard Client QR Code (UDP 51820)"
+  qrencode -t ansiutf8 < "$WG_CONF"
+  note "Config file: $WG_CONF"
+fi
+
+item "OVPN" "OpenVPN Client Profiles"
+block "TCP Profile: /etc/openvpn/client/mubx-client-tcp.ovpn"
+block "UDP Profile: /etc/openvpn/client/mubx-client-udp.ovpn"
+mubx_box_bot
+
+# ============================================================================
+# 6. SUBSCRIPTION URLS (IF ACTIVE)
+# ============================================================================
+if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
+  source /usr/local/lib/mubx/subscribe.sh
+  sub_tok="$(cat "$MUBX_SUB_TOKEN_DIR/$USER_NAME" 2>/dev/null || true)"
+  if [ -n "$sub_tok" ]; then
+    card_header "nginx" "1-CLICK SUBSCRIPTIONS" "AUTO-SYNC"
+    item "CLASH" "Clash Meta / Mihomo URL"
+    block "https://${DOMAIN}/sub/${sub_tok}/clash.yaml"
+    item "SINGBOX" "sing-box JSON Config URL"
+    block "https://${DOMAIN}/sub/${sub_tok}/singbox.json"
+    item "BASE64" "Universal Base64 Node List URL (v2rayNG / Shadowrocket)"
+    block "https://${DOMAIN}/sub/${sub_tok}/sub.txt"
+    mubx_box_bot
+  fi
+fi
+
 printf '\n'
+

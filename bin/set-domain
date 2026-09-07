@@ -1,13 +1,21 @@
 #!/bin/bash
 set -euo pipefail
-read -r -p "Domain: " d
+if [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+fi
+
+mubx_clear
+mubx_box_top "DOMAIN & SSL MIGRATION" "CONFIG"
+mubx_put "$(printf '  %sEnter new domain name to provision Let'\''s Encrypt certs:%s' "$C_SLATE" "$C_RESET")"
+mubx_box_bot
+printf '\n'
+
+printf '  %sNew Domain: %s' "$C_PURPLE" "$C_RESET"
+read -r d
 d="${d,,}"
-[ -z "$d" ] && { echo "Domain is required" >&2; exit 1; }
-[[ "$d" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]] ||
-  { echo "Invalid domain" >&2; exit 1; }
-success=0
-declare -A was_active=()
-declare -A backups=()
+[ -z "$d" ] && die "Domain is required"
+[[ "$d" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]] || die "Invalid domain format"
+
 declare -A absent=()
 backup_dir="$(mktemp -d)"
 backup_file() {

@@ -7,67 +7,71 @@ if [ -r /usr/local/lib/mubx/common.sh ]; then
   load_mubx_env 2>/dev/null || true
 fi
 
-read -r -p "Username: " u
-read -r -s -p "Password: " p
+mubx_clear
+mubx_box_top "USER PROVISIONING" "NEW ACCOUNT"
+mubx_put "$(printf '  %sEnter credentials to provision SSH/VPN/Xray access:%s' "$C_SLATE" "$C_RESET")"
+mubx_box_bot
 printf '\n'
-read -r -s -p "Confirm password: " p_confirm
+
+printf '  %sUsername:         %s' "$C_PURPLE" "$C_RESET"
+read -r u
+printf '  %sPassword:         %s' "$C_PURPLE" "$C_RESET"
+read -r -s p
 printf '\n'
-[ "$p" = "$p_confirm" ] || { echo "Passwords do not match" >&2; exit 1; }
-[ -n "$p" ] || { echo "Password cannot be empty" >&2; exit 1; }
-[ "${#p}" -ge 8 ] || { echo "Password must be at least 8 characters" >&2; exit 1; }
-read -r -p "Days: " d
-[[ "$u" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] || { echo "Bad username"; exit 1; }
-[[ "$d" =~ ^[1-9][0-9]*$ ]] || { echo "Days must be positive"; exit 1; }
+printf '  %sConfirm Password: %s' "$C_PURPLE" "$C_RESET"
+read -r -s p_confirm
+printf '\n'
+[ "$p" = "$p_confirm" ] || die "Passwords do not match"
+[ -n "$p" ] || die "Password cannot be empty"
+[ "${#p}" -ge 8 ] || die "Password must be at least 8 characters"
+printf '  %sValid Days:       %s' "$C_PURPLE" "$C_RESET"
+read -r d
+[[ "$u" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] || die "Bad username (must be 3-32 chars, lowercase, [a-z0-9_-])"
+[[ "$d" =~ ^[1-9][0-9]*$ ]] || die "Days must be a positive integer"
 EXP=$(date -d "+${d} days" +%Y-%m-%d)
 grep -qxF '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shells
 useradd -M -s /bin/false -e "$EXP" "$u"
 printf '%s:%s\n' "$u" "$p" | chpasswd
-# Issue the same identity on the Xray transports when a user store exists,
-# so this SSH user also gets their own UUID and can be revoked individually.
+
+# Issue the same identity on Xray transports when user store exists
 if [ -x /usr/local/bin/mubx-users ] && [ -f /etc/mubx/users.json ]; then
-  /usr/local/bin/mubx-users add "$u" "$d" ||
-    echo "[!] Xray identity for $u was not created" >&2
+  /usr/local/bin/mubx-users add "$u" "$d" >/dev/null 2>&1 ||
+    warn "Xray identity for $u was not created"
 fi
 
 printf '\n'
-mubx_box_line '┌' '┐'
-mubx_put "$(printf '  %sMUB-X%s · %sSSH / OVPN ACCOUNT CREATED%s' "$C_BOLD" "$C_RESET" "$C_CYAN" "$C_RESET")"
-mubx_box_line '├' '┤'
-mubx_kvrow "Domain"      "${DOMAIN:-<server domain>}"
-mubx_kvrow "Username"    "$u"
-mubx_kvrow "Password"    "$p"
-mubx_kvrow "Active days" "$d"
-mubx_kvrow "Expires on"  "$EXP"
-mubx_box_line '└' '┘'
-printf '\n'
-mubx_box_line '┌' '┐'
-mubx_put "$(printf '  %sProtocols & ports on this server%s' "$C_BOLD" "$C_RESET")"
-mubx_box_line '├' '┤'
-mubx_kvrow "SSH Dropbear"  "109, 2222, 53 (TCP)"
-mubx_kvrow "SSH over WS"   "443 wss / 80 ws"
-mubx_kvrow "Squid CONNECT" "8080, 3128"
-mubx_kvrow "OpenVPN"       "1194 (TCP), 2200 (UDP)"
-mubx_kvrow "WireGuard"     "51820 (UDP)"
-mubx_kvrow "Hysteria 2"    "4433 (UDP)"
-mubx_kvrow "ZivPN"         "5667 (UDP)"
-mubx_kvrow "UDPGW bridge"  "7100-7700 (UDP)"
-mubx_kvrow "VLESS TLS TCP" "8443 (TCP, own cert)"
-mubx_kvrow "Shadowsocks WS" "443 TLS / 80 plain"
-mubx_kvrow "Shadowsocks TCP" "8388+ (plain, per user)"
-mubx_kvrow "Xray transports" "menu 2 → all links"
-mubx_box_line '└' '┘'
+mubx_box_top "PROVISIONING RECEIPT" "SUCCESS"
+mubx_kvrow "Gateway Host"   "${DOMAIN:-<server domain>}"
+mubx_kvrow "Account User"   "$u"
+mubx_kvrow "Account Pass"   "$p"
+mubx_kvrow "Validity"       "$d days"
+mubx_kvrow "Expiry Date"    "$EXP"
+mubx_box_div "ACTIVE PROTOCOLS & PORTS"
+mubx_kvrow "SSH Dropbear"   "2222, 109, 53 (TCP)"
+mubx_kvrow "SSH over WS"    "443 wss / 80 ws"
+mubx_kvrow "Squid CONNECT"  "8080, 3128"
+mubx_kvrow "OpenVPN Server" "1194 (TCP), 2200 (UDP)"
+mubx_kvrow "WireGuard VPN"  "51820 (UDP)"
+mubx_kvrow "Hysteria 2"     "4433 (UDP QUIC)"
+mubx_kvrow "ShadowTLS v3"   "443 (Decoy SNI)"
+mubx_kvrow "Shadowsocks WS" "443 TLS / 80 Plain"
+mubx_kvrow "Shadowsocks TCP""8388+ (Dedicated)"
+mubx_kvrow "Xray Transports""VLESS / VMess / Trojan"
+mubx_box_bot
 
 if [ -t 0 ]; then
-  read -r -p "  Print full client links for $u? [y/N] " ans
+  printf '\n'
+  read -r -p "  Print full client connection links for $u? [y/N] " ans
   if [[ "$ans" =~ ^[yY] ]]; then
     if [ -x /usr/local/bin/link-gen ]; then
       /usr/local/bin/link-gen "${DOMAIN:-}" "$u"
     else
-      echo "[!] link-gen not installed" >&2
+      warn "link-gen not installed"
     fi
   else
-    echo "  Client links: run 'link-gen [bug-host] $u' or menu option 2."
+    printf '  %s↳ Client links: run '\''link-gen [bug-host] %s'\'' or menu option 2.%s\n' "$C_SLATE" "$u" "$C_RESET"
   fi
 else
   echo "[+] $u expires $EXP"
 fi
+
