@@ -73,11 +73,12 @@ draw() {
   
   copt 1  "Domain & SSL Cert"   8  "Network Diagnose"
   copt 2  "Client Links Gen"    9  "Transport Recommend"
-  copt 3  "OpenVPN Profiles"    10 "Users & Traffic"
+  copt 3  "OpenVPN Profiles"    10 "Users & Quotas"
   copt 4  "Add User Account"    11 "Bug-Host Probe"
   copt 5  "Delete User"         12 "Restart Failed Svcs"
   copt 6  "Restart All Svcs"    13 "Update MUB-X Engine"
   copt 7  "Service Status"      14 "Regen Subscriptions"
+  copt 15 "Cloudflare WARP"     16 "Kernel BBR Tuning"
   mubx_put "$(printf '  %s[00]%s %-19s' "$C_CORAL" "$C_RESET" "Exit Control Panel")"
   mubx_box_bot
 }
@@ -107,6 +108,20 @@ while true; do
     12)     /usr/local/bin/mubx-restart-failed ;;
     13)     /usr/local/bin/mubx-update ;;
     14)     /usr/local/bin/mubx-sub ;;
+    15)     if [ -s /etc/mubx/warp.json ]; then
+              printf '  %sCloudflare WARP is currently ENABLED.%s\n' "$C_MINT" "$C_RESET"
+              read -r -p "  Disable Cloudflare WARP and route direct? [y/N]: " w_ans
+              if [[ "$w_ans" =~ ^[yY] ]]; then
+                /usr/local/bin/mubx-warp disable
+              fi
+            else
+              printf '  %sCloudflare WARP is currently DISABLED.%s\n' "$C_SLATE" "$C_RESET"
+              read -r -p "  Enable Cloudflare WARP streaming unblock? [Y/n]: " w_ans
+              if [[ ! "$w_ans" =~ ^[nN] ]]; then
+                /usr/local/bin/mubx-warp register
+              fi
+            fi ;;
+    16)     /usr/local/bin/mubx-tune ;;
     0|00|q|Q) exit 0 ;;
     *) echo "  Invalid choice: $opt"; sleep 1; continue ;;
   esac

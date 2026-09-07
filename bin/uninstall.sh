@@ -69,7 +69,7 @@ for path in /usr/local/bin/xray /usr/local/bin/hysteria /usr/local/bin/wstunnel 
 done
 for path in /usr/local/bin/menu /usr/local/bin/link-gen /usr/local/bin/add-user \
   /usr/local/bin/delete-user /usr/local/bin/mubx-diagnose \
-  /usr/local/bin/mubx-tune /usr/local/bin/mubx-adaptive \
+  /usr/local/bin/mubx-tune /usr/local/bin/mubx-warp /usr/local/bin/mubx-adaptive \
   /usr/local/bin/mubx-probe /usr/local/bin/mubx-restart-failed \
   /usr/local/bin/mubx-update /usr/local/bin/set-domain /usr/local/bin/mubx-cron \
   /usr/local/bin/mubx-users /usr/local/bin/svc-status \

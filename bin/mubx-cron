@@ -115,6 +115,25 @@ if [ -r /usr/local/lib/mubx/subscribe.sh ] && [ -f /etc/mubx/users.json ]; then
   done < <(jq -r '.[].name' /etc/mubx/users.json)
 fi
 
+# Quota Enforcement: Auto-freeze any active users who exceeded their assigned GB limit
+if [ -x /usr/local/bin/mubx-users ] && [ -f /etc/mubx/users.json ]; then
+  jq -r '.[] | select((.status // "active") != "frozen" and (.quota_gb // 0) > 0) | [.name, ((.quota_gb // 0)|tostring)] | @tsv' /etc/mubx/users.json 2>/dev/null |
+    while IFS=$'\t' read -r q_user q_gb; do
+      [ -n "$q_user" ] && [ -n "$q_gb" ] || continue
+      pat_up="user>>>${q_user}@${DOMAIN:-mubx}>>>traffic>>>uplink"
+      pat_down="user>>>${q_user}@${DOMAIN:-mubx}>>>traffic>>>downlink"
+      u_bytes="$(xray api statsquery --server=127.0.0.1:10085 --pattern="$pat_up" 2>/dev/null | jq -r '.. | objects | select(.name? == $p) | .value' --arg p "$pat_up" 2>/dev/null || echo 0)"
+      d_bytes="$(xray api statsquery --server=127.0.0.1:10085 --pattern="$pat_down" 2>/dev/null | jq -r '.. | objects | select(.name? == $p) | .value' --arg p "$pat_down" 2>/dev/null || echo 0)"
+      [ -n "$u_bytes" ] && [ "$u_bytes" != "null" ] || u_bytes=0
+      [ -n "$d_bytes" ] && [ "$d_bytes" != "null" ] || d_bytes=0
+      total_bytes=$(( u_bytes + d_bytes ))
+      limit_bytes=$(( q_gb * 1073741824 ))
+      if [ "$total_bytes" -ge "$limit_bytes" ]; then
+        /usr/local/bin/mubx-users freeze "$q_user" >/dev/null 2>&1 || true
+      fi
+    done
+fi
+
 # Self-heal: revive anything that should be running but is not.
 for svc in "${SERVICES[@]}"; do
   systemctl cat "$svc.service" >/dev/null 2>&1 || continue

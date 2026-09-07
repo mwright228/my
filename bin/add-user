@@ -26,8 +26,12 @@ printf '\n'
 [ "${#p}" -ge 8 ] || die "Password must be at least 8 characters"
 printf '  %sValid Days:       %s' "$C_PURPLE" "$C_RESET"
 read -r d
+printf '  %sData Quota (GB):  %s' "$C_PURPLE" "$C_RESET"
+read -r q || q=""
+q="${q:-0}"
 [[ "$u" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] || die "Bad username (must be 3-32 chars, lowercase, [a-z0-9_-])"
 [[ "$d" =~ ^[1-9][0-9]*$ ]] || die "Days must be a positive integer"
+[[ "$q" =~ ^[0-9]+$ ]] || q=0
 EXP=$(date -d "+${d} days" +%Y-%m-%d)
 grep -qxF '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shells
 useradd -M -s /bin/false -e "$EXP" "$u"
@@ -35,7 +39,7 @@ printf '%s:%s\n' "$u" "$p" | chpasswd
 
 # Issue the same identity on Xray transports when user store exists
 if [ -x /usr/local/bin/mubx-users ] && [ -f /etc/mubx/users.json ]; then
-  /usr/local/bin/mubx-users add "$u" "$d" >/dev/null 2>&1 ||
+  /usr/local/bin/mubx-users add "$u" "$d" "$q" >/dev/null 2>&1 ||
     warn "Xray identity for $u was not created"
 fi
 
@@ -46,6 +50,11 @@ mubx_kvrow "Account User"   "$u"
 mubx_kvrow "Account Pass"   "$p"
 mubx_kvrow "Validity"       "$d days"
 mubx_kvrow "Expiry Date"    "$EXP"
+if [ "$q" -gt 0 ]; then
+  mubx_kvrow "Data Quota"     "${q} GB"
+else
+  mubx_kvrow "Data Quota"     "Unlimited"
+fi
 mubx_box_div "ACTIVE PROTOCOLS & PORTS"
 mubx_kvrow "SSH Dropbear"   "2222, 109, 53 (TCP)"
 mubx_kvrow "SSH over WS"    "443 wss / 80 ws"

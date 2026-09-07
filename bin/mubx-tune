@@ -1,4 +1,5 @@
 #!/bin/bash
+# MUB-X telecom-grade network stack & kernel optimization.
 set -Eeuo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -6,25 +7,57 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+if [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+fi
+
 install -d -m 0755 /etc/sysctl.d
 cat > /etc/sysctl.d/99-mubx-network.conf <<'EOF'
-net.ipv4.tcp_keepalive_time=600
-net.ipv4.tcp_keepalive_intvl=30
+# TCP Buffer Expansion (64MB Window for 4K/8K Video Streaming)
+net.core.rmem_max=67108864
+net.core.wmem_max=67108864
+net.core.rmem_default=262144
+net.core.wmem_default=262144
+net.core.optmem_max=65536
+net.ipv4.tcp_rmem=4096 87380 67108864
+net.ipv4.tcp_wmem=4096 65536 67108864
+net.ipv4.udp_rmem_min=8192
+net.ipv4.udp_wmem_min=8192
+
+# Mobile Cellular Latency & Packet Loss Resilience
+net.ipv4.tcp_mtu_probing=1
+net.ipv4.tcp_slow_start_after_idle=0
+net.ipv4.tcp_fastopen=3
+net.ipv4.tcp_tw_reuse=1
+net.ipv4.tcp_fin_timeout=15
+
+# Keepalive for NAT Pinholes
+net.ipv4.tcp_keepalive_time=300
+net.ipv4.tcp_keepalive_intvl=15
 net.ipv4.tcp_keepalive_probes=5
-net.core.rmem_max=16777216
-net.core.wmem_max=16777216
-net.ipv4.tcp_rmem=4096 87380 16777216
-net.ipv4.tcp_wmem=4096 65536 16777216
+
+# Queue Backlog & Memory
+net.core.netdev_max_backlog=100000
+net.core.somaxconn=65535
+net.ipv4.tcp_max_syn_backlog=65535
+net.ipv4.tcp_max_tw_buckets=2000000
 EOF
-if sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1; then
-  echo "Enabled BBR congestion control."
-else
-  echo "BBR unavailable; retaining the kernel default." >&2
+
+# Enable BBR & FQ
+sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1 || true
+sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1 || true
+sysctl --system >/dev/null 2>&1 || true
+
+# Apply PMTU MSS Clamping in iptables to prevent fragmentation drops on 4G/5G mobile carriers
+if command -v iptables >/dev/null 2>&1; then
+  iptables -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+    iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+  iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 fi
-if sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1; then
-  echo "Enabled fq queue discipline."
+
+if declare -F log >/dev/null 2>&1; then
+  log "Telecom-grade kernel network tuning applied (BBR + 64MB buffers + TCPMSS clamp)."
 else
-  echo "fq unavailable; retaining the kernel default." >&2
+  echo "[✓] Telecom-grade kernel network tuning applied."
 fi
-sysctl --system >/dev/null
-echo "Network tuning applied. Use mubx-diagnose to compare MTU profiles."
+

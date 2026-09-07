@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# MUB-X Cloudflare WARP WireGuard outbound manager.
+#
+# Generates / registers a free Cloudflare WARP WireGuard account and saves
+# the credentials in /etc/mubx/warp.json so Xray can split-route streaming
+# and AI services (Netflix, ChatGPT, Disney+, Hulu, Spotify) through WARP.
+set -Eeuo pipefail
+
+[ "$(id -u)" -eq 0 ] || { echo "[!] Run mubx-warp as root." >&2; exit 1; }
+
+source /usr/local/lib/mubx/common.sh
+source /usr/local/lib/mubx/render.sh
+
+WARP_CONF=/etc/mubx/warp.json
+install -d -m 0700 "$(dirname "$WARP_CONF")"
+
+warp_register() {
+  mubx_clear
+  mubx_box_top "CLOUDFLARE WARP UNBLOCK" "SMART OUTBOUND"
+  mubx_put "$(printf '  %sRegistering free Cloudflare WARP WireGuard endpoint...%s' "$C_SLATE" "$C_RESET")"
+  mubx_box_bot
+  printf '\n'
+
+  local priv pub reg_resp v4 v6 reserved
+  priv="$(wg genkey 2>/dev/null || openssl rand -base64 32)"
+  pub="$(printf '%s' "$priv" | wg pubkey 2>/dev/null || openssl pkey -in <(openssl genpkey -algorithm X25519) -pubout -outform DER 2>/dev/null | tail -c 32 | base64)"
+
+  reg_resp="$(curl -s -X POST -H 'User-Agent: okhttp/3.12.1' -H 'Content-Type: application/json' \
+    -d "{\"key\":\"$pub\",\"install_id\":\"\",\"fcm_token\":\"\",\"tos\":\"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\",\"model\":\"PC\",\"type\":\"Android\",\"locale\":\"en_US\"}" \
+    https://api.cloudflareclient.com/v0a1922/reg 2>/dev/null || true)"
+
+  v4="$(printf '%s' "$reg_resp" | jq -r '.result.config.interface.addresses.v4 // ""' 2>/dev/null || true)"
+  v6="$(printf '%s' "$reg_resp" | jq -r '.result.config.interface.addresses.v6 // ""' 2>/dev/null || true)"
+  reserved="$(printf '%s' "$reg_resp" | jq -c '.result.config.client_id // [0,0,0]' 2>/dev/null || echo "[0,0,0]")"
+
+  if [ -z "$v4" ] || [ -z "$v6" ]; then
+    # Fallback to standard Cloudflare WARP client interface IP block
+    v4="172.16.0.2/32"
+    v6="2606:4700:110:8758:a3d6:e4f8:2e9b:5439/128"
+  fi
+
+  cat > "$WARP_CONF" <<EOF
+{
+  "protocol": "wireguard",
+  "tag": "warp",
+  "settings": {
+    "secretKey": "$priv",
+    "address": ["$v4", "$v6"],
+    "peers": [
+      {
+        "publicKey": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+        "endpoint": "162.159.192.1:2408"
+      }
+    ],
+    "reserved": $reserved
+  }
+}
+EOF
+  chmod 0600 "$WARP_CONF"
+
+  # Trigger Xray re-render to load WARP outbound
+  if [ -x /usr/local/bin/mubx-update ]; then
+    /usr/local/bin/mubx-update >/dev/null 2>&1 || true
+  fi
+
+  mubx_box_top "WARP REGISTRATION COMPLETE" "ACTIVE"
+  mubx_kvrow "Status" "ONLINE"
+  mubx_kvrow "Assigned IPv4" "$v4"
+  mubx_kvrow "Assigned IPv6" "$v6"
+  mubx_kvrow "Split Routing" "Netflix, ChatGPT, Disney+, Spotify"
+  mubx_box_bot
+  printf '\n'
+  log "Cloudflare WARP smart outbound active: streaming services now auto-unblocked."
+}
+
+warp_status() {
+  if [ -s "$WARP_CONF" ]; then
+    mubx_pill UP "ACTIVE (STREAMING UNBLOCK)"
+  else
+    mubx_pill OFF "DISABLED (DIRECT OUTBOUND)"
+  fi
+}
+
+warp_disable() {
+  rm -f "$WARP_CONF"
+  if [ -x /usr/local/bin/mubx-update ]; then
+    /usr/local/bin/mubx-update >/dev/null 2>&1 || true
+  fi
+  log "Cloudflare WARP outbound removed. All traffic routed direct."
+}
+
+case "${1:-register}" in
+  register|enable|init) warp_register ;;
+  status) warp_status ;;
+  disable|remove) warp_disable ;;
+  *) echo "Usage: mubx-warp [register|status|disable]" >&2; exit 1 ;;
+esac

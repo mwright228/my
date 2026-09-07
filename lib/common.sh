@@ -250,10 +250,32 @@ mubx_dot() { # $1 color  $2 glyph  $3 word
   printf '%s%s%s  %s%-4s%s' "$1" "$2" "$C_RESET" "$1" "$3" "$C_RESET"
 }
 
+# Progress bar helper: $1 percentage (0-100), $2 width in characters (default 10)
+mubx_bar() {
+  local pct="${1:-0}" width="${2:-10}" filled empty fill_col
+  pct="${pct%.*}"
+  [ "$pct" -lt 0 ] && pct=0
+  [ "$pct" -gt 100 ] && pct=100
+  filled=$(( (pct * width) / 100 ))
+  empty=$(( width - filled ))
+  if [ "$pct" -ge 90 ]; then
+    fill_col="$C_CORAL"
+  elif [ "$pct" -ge 75 ]; then
+    fill_col="$C_AMBER"
+  else
+    fill_col="$C_MINT"
+  fi
+  printf '%s[' "$C_BORDER"
+  [ "$filled" -gt 0 ] && printf '%s%s' "$fill_col" "$(printf '█%.0s' $(seq 1 "$filled"))"
+  [ "$empty" -gt 0 ] && printf '%s%s' "$C_SLATE" "$(printf '░%.0s' $(seq 1 "$empty"))"
+  printf '%s]%s' "$C_BORDER" "$C_RESET"
+}
+
 mubx_clear() {
   if [ -t 1 ]; then
     clear || true
   fi
   return 0
 }
+
 

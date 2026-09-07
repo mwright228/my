@@ -108,30 +108,40 @@ cmd_list() {
     mubx_put "$(printf '  %sNo users configured yet in store.%s' "$C_SLATE" "$C_RESET")"
     return
   fi
-  printf '  %s%-12s %-38s %-12s %s%s\n' "$C_PURPLE" "USERNAME" "UUID" "CREATED" "EXPIRY" "$C_RESET"
+  printf '  %s%-12s %-38s %-9s %-12s %-10s %s%s\n' "$C_PURPLE" "USERNAME" "UUID" "STATUS" "EXPIRY" "QUOTA" "CREATED" "$C_RESET"
   mubx_rule
-  jq -r '.[] | [.name, .uuid, (.added // ""), (.expiry // "")] | @tsv' "$STORE" |
-    while IFS=$'\t' read -r n u a e; do
+  jq -r '.[] | [.name, .uuid, (.status // "active"), (.expiry // ""), ((.quota_gb // 0)|tostring), (.added // "")] | @tsv' "$STORE" |
+    while IFS=$'\t' read -r n u st e q a; do
       local exp_str="${e:-never}"
       local exp_col="$C_MINT"
       if [ "$exp_str" != "never" ]; then
         if [[ "$(date -d "$exp_str" +%s 2>/dev/null || echo 0)" -lt "$(date +%s)" ]]; then
           exp_col="$C_CORAL"
-          exp_str="$exp_str (EXPIRED)"
+          exp_str="EXPIRED"
         else
           exp_col="$C_AMBER"
         fi
       fi
-      printf '  %s%-12s%s %s%-38s%s %s%-12s%s %s%s%s\n' \
+      local st_pill
+      if [ "$st" = "frozen" ]; then
+        st_pill="$(printf '%sFROZEN%s' "$C_CORAL" "$C_RESET")"
+      else
+        st_pill="$(printf '%sACTIVE%s' "$C_MINT" "$C_RESET")"
+      fi
+      local q_str="Unlimited"
+      [ "$q" -gt 0 ] 2>/dev/null && q_str="${q} GB"
+      printf '  %s%-12s%s %s%-38s%s %-18s %s%-12s%s %s%-10s%s %s%s%s\n' \
         "$C_BRIGHT" "$n" "$C_RESET" \
         "$C_ELECTRIC" "$u" "$C_RESET" \
-        "$C_SLATE" "$a" "$C_RESET" \
-        "$exp_col" "$exp_str" "$C_RESET"
+        "$st_pill" \
+        "$exp_col" "$exp_str" "$C_RESET" \
+        "$C_SLATE" "$q_str" "$C_RESET" \
+        "$C_SLATE" "$a" "$C_RESET"
     done
 }
 
-cmd_add() { # $1 name  $2 days (optional)
-  local name="$1" days="${2:-}" backup new uuid expiry added
+cmd_add() { # $1 name  $2 days (optional)  $3 quota_gb (optional)
+  local name="$1" days="${2:-}" quota_gb="${3:-0}" backup new uuid expiry added
   store_require
   name_ok "$name" || { warn "Bad username (3-32 chars, lowercase, [a-z0-9_-])"; return 1; }
   user_exists "$name" && { warn "User '$name' already exists."; return 1; }
@@ -142,11 +152,12 @@ cmd_add() { # $1 name  $2 days (optional)
     [[ "$days" =~ ^[1-9][0-9]*$ ]] || { warn "Days must be a positive integer"; return 1; }
     expiry="$(date -d "+${days} days" '+%Y-%m-%d')"
   fi
+  [[ "$quota_gb" =~ ^[0-9]+$ ]] || quota_gb=0
   backup="$(mktemp)"
   new="$(mktemp)"
   store_write_backup "$backup"
-  jq --arg n "$name" --arg u "$uuid" --arg a "$added" --arg e "$expiry" \
-    '. += [{name: $n, uuid: $u, added: $a, expiry: $e}]' "$STORE" > "$new"
+  jq --arg n "$name" --arg u "$uuid" --arg a "$added" --arg e "$expiry" --argjson q "$quota_gb" \
+    '. += [{name: $n, uuid: $u, added: $a, expiry: $e, quota_gb: $q, status: "active"}]' "$STORE" > "$new"
   install -m 0600 "$new" "$STORE"
   rm -f "$new"
   if ! reload_xray; then
@@ -155,12 +166,60 @@ cmd_add() { # $1 name  $2 days (optional)
     return 1
   fi
   rm -f "$backup"
-  log "User $name provisioned (UUID: $uuid | Expires: ${expiry:-never})"
+  log "User $name provisioned (UUID: $uuid | Expires: ${expiry:-never} | Quota: ${quota_gb:-unlimited} GB)"
   # Publish/refresh subscription files
   if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
     source /usr/local/lib/mubx/subscribe.sh
     mubx_sub_generate "$name" >/dev/null 2>&1 || true
   fi
+}
+
+cmd_freeze() { # $1 name
+  local name="$1" backup new
+  store_require
+  user_exists "$name" || { warn "User '$name' not found."; return 1; }
+  [ "$name" != "admin" ] || { warn "Cannot freeze admin account."; return 1; }
+  backup="$(mktemp)"
+  new="$(mktemp)"
+  store_write_backup "$backup"
+  jq --arg n "$name" 'map(if .name == $n then .status = "frozen" else . end)' "$STORE" > "$new"
+  install -m 0600 "$new" "$STORE"
+  rm -f "$new"
+  if ! reload_xray; then
+    install -m 0600 "$backup" "$STORE"
+    rm -f "$backup"
+    return 1
+  fi
+  rm -f "$backup"
+  log "User $name FROZEN (traffic disconnected; UUID disabled)."
+}
+
+cmd_unfreeze() { # $1 name
+  local name="$1" backup new
+  store_require
+  user_exists "$name" || { warn "User '$name' not found."; return 1; }
+  backup="$(mktemp)"
+  new="$(mktemp)"
+  store_write_backup "$backup"
+  jq --arg n "$name" 'map(if .name == $n then .status = "active" else . end)' "$STORE" > "$new"
+  install -m 0600 "$new" "$STORE"
+  rm -f "$new"
+  if ! reload_xray; then
+    install -m 0600 "$backup" "$STORE"
+    rm -f "$backup"
+    return 1
+  fi
+  rm -f "$backup"
+  log "User $name UNFROZEN (traffic restored)."
+}
+
+cmd_reset_quota() { # $1 name
+  local name="$1" pattern
+  store_require
+  user_exists "$name" || { warn "User '$name' not found."; return 1; }
+  pattern="user>>>${name}@${DOMAIN:-mubx}>>>traffic>>>"
+  xray api statsquery --server=127.0.0.1:10085 --pattern="$pattern" --reset=true >/dev/null 2>&1 || true
+  log "Usage statistics for $name have been reset to 0."
 }
 
 cmd_remove() { # $1 name
@@ -196,9 +255,9 @@ cmd_remove() { # $1 name
 
 cmd_usage() { # $1 name (optional)
   store_require
-  local name="${1:-}" pattern label u e
+  local name="${1:-}" pattern out
   if [ -z "$name" ]; then
-    mubx_box_top "XRAY TRAFFIC TELEMETRY" "ALL USERS"
+    mubx_box_top "XRAY TRAFFIC & QUOTA TELEMETRY" "ALL USERS"
     jq -r '.[].name' "$STORE" | while read -r n; do
       cmd_usage "$n"
     done
@@ -207,15 +266,22 @@ cmd_usage() { # $1 name (optional)
   fi
   user_exists "$name" || { warn "User '$name' does not exist."; return 1; }
   
-  local up_val=0 down_val=0
+  local up_val=0 down_val=0 total_val=0 quota_gb=0 status="active"
+  status="$(jq -r --arg n "$name" '.[] | select(.name == $n) | (.status // "active")' "$STORE" 2>/dev/null || echo "active")"
+  quota_gb="$(jq -r --arg n "$name" '.[] | select(.name == $n) | (.quota_gb // 0)' "$STORE" 2>/dev/null || echo 0)"
+
   pattern="user>>>${name}@${DOMAIN:-mubx}>>>traffic>>>uplink"
   out="$(xray api statsquery --server=127.0.0.1:10085 --pattern="$pattern" 2>/dev/null || true)"
-  up_val="$(printf '%s\n' "$out" | jq -r '.. | objects | select(.name? == $pat) | .value' --arg pat "$pattern" 2>/dev/null | head -n 1 || true)"
+  up_val="$(printf '%s\n' "$out" | jq -r '.. | objects | select(.name? == $pat) | .value' --arg pat "$pattern" 2>/dev/null | head -n 1 || echo 0)"
+  [ -n "$up_val" ] && [ "$up_val" != "null" ] || up_val=0
   
   pattern="user>>>${name}@${DOMAIN:-mubx}>>>traffic>>>downlink"
   out="$(xray api statsquery --server=127.0.0.1:10085 --pattern="$pattern" 2>/dev/null || true)"
-  down_val="$(printf '%s\n' "$out" | jq -r '.. | objects | select(.name? == $pat) | .value' --arg pat "$pattern" 2>/dev/null | head -n 1 || true)"
+  down_val="$(printf '%s\n' "$out" | jq -r '.. | objects | select(.name? == $pat) | .value' --arg pat "$pattern" 2>/dev/null | head -n 1 || echo 0)"
+  [ -n "$down_val" ] && [ "$down_val" != "null" ] || down_val=0
   
+  total_val=$(( up_val + down_val ))
+
   fmt_bytes() {
     local b="${1:-0}"
     if [ "$b" -ge 1073741824 ]; then
@@ -229,22 +295,36 @@ cmd_usage() { # $1 name (optional)
     fi
   }
 
-  mubx_put "$(printf '  %s%-12s%s ▲ %-10s  ▼ %-10s' "$C_BRIGHT" "$name" "$C_RESET" "$(fmt_bytes "${up_val:-0}")" "$(fmt_bytes "${down_val:-0}")")"
+  local right_str=""
+  if [ "$quota_gb" -gt 0 ]; then
+    local quota_bytes=$(( quota_gb * 1073741824 ))
+    local pct=$(( (total_val * 100) / quota_bytes ))
+    local bar; bar="$(mubx_bar "$pct" 10)"
+    if [ "$status" = "frozen" ]; then
+      right_str="$(printf '%s %s/%d GB %s(FROZEN)%s' "$bar" "$(fmt_bytes "$total_val")" "$quota_gb" "$C_CORAL" "$C_RESET")"
+    else
+      right_str="$(printf '%s %s/%d GB (%d%%)' "$bar" "$(fmt_bytes "$total_val")" "$quota_gb" "$pct")"
+    fi
+  else
+    right_str="$(printf '▲ %-8s  ▼ %-8s %s(Unlimited)%s' "$(fmt_bytes "$up_val")" "$(fmt_bytes "$down_val")" "$C_SLATE" "$C_RESET")"
+  fi
+
+  mubx_put "$(printf '  %s%-12s%s %s' "$C_BRIGHT" "$name" "$C_RESET" "$right_str")"
 }
 
 interactive() {
-  local action input name days
+  local action input name days quota
   while true; do
     mubx_clear
-    mubx_box_top "MUB-X IDENTITY STORE" "USERS & TRAFFIC"
+    mubx_box_top "MUB-X IDENTITY STORE" "USERS & QUOTAS"
     mubx_kvrow "Store Path" "$STORE"
     mubx_kvrow "User Count" "$(mubx_users_count "$STORE")"
     mubx_box_bot
     printf '\n'
     
     cmd_list
-    printf '\n  %s[a]%s Add User   %s[r]%s Remove User   %s[u]%s Usage Stats   %s[q]%s Exit\n\n' \
-      "$C_ELECTRIC" "$C_RESET" "$C_CORAL" "$C_RESET" "$C_AMBER" "$C_RESET" "$C_SLATE" "$C_RESET"
+    printf '\n  %s[a]%s Add   %s[r]%s Remove   %s[f]%s Freeze   %s[u]%s Unfreeze   %s[s]%s Stats   %s[z]%s Reset Quota   %s[q]%s Exit\n\n' \
+      "$C_ELECTRIC" "$C_RESET" "$C_CORAL" "$C_RESET" "$C_AMBER" "$C_RESET" "$C_MINT" "$C_RESET" "$C_PURPLE" "$C_RESET" "$C_SLATE" "$C_RESET" "$C_SLATE" "$C_RESET"
     printf '  %s❯%s ' "$C_ELECTRIC" "$C_RESET"
     read -r action || break
     case "${action,,}" in
@@ -253,16 +333,33 @@ interactive() {
         read -r name
         printf '  Expiry days (blank = never): '
         read -r days
-        cmd_add "$name" "$days" || true
+        printf '  Data quota in GB (0 = unlimited): '
+        read -r quota
+        cmd_add "$name" "$days" "$quota" || true
         ;;
       r|remove)
         printf '  Username to remove: '
         read -r name
         cmd_remove "$name" || true
         ;;
-      u|usage)
+      f|freeze)
+        printf '  Username to freeze: '
+        read -r name
+        cmd_freeze "$name" || true
+        ;;
+      u|unfreeze)
+        printf '  Username to unfreeze: '
+        read -r name
+        cmd_unfreeze "$name" || true
+        ;;
+      s|stats|usage)
         printf '\n'
         cmd_usage || true
+        ;;
+      z|reset)
+        printf '  Username to reset usage stats: '
+        read -r name
+        cmd_reset_quota "$name" || true
         ;;
       q|quit|0) exit 0 ;;
     esac
@@ -276,10 +373,14 @@ interactive() {
 cmd="${1:-interactive}"
 case "$cmd" in
   list) cmd_list ;;
-  add) cmd_add "${2:?usage: mubx-users add <name> [days]}" "${3:-}" ;;
+  add) cmd_add "${2:?usage: mubx-users add <name> [days] [quota_gb]}" "${3:-}" "${4:-0}" ;;
   remove) cmd_remove "${2:?usage: mubx-users remove <name>}" ;;
-  usage) cmd_usage "${2:-}" ;;
+  freeze) cmd_freeze "${2:?usage: mubx-users freeze <name>}" ;;
+  unfreeze) cmd_unfreeze "${2:?usage: mubx-users unfreeze <name>}" ;;
+  reset-quota|reset) cmd_reset_quota "${2:?usage: mubx-users reset-quota <name>}" ;;
+  usage|stats) cmd_usage "${2:-}" ;;
   interactive) interactive ;;
-  *) echo "Unknown command: $cmd (use list/add/remove/usage)" >&2; exit 1 ;;
+  *) echo "Unknown command: $cmd (use list/add/remove/freeze/unfreeze/reset-quota/usage)" >&2; exit 1 ;;
 esac
+
 
