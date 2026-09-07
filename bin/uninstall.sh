@@ -1,12 +1,24 @@
 #!/bin/bash
 set -euo pipefail
-read -p "Type DELETE to remove MUB-X: " c
+if [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+fi
+
+mubx_clear 2>/dev/null || true
+echo -e "\033[38;5;240m╭─ \033[1;31mMUB-X UNINSTALLER\033[0m \033[38;5;240m─────────────────────── \033[38;5;203mWARNING\033[0m \033[38;5;240m─╮\033[0m"
+echo -e "\033[38;5;240m│\033[0m  This will completely remove all MUB-X services and configs!   \033[38;5;240m│\033[0m"
+echo -e "\033[38;5;240m╰──────────────────────────────────────────────────────────╯\033[0m"
+printf '\n'
+
+read -r -p "  Type DELETE to permanently remove MUB-X: " c
 [ "$c" = "DELETE" ] || exit 0
 INSTALL_ROOT="$(cat /etc/mubx/install-root 2>/dev/null || printf '%s\n' /root/mub-x)"
 case "$INSTALL_ROOT" in
   /*) ;;
   *) echo "[!] Invalid MUB-X install root." >&2; exit 1 ;;
 esac
+
+
 [ "$INSTALL_ROOT" != "/" ] && [ "$INSTALL_ROOT" != "/root" ] ||
   { echo "[!] Refusing to remove a protected install root." >&2; exit 1; }
 [ -d "$INSTALL_ROOT/.git" ] ||

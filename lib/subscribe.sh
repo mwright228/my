@@ -305,8 +305,10 @@ mubx_sub_generate() { # $1 user name
   links="$(mubx_sub_links "$user" "$uuid" "$idx")"
   printf '%s\n' "$links" > "$out/links.txt"
   printf '%s\n' "$links" | base64 -w 0 > "$out/index.txt"
+  cp -f "$out/index.txt" "$out/sub.txt" 2>/dev/null || true
   mubx_sub_clash "$user" "$uuid" "$idx" | jq . > "$out/clash.yaml"
   mubx_sub_singbox "$user" "$uuid" "$idx" | jq . > "$out/singbox.json"
   chmod 0644 "$out"/*
   printf 'https://%s/sub/%s/index.txt\n' "$DOMAIN" "$token"
 }
+

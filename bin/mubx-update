@@ -229,28 +229,36 @@ if [ -r "$ROOT/lib/subscribe.sh" ] && [ -f /etc/mubx/users.json ]; then
   done < <(jq -r '.[].name' /etc/mubx/users.json)
 fi
 
+mubx_box_top "MUB-X ENGINE UPDATE" "CORE SYNC"
+mubx_kvrow "Repository" "$REPO_URL"
+mubx_kvrow "Target Branch" "main"
+mubx_box_bot
+printf '\n'
+
 down=0
+mubx_group_open "SERVICES RELOAD"
 for svc in "${SERVICES[@]}"; do
   systemctl cat "$svc.service" >/dev/null 2>&1 || continue
   [ "${was_active[$svc]}" -eq 1 ] || continue
   if ! systemctl restart "$svc" 2>/dev/null || ! systemctl is-active --quiet "$svc" 2>/dev/null; then
-    printf '  %s○%s %s %sstill down after restart%s\n' "$C_RED" "$C_RESET" "$svc" "$C_BOLD" "$C_RESET"
+    mubx_card "  $svc" "$(mubx_pill DOWN "FAILED")"
     down=$((down + 1))
   else
-    printf '  %s●%s %s\n' "$C_GREEN" "$C_RESET" "$svc"
+    mubx_card "  $svc" "$(mubx_pill UP "ONLINE")"
   fi
 done
+mubx_group_close
 
 # 6) Swap in the new copy of the running script, then commit the result.
 stage_bin "$ROOT/bin/mubx-update"
 update_success=1
 trap - EXIT
-printf '\n%s[*]%s MUB-X updated to %s\n' "$C_GREEN" "$C_RESET" \
-  "$(git -C "$ROOT" log -1 --format='%h %cs')"
+
+printf '\n'
 if [ "$down" -gt 0 ]; then
-  printf '%s[!]%s %s service(s) did not come back - run mubx-restart-failed or\n' \
-    "$C_YELLOW" "$C_RESET" "$down"
-  printf '    journalctl -u <service> to diagnose, then verify with svc-status.\n'
+  warn "$down service(s) did not come back - run mubx-restart-failed or svc-status."
 else
-  printf '%s[✓]%s All services running. Verify new links with: link-gen\n' "$C_GREEN" "$C_RESET"
+  log "MUB-X engine successfully updated to $(git -C "$ROOT" log -1 --format='%h (%cs)')"
 fi
+printf '\n'
+
