@@ -5,7 +5,8 @@
   "protocol": "shadowsocks",
   "settings": {
     "method": "aes-256-gcm",
-    "password": "__SS_PASS__"
+    "password": "__SS_PASS__",
+    "network": "tcp,udp"
   },
   "streamSettings": {
     "network": "ws",

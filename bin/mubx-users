@@ -25,6 +25,9 @@ set -Eeuo pipefail
 
 source /usr/local/lib/mubx/common.sh
 source /usr/local/lib/mubx/render.sh
+if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
+  source /usr/local/lib/mubx/subscribe.sh
+fi
 load_mubx_env
 
 STORE="${MUBX_USERS_FILE:-/etc/mubx/users.json}"

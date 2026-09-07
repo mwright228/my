@@ -91,6 +91,16 @@ mubx_users_apply() { # $1 rendered config file
   ' "$1" > "$1.mubx" && mv -f "$1.mubx" "$1"
 }
 
+mubx_ensure_subscribe_loaded() {
+  if ! declare -F mubx_ss2022_psk >/dev/null 2>&1; then
+    if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
+      source /usr/local/lib/mubx/subscribe.sh
+    elif [ -r "$(dirname "${BASH_SOURCE[0]}")/subscribe.sh" ]; then
+      source "$(dirname "${BASH_SOURCE[0]}")/subscribe.sh"
+    fi
+  fi
+}
+
 # Render /usr/local/etc/xray/config.json from the base template plus the
 # per-user Shadowsocks inbounds (WS, plain TCP) and the shared SS-443
 # inbound that HAProxy fronts on public port 443.
@@ -115,7 +125,7 @@ mubx_xray_render() { # $1 base_template  $2 out
   # Shared Shadowsocks on 443 (HAProxy non-TLS frontend -> this inbound).
   mubx_ss_443_apply "$out" "$(dirname "$base_tpl")/ss-443-inbound.json" || return 1
   # Per-user Shadowsocks 2022 WS inbounds (opt-in: needs /etc/mubx/ss2022-keys).
-  # shellcheck disable=SC2154  # subscribe.sh may not be sourced in CI renders
+  mubx_ensure_subscribe_loaded
   if declare -F mubx_ss2022_psk >/dev/null 2>&1; then
     mubx_ss2022_apply "$out" "$(dirname "$base_tpl")/ss-2022-inbound.json" || return 1
   fi
@@ -135,6 +145,21 @@ mubx_ss_plan() { # $1 base port (default SS_BASE_PORT, i.e. the loopback WS port
       "$MUBX_USERS_FILE" 2>/dev/null || true
   else
     printf '%s\t%s\t%s\t%s\n' "admin" "${UUID:-}" "$base" "/ss-admin"
+  fi
+}
+
+# Emit one tab-separated row per Shadowsocks 2022 user with /ss22-<name> path
+# and 11006+ loopback port so Nginx and Xray route SS-2022 cleanly.
+mubx_ss2022_plan() { # $1 base port (default SS_BASE_PORT + 1000)
+  local base="${1:-$(( SS_BASE_PORT + 1000 ))}"
+  if [ -f "$MUBX_USERS_FILE" ]; then
+    jq -r --argjson base "$base" \
+      'range(0; length) as $i | .[$i] |
+       select((.uuid // "") != "") |
+       [.name, .uuid, ($base + $i), ("/ss22-" + .name)] | @tsv' \
+      "$MUBX_USERS_FILE" 2>/dev/null || true
+  else
+    printf '%s\t%s\t%s\t%s\n' "admin" "${UUID:-}" "$base" "/ss22-admin"
   fi
 }
 
@@ -190,6 +215,7 @@ mubx_ss_plain_apply() { # $1 rendered config file  $2 ss plain inbound template
 mubx_ss2022_apply() { # $1 rendered config file  $2 ss-2022 inbound template
   local cfg="$1" ss_tpl="$2" extra='[]' obj name uuid port path psk
   [ -f "$ss_tpl" ] || return 0
+  mubx_ensure_subscribe_loaded
   [ -d "${MUBX_SS2022_DIR:-/etc/mubx/ss2022-keys}" ] || return 0
   while IFS=$'\t' read -r name uuid port path; do
     [ -n "$name" ] && [ -n "$uuid" ] || continue
@@ -201,7 +227,7 @@ mubx_ss2022_apply() { # $1 rendered config file  $2 ss-2022 inbound template
                -e "s|__SS_PATH__|$path|g" "$ss_tpl")" || return 1
     extra="$(jq -cn --argjson arr "$extra" --argjson o "$obj" '$arr + [$o]')" \
       || return 1
-  done < <(mubx_ss_plan $(( SS_BASE_PORT + 1000 )))
+  done < <(mubx_ss2022_plan $(( SS_BASE_PORT + 1000 )))
   if [ "$extra" != '[]' ]; then
     jq --argjson add "$extra" '.inbounds += $add' "$cfg" > "$cfg.mubx" || return 1
     mv -f "$cfg.mubx" "$cfg"
@@ -231,6 +257,7 @@ mubx_ss_443_apply() { # $1 rendered config file  $2 ss-443 inbound template
 # Skipped when lib/subscribe.sh is unavailable (CI renders without keys).
 mubx_singbox_render() { # $1 template  $2 out
   local tpl="$1" out="$2" ss22_pass
+  mubx_ensure_subscribe_loaded
   declare -F mubx_ss2022_psk >/dev/null 2>&1 || return 0
   ss22_pass="$(mubx_ss2022_psk admin)"
   [ -n "$ss22_pass" ] || return 0
@@ -244,10 +271,10 @@ mubx_singbox_render() { # $1 template  $2 out
 }
 
 # Render /etc/nginx/nginx.conf from the template: expand the shared
-# #MUBX_SS_LOCATIONS# marker (one /ss-<user> location block per user) in
-# both the port-80 and the loopback-TLS server, and substitute the domain
-# and SSH-over-WS secret path placeholders that install.sh used to handle
-# with raw sed. Validated with `nginx -t` by every caller before use.
+# #MUBX_SS_LOCATIONS# marker (one /ss-<user> and /ss22-<user> location block
+# per user) in both the port-80 and the loopback-TLS server, and substitute
+# the domain and SSH-over-WS secret path placeholders that install.sh used to
+# handle with raw sed. Validated with `nginx -t` by every caller before use.
 mubx_nginx_render() { # $1 template  $2 out
   local tmpl="$1" out="$2" content ss_blocks='' name uuid port path
   content="$(< "$tmpl")" || return 1
@@ -256,6 +283,14 @@ mubx_nginx_render() { # $1 template  $2 out
     printf -v ss_blocks '%s    location %s {\n        proxy_pass http://127.0.0.1:%s;\n        proxy_http_version 1.1;\n        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection $connection_upgrade;\n        proxy_set_header Host $http_host;\n        proxy_read_timeout 86400s;\n        proxy_send_timeout 86400s;\n    }\n\n' \
       "$ss_blocks" "$path" "$port"
   done < <(mubx_ss_plan)
+  mubx_ensure_subscribe_loaded
+  if [ -d "${MUBX_SS2022_DIR:-/etc/mubx/ss2022-keys}" ] || declare -F mubx_ss2022_psk >/dev/null 2>&1; then
+    while IFS=$'\t' read -r name uuid port path; do
+      [ -n "$name" ] || continue
+      printf -v ss_blocks '%s    location %s {\n        proxy_pass http://127.0.0.1:%s;\n        proxy_http_version 1.1;\n        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection $connection_upgrade;\n        proxy_set_header Host $http_host;\n        proxy_read_timeout 86400s;\n        proxy_send_timeout 86400s;\n    }\n\n' \
+        "$ss_blocks" "$path" "$port"
+    done < <(mubx_ss2022_plan $(( SS_BASE_PORT + 1000 )))
+  fi
   content="${content//$SS_MARKER/$ss_blocks}"
   [ -n "${DOMAIN:-}" ] || {
     echo "[!] DOMAIN is not loaded; cannot render nginx.conf." >&2

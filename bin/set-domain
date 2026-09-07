@@ -37,14 +37,14 @@ restore_files() {
   done
   return "$status"
 }
-for svc in hysteria zivpn nginx haproxy xray; do
+for svc in hysteria zivpn nginx haproxy xray singbox; do
   systemctl is-active --quiet "$svc" && was_active["$svc"]=1 || was_active["$svc"]=0
 done
 cleanup() {
   local status=$?
   if [ "$success" -eq 0 ]; then
     restore_files || status=1
-    for svc in hysteria zivpn nginx haproxy xray; do
+    for svc in hysteria zivpn nginx haproxy xray singbox; do
       if [ "${was_active[$svc]}" -eq 1 ] && ! systemctl start "$svc"; then
         printf '[!] Failed to restore %s\n' "$svc" >&2
         status=1
@@ -115,7 +115,7 @@ nginx -t
 haproxy -c -f /etc/haproxy/haproxy.cfg
 xray run -test -config /usr/local/etc/xray/config.json
 systemctl daemon-reload
-for svc in nginx haproxy hysteria zivpn xray; do
+for svc in nginx haproxy hysteria zivpn xray singbox; do
   if [ "${was_active[$svc]}" -eq 1 ]; then
     if ! systemctl restart "$svc" || ! systemctl is-active --quiet "$svc"; then
       printf '[!] Failed to restart %s after domain migration\n' "$svc" >&2

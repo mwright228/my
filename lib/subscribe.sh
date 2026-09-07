@@ -130,6 +130,16 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
     printf 'ss://%s@%s:443#MUBX-SS-443\n' \
       "$(printf 'aes-256-gcm:%s' "$(mubx_primary_uuid)" | mubx_b64url)" "$dom"
   fi
+  # ShadowTLS v3 + SS-2022 (when configured)
+  local stls_key
+  if [ -n "${SHADOWTLS_PASS:-}" ]; then
+    stls_key="$(mubx_ss2022_psk admin)"
+    if [ -n "$stls_key" ]; then
+      printf 'ss://%s@%s:443?plugin=shadow-tls%%3Bhost%%3D%s%%3Bpassword%%3D%s%%3Bversion%%3D3#MUBX-ShadowTLS\n' \
+        "$(printf '2022-blake3-aes-256-gcm:%s' "$stls_key" | mubx_b64url)" "$dom" \
+        "${SHADOWTLS_SNI:-www.microsoft.com}" "$SHADOWTLS_PASS"
+    fi
+  fi
 }
 
 # --- Clash (YAML; JSON is a valid YAML subset and Clash parses it) --------

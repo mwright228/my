@@ -19,6 +19,7 @@ read -r -p "Days: " d
 [[ "$u" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] || { echo "Bad username"; exit 1; }
 [[ "$d" =~ ^[1-9][0-9]*$ ]] || { echo "Days must be positive"; exit 1; }
 EXP=$(date -d "+${d} days" +%Y-%m-%d)
+grep -qxF '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shells
 useradd -M -s /bin/false -e "$EXP" "$u"
 printf '%s:%s\n' "$u" "$p" | chpasswd
 # Issue the same identity on the Xray transports when a user store exists,

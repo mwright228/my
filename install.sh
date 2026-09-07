@@ -192,6 +192,7 @@ run apt-get install -y ca-certificates curl certbot dnsutils lsof psmisc git jq 
   uuid-runtime openssl nginx dropbear squid haproxy openvpn wireguard-tools \
   iptables iptables-persistent qrencode netcat-openbsd fail2ban python3-systemd \
   build-essential cmake libnspr4-dev libnss3-dev unzip iproute2
+grep -qxF '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shells
 install -d -m 0700 /etc/mubx
 firewall_snapshot_tmp="$(mktemp /etc/mubx/firewall.XXXXXX)"
 if iptables-save > "$firewall_snapshot_tmp" &&
@@ -310,6 +311,7 @@ for file in bin/*; do
 done
 backup_file /usr/local/lib/mubx/common.sh
 backup_file /usr/local/lib/mubx/render.sh
+backup_file /usr/local/lib/mubx/subscribe.sh
 backup_file /usr/local/lib/mubx/reality-build.sh
 backup_file /usr/local/bin/reality-fronts
 for file in systemd/*.service systemd/*.timer; do
@@ -319,7 +321,7 @@ backup_file /usr/local/etc/xray/domain
 backup_file /usr/local/etc/xray/config.json
 backup_file /usr/local/share/xray/geoip.dat
 backup_file /usr/local/share/xray/geosite.dat
-for file in xray hysteria wstunnel zivpn badvpn-udpgw; do
+for file in xray hysteria wstunnel zivpn sing-box badvpn-udpgw; do
   backup_file "/usr/local/bin/$file"
 done
 install -m 0755 bin/* /usr/local/bin/
@@ -594,12 +596,14 @@ iptables-save > /etc/iptables/rules.v4
 printf '%s\n' "$WAN_IF" > /etc/mubx/wan-interface
 
 run /usr/local/bin/generate-secrets
-sed -i "s/^DOMAIN=.*/DOMAIN=\"$DOMAIN\"/; s|__DOMAIN__|$DOMAIN|g" /etc/telecom-engine.env
-load_secrets
-# ShadowTLS handshake decoy: any TCP:443 TLS site the carrier allows. The
-# server connects out to it during every ShadowTLS handshake, so pick a
-# reliable anycast front (override with MUBX_SHADOWTLS_SNI at install time).
 SHADOWTLS_SNI="${MUBX_SHADOWTLS_SNI:-www.microsoft.com}"
+sed -i "s/^DOMAIN=.*/DOMAIN=\"$DOMAIN\"/; s|__DOMAIN__|$DOMAIN|g" /etc/telecom-engine.env
+if grep -q "^SHADOWTLS_SNI=" /etc/telecom-engine.env; then
+  sed -i "s|^SHADOWTLS_SNI=.*|SHADOWTLS_SNI=\"$SHADOWTLS_SNI\"|" /etc/telecom-engine.env
+else
+  printf 'SHADOWTLS_SNI="%s"\n' "$SHADOWTLS_SNI" >> /etc/telecom-engine.env
+fi
+load_secrets
 sed -i "s|__SSH_WS_PATH__|$SSH_WS_PATH|g" /etc/systemd/system/wstunnel.service
 sed -i "s|__DOMAIN__|$DOMAIN|g; s|__HY2_PASS__|$HY2_PASS|g" /etc/hysteria/config.yaml
 # Generate the Xray config (per-user client identities plus the per-user

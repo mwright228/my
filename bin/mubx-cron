@@ -9,7 +9,7 @@ set -Eeuo pipefail
 # maintenance run started are revived afterwards, so an operator that
 # deliberately stopped something keeps it stopped.
 SERVICES=(
-  haproxy nginx xray dropbear squid wstunnel hysteria zivpn
+  haproxy nginx xray dropbear squid wstunnel hysteria zivpn singbox
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400
   badvpn@7500 badvpn@7600 badvpn@7700

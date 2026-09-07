@@ -144,6 +144,7 @@ done
 backup_path /usr/local/etc/xray/config.json
 backup_path /etc/haproxy/haproxy.cfg
 backup_path /etc/nginx/nginx.conf
+backup_path /etc/sing-box/config.json
 # Reality was removed from MUB-X; snapshot anything older installs left so a
 # failed update can restore it, then remove the files below.
 backup_path /usr/local/bin/reality-fronts
@@ -192,11 +193,17 @@ done
 # 4) Re-render the generated configs from the freshly pulled templates.
 #    Each candidate is validated before anything live is replaced.
 source ./lib/render.sh
+if [ -r "$ROOT/lib/subscribe.sh" ]; then
+  source "$ROOT/lib/subscribe.sh"
+fi
 mubx_users_seed
 tmp="$(mktemp -d)"
 mubx_xray_render configs/xray.json "$tmp/xray.json"
 mubx_haproxy_render configs/haproxy.cfg "$tmp/haproxy.cfg"
 mubx_nginx_render configs/nginx.conf "$tmp/nginx.conf"
+if [ -f configs/singbox.json ]; then
+  mubx_singbox_render configs/singbox.json "$tmp/singbox.json" || true
+fi
 xray run -test -config "$tmp/xray.json"
 nginx -t -c "$tmp/nginx.conf" >/dev/null
 haproxy -c -f "$tmp/haproxy.cfg" >/dev/null
@@ -205,6 +212,10 @@ haproxy -c -f "$tmp/haproxy.cfg" >/dev/null
 install -m 0600 "$tmp/xray.json" /usr/local/etc/xray/config.json
 install -m 0644 "$tmp/haproxy.cfg" /etc/haproxy/haproxy.cfg
 install -m 0644 "$tmp/nginx.conf" /etc/nginx/nginx.conf
+if [ -s "$tmp/singbox.json" ]; then
+  install -d -m 0755 /etc/sing-box
+  install -m 0600 "$tmp/singbox.json" /etc/sing-box/config.json
+fi
 rm -rf "$tmp"
 
 # Regenerate the per-user subscription files for the new tree (harmless

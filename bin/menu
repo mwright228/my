@@ -52,7 +52,7 @@ draw() {
   row wstunnel   "SSH over WS"   squid                "Squid proxy"
   row hysteria   "Hysteria 2"    wg-quick@wg0         "WireGuard"
   row openvpn-server@tcp "OpenVPN TCP" openvpn-server@udp "OpenVPN UDP"
-  mubx_put "$(printf '  %s %s' "$(svc_dot zivpn)" "ZivPN")"
+  row zivpn      "ZivPN"         singbox              "ShadowTLS"
   mubx_put "$(printf '  %s %s' \
     "$(svc_dot_set badvpn 7100 7200 7300 7400 7500 7600 7700)" "UDPGW bridge (7100-7700)")"
   mubx_put "$(printf '  %s●%s all up   %s◐%s partial   %s○%s down' \
@@ -93,7 +93,7 @@ while true; do
     4) /usr/local/bin/add-user ;;
     5) /usr/local/bin/delete-user ;;
     6) systemctl restart haproxy nginx xray dropbear squid wstunnel hysteria \
-         zivpn wg-quick@wg0 openvpn-server@tcp openvpn-server@udp \
+         zivpn singbox wg-quick@wg0 openvpn-server@tcp openvpn-server@udp \
          badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 \
          badvpn@7500 badvpn@7600 badvpn@7700 2>/dev/null || true
        echo "  [*] Core services restarted" ;;

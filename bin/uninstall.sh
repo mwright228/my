@@ -28,7 +28,7 @@ canonical_repo_url() {
 for svc in nginx haproxy xray dropbear squid \
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0 \
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 badvpn@7500 badvpn@7600 badvpn@7700 \
-  hysteria zivpn wstunnel mubx-cron.timer mubx-adaptive.timer; do
+  hysteria zivpn singbox wstunnel mubx-cron.timer mubx-adaptive.timer; do
   systemctl disable --now "$svc" 2>/dev/null || true
 done
 restore_path() {
@@ -52,7 +52,7 @@ for path in /etc/systemd/system/badvpn@.service \
 done
 systemctl daemon-reload
 for path in /usr/local/bin/xray /usr/local/bin/hysteria /usr/local/bin/wstunnel /usr/local/bin/zivpn \
-  /usr/local/bin/badvpn-udpgw; do
+  /usr/local/bin/sing-box /usr/local/bin/badvpn-udpgw; do
   restore_path "$path"
 done
 for path in /usr/local/bin/menu /usr/local/bin/link-gen /usr/local/bin/add-user \
@@ -66,6 +66,7 @@ for path in /usr/local/bin/menu /usr/local/bin/link-gen /usr/local/bin/add-user 
 done
 restore_path /usr/local/lib/mubx/common.sh
 restore_path /usr/local/lib/mubx/render.sh
+restore_path /usr/local/lib/mubx/subscribe.sh
 # Reality was removed from MUB-X; make sure no stale copy of its manager or
 # builder lib survives the uninstall (nothing restores them).
 rm -f /usr/local/bin/reality-fronts /usr/local/lib/mubx/reality-build.sh
@@ -90,10 +91,11 @@ fi
 restore_path /etc/sysctl.d/99-mubx-forwarding.conf
 restore_path /etc/sysctl.d/99-mubx-network.conf
 for path in /etc/telecom-engine.env /usr/local/etc/xray/domain \
-  /etc/hysteria/config.yaml \
+  /etc/hysteria/config.yaml /etc/sing-box/config.json \
   /etc/zivpn/config.json /etc/zivpn/zivpn.crt /etc/zivpn/zivpn.key; do
   restore_path "$path"
 done
+rm -rf /var/www/mubx-sub
 for path in /usr/local/etc/xray/config.json /usr/local/share/xray/geoip.dat \
   /usr/local/share/xray/geosite.dat; do
   restore_path "$path"
