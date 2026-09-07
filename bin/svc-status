@@ -14,7 +14,7 @@ check() { # $1 unit  $2 protocol(tcp|udp)  $3 port
   local unit="$1" proto="$2" port="${3:-}"
   systemctl is-active --quiet "$unit" 2>/dev/null || return 1
   if [ -n "$port" ]; then
-    ss -H -"${proto}"ln "sport = :$port" 2>/dev/null | grep -q . || return 1
+    ss -H -l"${proto:0:1}"n "sport = :$port" 2>/dev/null | grep -q . || return 1
   fi
   return 0
 }
@@ -131,7 +131,7 @@ group_close
 # --- BadVPN UDPGW -----------------------------------------------------------
 group_open "UDPGW GAMING BRIDGES" "PORTS 7100-7700"
 for p in 7100 7200 7300 7400 7500 7600 7700; do
-  row "BadVPN UDPGW Port $p" "badvpn@$p" tcp "$p"
+  row "BadVPN UDPGW Port $p" "badvpn@$p" udp "$p"
 done
 group_close
 
