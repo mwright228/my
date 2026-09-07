@@ -52,7 +52,8 @@ warp_register() {
         "endpoint": "162.159.192.1:2408"
       }
     ],
-    "reserved": $reserved
+    "reserved": $reserved,
+    "mtu": 1280
   }
 }
 EOF

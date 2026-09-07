@@ -279,7 +279,7 @@ mubx_warp_apply() { # $1 rendered config file
   [ -n "$warp_obj" ] || return 0
 
   jq --argjson warp "$warp_obj" '
-    .outbounds = [$warp] + (.outbounds // [])
+    .outbounds = (.outbounds // []) + [$warp]
     | .routing.rules = [
         {
           type: "field",
