@@ -46,8 +46,7 @@ load_mubx_env() {
   local env_file="${1:-/etc/telecom-engine.env}" key value
   if [ ! -r "$env_file" ]; then
     [ -n "${DOMAIN:-}" ] && return 0
-    [ "${MUBX_ALLOW_NON_ROOT:-0}" -eq 1 ] && return 0
-    die "Missing MUB-X environment file: $env_file"
+    return 1
   fi
   while IFS='=' read -r key value; do
     case "$key" in
