@@ -87,7 +87,7 @@ for spec in "OpenVPN UDP (2200)|2200" "Hysteria 2 QUIC (4433)|4433" "WireGuard (
   fi
 done
 for port in 7100 7500 7700; do
-  if ss -H -uln "sport = :$port" 2>/dev/null | grep -q .; then
+  if ss -H -tln "sport = :$port" 2>/dev/null | grep -q .; then
     mubx_card "  BadVPN UDPGW ($port)" "$(mubx_pill UP "ACTIVE")"
   else
     mubx_card "  BadVPN UDPGW ($port)" "$(mubx_pill DOWN "OFFLINE")"
