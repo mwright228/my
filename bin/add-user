@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-[ "$(id -u)" -eq 0 ] || { echo "[!] Run add-user as root." >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || [ "${MUBX_ALLOW_NON_ROOT:-0}" -eq 1 ] || { echo "[!] Run add-user as root." >&2; exit 1; }
 if [ -r /usr/local/lib/mubx/common.sh ]; then
   source /usr/local/lib/mubx/common.sh
   DOMAIN=
@@ -16,42 +16,38 @@ elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/render.sh" ]; then
   source "$(dirname "${BASH_SOURCE[0]}")/../lib/render.sh"
 fi
 
-mubx_clear
-mubx_box_top "USER PROVISIONING" "NEW ACCOUNT"
-mubx_put "$(printf '  %sEnter credentials and select protocols for user access:%s' "$C_SLATE" "$C_RESET")"
-mubx_box_bot
-printf '\n'
+u="${1:-}"
+p="${2:-}"
+d="${3:-}"
+q="${4:-}"
+protos_arg="${5:-}"
 
-printf '  %sUsername:         %s' "$C_PURPLE" "$C_RESET"
-read -r u
-printf '  %sPassword:         %s' "$C_PURPLE" "$C_RESET"
-read -r -s p
-printf '\n'
-printf '  %sConfirm Password: %s' "$C_PURPLE" "$C_RESET"
-read -r -s p_confirm
-printf '\n'
-[ "$p" = "$p_confirm" ] || die "Passwords do not match"
-[ -n "$p" ] || die "Password cannot be empty"
-[ "${#p}" -ge 8 ] || die "Password must be at least 8 characters"
-printf '  %sValid Days:       %s' "$C_PURPLE" "$C_RESET"
-read -r d
-printf '  %sData Quota (GB):  %s' "$C_PURPLE" "$C_RESET"
-read -r q || q=""
-q="${q:-0}"
+if [ -z "$u" ]; then
+  mubx_clear
+  mubx_box_top "USER PROVISIONING" "NEW ACCOUNT"
+  mubx_put "$(printf '  %sEnter account details and select authorized protocols:%s' "$C_SLATE" "$C_RESET")"
+  mubx_box_bot
+  printf '\n'
+
+  printf '  %sUsername:         %s' "$C_PURPLE" "$C_RESET"
+  read -r u
+fi
+
 [[ "$u" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] || die "Bad username (must be 3-32 chars, lowercase, [a-z0-9_-])"
-[[ "$d" =~ ^[1-9][0-9]*$ ]] || die "Days must be a positive integer"
-[[ "$q" =~ ^[0-9]+$ ]] || q=0
 
-# Protocol Selection
+# Protocol Selection (displayed immediately after username)
 selected_protos='["all"]'
-if declare -F mubx_proto_picker >/dev/null 2>&1; then
+if [ -n "$protos_arg" ]; then
+  if [[ "$protos_arg" =~ ^\[.*\]$ ]]; then
+    selected_protos="$protos_arg"
+  elif declare -F mubx_proto_normalize >/dev/null 2>&1; then
+    selected_protos="$(mubx_proto_normalize "$protos_arg")"
+  fi
+elif declare -F mubx_proto_picker >/dev/null 2>&1; then
   selected_protos="$(mubx_proto_picker)"
 fi
 
-EXP=$(date -d "+${d} days" +%Y-%m-%d)
-grep -qxF '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shells
-
-# Check if SSH or system VPN authentication is requested
+# Check if SSH or system authentication is needed
 has_ssh=true
 if [ "$selected_protos" != '["all"]' ] && [ "$selected_protos" != '["0"]' ]; then
   if ! jq -e 'def user_has_proto($p): if (. == null or . == [] or (. | index("all") != null)) then true elif (. | index($p) != null) then true else false end; (user_has_proto("ssh") or user_has_proto("openvpn") or user_has_proto("squid"))' <<< "$selected_protos" >/dev/null 2>&1; then
@@ -59,11 +55,44 @@ if [ "$selected_protos" != '["all"]' ] && [ "$selected_protos" != '["0"]' ]; the
   fi
 fi
 
+if [ "$has_ssh" = true ]; then
+  if [ -z "$p" ]; then
+    printf '  %sPassword [Enter for random]: %s' "$C_PURPLE" "$C_RESET"
+    read -r p || p=""
+    if [ -z "$p" ]; then
+      p="$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 10)"
+      printf '  %s↳ Auto-generated password: %s%s%s\n' "$C_SLATE" "$C_BRIGHT" "$p" "$C_RESET"
+    elif [ "${#p}" -lt 6 ]; then
+      die "Password must be at least 6 characters"
+    fi
+  fi
+else
+  printf '  %sSSH Password:     %s(Disabled - Proxy UUID only)%s\n' "$C_SLATE" "$C_AMBER" "$C_RESET"
+  p="$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)"
+fi
+
+if [ -z "$d" ]; then
+  printf '  %sValid Days [30]:  %s' "$C_PURPLE" "$C_RESET"
+  read -r d || d=""
+  d="${d:-30}"
+fi
+[[ "$d" =~ ^[1-9][0-9]*$ ]] || die "Days must be a positive integer"
+
+if [ -z "$q" ]; then
+  printf '  %sData Quota GB [0 = unlimited]: %s' "$C_PURPLE" "$C_RESET"
+  read -r q || q=""
+  q="${q:-0}"
+fi
+EXP=$(date -d "+${d} days" +%Y-%m-%d 2>/dev/null || date -v+"${d}"d +%Y-%m-%d)
+if [ "$(id -u)" -eq 0 ]; then
+  grep -qxF '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shells 2>/dev/null || true
+fi
+
 # Create Linux system user
 if id "$u" >/dev/null 2>&1; then
   usermod -s /bin/false -e "$EXP" "$u" 2>/dev/null || true
 else
-  useradd -M -s /bin/false -e "$EXP" "$u"
+  useradd -M -s /bin/false -e "$EXP" "$u" 2>/dev/null || true
 fi
 
 if [ "$has_ssh" = true ]; then

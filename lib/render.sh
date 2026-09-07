@@ -184,38 +184,40 @@ mubx_proto_summary() { # $1 json_array_or_user_object -> formatted string
 
 # Interactive protocol selector dialog
 mubx_proto_picker() { # stdout: normalized JSON array
-  if [ ! -t 0 ]; then
+  if [ ! -t 0 ] && [ ! -t 1 ]; then
     printf '["all"]'
     return 0
   fi
-  printf '\n'
-  mubx_box_top "PROTOCOL ACCESS CONTROL" "SELECT CAPABILITIES"
-  mubx_put "$(printf '  %s[0]%s ALL Protocols (Full Access Suite - Default)' "$C_ELECTRIC" "$C_RESET")"
-  mubx_box_div "QUICK BUNDLES"
-  mubx_put "$(printf '  %s[1]%s SSH & Squid Proxy    (SSH Direct/WS, Squid HTTP CONNECT)' "$C_PURPLE" "$C_RESET")"
-  mubx_put "$(printf '  %s[2]%s VLESS Suite Only     (WS TLS/Plain, HTTPUpgrade, xHTTP, TCP)' "$C_PURPLE" "$C_RESET")"
-  mubx_put "$(printf '  %s[3]%s VMess Suite Only     (WS TLS/Plain, TCP)' "$C_PURPLE" "$C_RESET")"
-  mubx_put "$(printf '  %s[4]%s Trojan Suite Only    (WS TLS/Plain, TCP)' "$C_PURPLE" "$C_RESET")"
-  mubx_put "$(printf '  %s[5]%s Shadowsocks Family   (WS TLS/Plain, Direct TCP, SS-2022, ShadowTLS)' "$C_PURPLE" "$C_RESET")"
-  mubx_put "$(printf '  %s[6]%s Anti-DPI Stealth     (Hysteria 2, ShadowTLS v3, ZivPN)' "$C_PURPLE" "$C_RESET")"
-  mubx_put "$(printf '  %s[7]%s Full-Tunnel VPNs     (WireGuard, OpenVPN TCP/UDP)' "$C_PURPLE" "$C_RESET")"
-  mubx_box_div "GRANULAR SELECTION (COMBINE E.G. 10,20,21,52)"
-  mubx_put "$(printf '  %s[10]%s SSH Direct & WS         %s[11]%s OpenVPN TCP/UDP' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
-  mubx_put "$(printf '  %s[12]%s WireGuard VPN           %s[13]%s Squid HTTP CONNECT' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
-  mubx_put "$(printf '  %s[20]%s VLESS WS (TLS 443)      %s[21]%s VLESS WS (Plain 80)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
-  mubx_put "$(printf '  %s[22]%s VLESS HTTPUpgrade TLS   %s[23]%s VLESS HTTPUpgrade Plain' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
-  mubx_put "$(printf '  %s[24]%s VLESS xHTTP (TLS 443)   %s[25]%s VLESS TCP Direct/TLS' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
-  mubx_put "$(printf '  %s[30]%s VMess WS (TLS 443)      %s[31]%s VMess WS (Plain 80)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
-  mubx_put "$(printf '  %s[32]%s VMess TCP' "$C_ELECTRIC" "$C_RESET")"
-  mubx_put "$(printf '  %s[40]%s Trojan WS (TLS 443)     %s[41]%s Trojan WS (Plain 80)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
-  mubx_put "$(printf '  %s[42]%s Trojan TCP' "$C_ELECTRIC" "$C_RESET")"
-  mubx_put "$(printf '  %s[50]%s Shadowsocks WS (TLS)    %s[51]%s Shadowsocks WS (Plain 80)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
-  mubx_put "$(printf '  %s[52]%s Shadowsocks TCP Raw     %s[53]%s Shadowsocks 2022 WS' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
-  mubx_put "$(printf '  %s[60]%s ShadowTLS v3 Decoy      %s[61]%s Hysteria 2 (UDP 4433)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
-  mubx_put "$(printf '  %s[62]%s ZivPN UDP (5667)' "$C_ELECTRIC" "$C_RESET")"
-  mubx_box_bot
-  printf '\n'
-  printf '  %sEnter selection [0 = All, or numbers/bundle]: %s' "$C_PURPLE" "$C_RESET"
+  {
+    printf '\n'
+    mubx_box_top "PROTOCOL ACCESS CONTROL" "SELECT CAPABILITIES"
+    mubx_put "$(printf '  %s[0]%s ALL Protocols (Full Access Suite - Default)' "$C_ELECTRIC" "$C_RESET")"
+    mubx_box_div "QUICK BUNDLES"
+    mubx_put "$(printf '  %s[1]%s SSH & Squid Proxy    (SSH Direct/WS, Squid HTTP CONNECT)' "$C_PURPLE" "$C_RESET")"
+    mubx_put "$(printf '  %s[2]%s VLESS Suite Only     (WS TLS/Plain, HTTPUpgrade, xHTTP, TCP)' "$C_PURPLE" "$C_RESET")"
+    mubx_put "$(printf '  %s[3]%s VMess Suite Only     (WS TLS/Plain, TCP)' "$C_PURPLE" "$C_RESET")"
+    mubx_put "$(printf '  %s[4]%s Trojan Suite Only    (WS TLS/Plain, TCP)' "$C_PURPLE" "$C_RESET")"
+    mubx_put "$(printf '  %s[5]%s Shadowsocks Family   (WS TLS/Plain, Direct TCP, SS-2022, ShadowTLS)' "$C_PURPLE" "$C_RESET")"
+    mubx_put "$(printf '  %s[6]%s Anti-DPI Stealth     (Hysteria 2, ShadowTLS v3, ZivPN)' "$C_PURPLE" "$C_RESET")"
+    mubx_put "$(printf '  %s[7]%s Full-Tunnel VPNs     (WireGuard, OpenVPN TCP/UDP)' "$C_PURPLE" "$C_RESET")"
+    mubx_box_div "GRANULAR SELECTION (COMBINE E.G. 10,20,21,52)"
+    mubx_put "$(printf '  %s[10]%s SSH Direct & WS         %s[11]%s OpenVPN TCP/UDP' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[12]%s WireGuard VPN           %s[13]%s Squid HTTP CONNECT' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[20]%s VLESS WS (TLS 443)      %s[21]%s VLESS WS (Plain 80)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[22]%s VLESS HTTPUpgrade TLS   %s[23]%s VLESS HTTPUpgrade Plain' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[24]%s VLESS xHTTP (TLS 443)   %s[25]%s VLESS TCP Direct/TLS' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[30]%s VMess WS (TLS 443)      %s[31]%s VMess WS (Plain 80)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[32]%s VMess TCP' "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[40]%s Trojan WS (TLS 443)     %s[41]%s Trojan WS (Plain 80)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[42]%s Trojan TCP' "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[50]%s Shadowsocks WS (TLS)    %s[51]%s Shadowsocks WS (Plain 80)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[52]%s Shadowsocks TCP Raw     %s[53]%s Shadowsocks 2022 WS' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[60]%s ShadowTLS v3 Decoy      %s[61]%s Hysteria 2 (UDP 4433)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[62]%s ZivPN UDP (5667)' "$C_ELECTRIC" "$C_RESET")"
+    mubx_box_bot
+    printf '\n'
+    printf '  %sEnter selection [0 = All, or numbers/bundle]: %s' "$C_PURPLE" "$C_RESET"
+  } >&2
   local sel
   read -r sel || sel="0"
   sel="${sel:-0}"
