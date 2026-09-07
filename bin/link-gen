@@ -88,6 +88,10 @@ note() {
   printf '  %s↳ %s%s\n' "$C_SLATE" "$1" "$C_RESET"
 }
 
+manual() {
+  printf '  %s↳ Manual Config:%s %s%s%s\n' "$C_AMBER" "$C_RESET" "$C_SLATE" "$1" "$C_RESET"
+}
+
 mubx_clear
 
 # --- Summary Box ----------------------------------------------------------
@@ -165,48 +169,57 @@ if u_has "vless_ws_tls" || u_has "vless_ws_ntls" || u_has "vless_httpupgrade_tls
   if u_has "vless_ws_tls"; then
     item "VLESS-WS" "VLESS WebSocket (TLS 443)"
     block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-ws#MUBX-VLESS-WS"
+    manual "Address: ${BUG} | Port: 443 | UUID: ${UUID} | Network: ws | Host: ${DOMAIN} | Path: /vless-ws | Security: tls | SNI: ${BUG}"
   fi
 
   if u_has "vless_ws_ntls"; then
     item "VLESS-WS-80" "VLESS WebSocket (Plain HTTP 80)"
     block "vless://${UUID}@${BUG}:80?encryption=none&security=none&type=ws&host=${DOMAIN}&path=%2Fvless-ws#MUBX-VLESS-WS-80"
+    manual "Address: ${BUG} | Port: 80 | UUID: ${UUID} | Network: ws | Host: ${DOMAIN} | Path: /vless-ws | Security: none"
   fi
 
   if u_has "vless_httpupgrade_tls"; then
     item "VLESS-UPG" "VLESS HTTPUpgrade (TLS 443)"
     block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=httpupgrade&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-httpupgrade#MUBX-HTTPUpgrade"
+    manual "Address: ${BUG} | Port: 443 | UUID: ${UUID} | Network: httpupgrade | Host: ${DOMAIN} | Path: /vless-httpupgrade | Security: tls | SNI: ${BUG}"
   fi
 
   if u_has "vless_httpupgrade_ntls"; then
     item "VLESS-UPG-80" "VLESS HTTPUpgrade (Plain HTTP 80)"
     block "vless://${UUID}@${BUG}:80?encryption=none&security=none&type=httpupgrade&host=${DOMAIN}&path=%2Fvless-httpupgrade#MUBX-HTTPUpgrade-80"
+    manual "Address: ${BUG} | Port: 80 | UUID: ${UUID} | Network: httpupgrade | Host: ${DOMAIN} | Path: /vless-httpupgrade | Security: none"
   fi
 
   if u_has "vless_xhttp_tls"; then
     item "VLESS-XHTTP" "VLESS xHTTP (TLS 443)"
     block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=xhttp&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-xhttp#MUBX-XHTTP"
+    manual "Address: ${BUG} | Port: 443 | UUID: ${UUID} | Network: xhttp | Host: ${DOMAIN} | Path: /vless-xhttp | Security: tls | SNI: ${BUG}"
   fi
 
   if u_has "vmess_ws_tls"; then
     item "VMESS-WS" "VMess WebSocket (TLS 443)"
     VJ="{\"v\":\"2\",\"ps\":\"MUBX-VMess\",\"add\":\"${BUG}\",\"port\":\"443\",\"id\":\"${UUID}\",\"aid\":\"0\",\"net\":\"ws\",\"path\":\"/vmess-ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"tls\":\"tls\",\"sni\":\"${BUG}\"}"
     block "vmess://$(echo -n "$VJ" | base64 -w 0)"
+    manual "Address: ${BUG} | Port: 443 | UUID: ${UUID} | AlterId: 0 | Network: ws | Host: ${DOMAIN} | Path: /vmess-ws | Security: tls"
   fi
 
   if u_has "vmess_ws_ntls"; then
     item "VMESS-WS-80" "VMess WebSocket (Plain HTTP 80)"
     VJ80="{\"v\":\"2\",\"ps\":\"MUBX-VMess-80\",\"add\":\"${BUG}\",\"port\":\"80\",\"id\":\"${UUID}\",\"aid\":\"0\",\"net\":\"ws\",\"path\":\"/vmess-ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\"}"
     block "vmess://$(echo -n "$VJ80" | base64 -w 0)"
+    manual "Address: ${BUG} | Port: 80 | UUID: ${UUID} | AlterId: 0 | Network: ws | Host: ${DOMAIN} | Path: /vmess-ws | Security: none"
   fi
 
   if u_has "trojan_ws_tls"; then
     item "TROJAN-WS" "Trojan WebSocket (TLS 443)"
     block "trojan://${UUID}@${BUG}:443?security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&path=%2Ftrojan-ws#MUBX-Trojan"
+    manual "Address: ${BUG} | Port: 443 | Password: ${UUID} | Network: ws | Host: ${DOMAIN} | Path: /trojan-ws | Security: tls"
   fi
 
   if u_has "trojan_ws_ntls"; then
     item "TROJAN-WS-80" "Trojan WebSocket (Plain HTTP 80)"
     block "trojan://${UUID}@${BUG}:80?security=none&type=ws&host=${DOMAIN}&path=%2Ftrojan-ws#MUBX-Trojan-80"
+    manual "Address: ${BUG} | Port: 80 | Password: ${UUID} | Network: ws | Host: ${DOMAIN} | Path: /trojan-ws | Security: none"
   fi
   mubx_box_bot
 fi
@@ -223,27 +236,32 @@ if u_has "ss_ws_tls" || u_has "ss_ws_ntls" || u_has "ss_tcp" || u_has "ss_2022";
   if u_has "ss_ws_tls"; then
     item "SS-WS-TLS" "Shadowsocks WS (Port 443 TLS)"
     block "ss://${SS_B64}@${DOMAIN}:443/?plugin=v2ray-plugin%3Btls%3Bhost%3D${DOMAIN}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
+    manual "Address: ${DOMAIN} | Port: 443 | Method: aes-256-gcm | Password: ${UUID} | Network: ws | Host: ${DOMAIN} | Path: /ss-${USER_NAME} | Security: tls"
 
     if [ "$BUG" != "$DOMAIN" ]; then
       item "SS-WS-SNI" "Shadowsocks WS (Port 443 SNI Bug-Host)"
       block "ss://${SS_B64}@${BUG}:443/?plugin=v2ray-plugin%3Btls%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}-${BUG}"
+      manual "Address: ${BUG} | Port: 443 | Method: aes-256-gcm | Password: ${UUID} | Network: ws | Host: ${DOMAIN} | Path: /ss-${USER_NAME} | Security: tls | SNI: ${BUG}"
     fi
   fi
 
   if u_has "ss_ws_ntls"; then
     item "SS-WS-80" "Shadowsocks WS (Port 80 Plain)"
     block "ss://${SS_B64}@${BUG}:80/?plugin=v2ray-plugin%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
+    manual "Address: ${BUG} | Port: 80 | Method: aes-256-gcm | Password: ${UUID} | Network: ws | Host: ${DOMAIN} | Path: /ss-${USER_NAME} | Security: none"
   fi
 
   if u_has "ss_tcp"; then
     if [ "$PRIMARY_443" -eq 1 ]; then
       item "SS-TCP-443" "Shadowsocks Raw TCP (Port 443 Shared Primary)"
       block "ss://${SS_B64}@${DOMAIN}:443#MUBX-SS-443"
+      manual "Address: ${DOMAIN} | Port: 443 | Method: aes-256-gcm | Password: ${UUID} | Network: tcp | Security: none"
       note "Direct raw TCP on 443 without plugin/TLS; multiplexed automatically by HAProxy"
     fi
 
     item "SS-TCP" "Shadowsocks Raw TCP (Port ${SS_PLAIN_PORT} Direct)"
     block "ss://${SS_B64}@${DOMAIN}:${SS_PLAIN_PORT}#MUBX-SS-${USER_NAME}-tcp"
+    manual "Address: ${DOMAIN} | Port: ${SS_PLAIN_PORT} | Method: aes-256-gcm | Password: ${UUID} | Network: tcp | Security: none"
     note "Zero-overhead standalone port - instant connection in v2rayNG / Shadowrocket / sing-box"
   fi
 
@@ -254,6 +272,7 @@ if u_has "ss_ws_tls" || u_has "ss_ws_ntls" || u_has "ss_tcp" || u_has "ss_2022";
       SS22_B64="$(printf '2022-blake3-aes-256-gcm:%s' "$SS22_PSK" | base64 -w 0)"
       item "SS-2022" "Shadowsocks 2022 WS (Port 443 BLAKE3 Cipher)"
       block "ss://${SS22_B64}@${DOMAIN}:443/?plugin=v2ray-plugin%3Btls%3Bhost%3D${DOMAIN}%3Bpath%3D%2Fss22-${USER_NAME}%3Bmux%3D0#MUBX-SS22-${USER_NAME}"
+      manual "Address: ${DOMAIN} | Port: 443 | Method: 2022-blake3-aes-256-gcm | Password: ${SS22_PSK} | Network: ws | Host: ${DOMAIN} | Path: /ss22-${USER_NAME} | Security: tls"
     fi
   fi
   mubx_box_bot
