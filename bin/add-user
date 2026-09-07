@@ -22,30 +22,36 @@ d="${3:-}"
 q="${4:-}"
 protos_arg="${5:-}"
 
+selected_protos='["all"]'
+
 if [ -z "$u" ]; then
   mubx_clear
-  mubx_box_top "USER PROVISIONING" "NEW ACCOUNT"
-  mubx_put "$(printf '  %sEnter account details and select authorized protocols:%s' "$C_SLATE" "$C_RESET")"
-  mubx_box_bot
-  printf '\n'
+  # Step 1: Protocol Selection
+  if [ -n "$protos_arg" ]; then
+    if [[ "$protos_arg" =~ ^\[.*\]$ ]]; then
+      selected_protos="$protos_arg"
+    elif declare -F mubx_proto_normalize >/dev/null 2>&1; then
+      selected_protos="$(mubx_proto_normalize "$protos_arg")"
+    fi
+  elif declare -F mubx_proto_picker >/dev/null 2>&1; then
+    selected_protos="$(mubx_proto_picker)"
+  fi
 
+  # Step 2: Username
+  printf '\n'
   printf '  %sUsername:         %s' "$C_PURPLE" "$C_RESET"
   read -r u
+else
+  if [ -n "$protos_arg" ]; then
+    if [[ "$protos_arg" =~ ^\[.*\]$ ]]; then
+      selected_protos="$protos_arg"
+    elif declare -F mubx_proto_normalize >/dev/null 2>&1; then
+      selected_protos="$(mubx_proto_normalize "$protos_arg")"
+    fi
+  fi
 fi
 
 [[ "$u" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] || die "Bad username (must be 3-32 chars, lowercase, [a-z0-9_-])"
-
-# Protocol Selection (displayed immediately after username)
-selected_protos='["all"]'
-if [ -n "$protos_arg" ]; then
-  if [[ "$protos_arg" =~ ^\[.*\]$ ]]; then
-    selected_protos="$protos_arg"
-  elif declare -F mubx_proto_normalize >/dev/null 2>&1; then
-    selected_protos="$(mubx_proto_normalize "$protos_arg")"
-  fi
-elif declare -F mubx_proto_picker >/dev/null 2>&1; then
-  selected_protos="$(mubx_proto_picker)"
-fi
 
 # Check if SSH or system authentication is needed
 has_ssh=true
