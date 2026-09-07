@@ -29,20 +29,21 @@ load_secrets() {
   local key value
   while IFS='=' read -r key value; do
     case "$key" in
-      DOMAIN|UUID|HY2_PASS|ZIVPN_PASS|SSH_WS_PATH)
+      DOMAIN|UUID|HY2_PASS|ZIVPN_PASS|SSH_WS_PATH|SHADOWTLS_PASS|SHADOWTLS_SNI)
         value="${value#\"}"
         value="${value%\"}"
         [[ "$value" != *$'\n'* ]] || die "Invalid secret value for $key."
         printf -v "$key" '%s' "$value"
         ;;
-      REALITY_PRIVKEY|REALITY_PUBKEY|SHORT_ID|REALITY_FRONTS)
-        # Retired Reality keys from legacy installs: ignore silently
+      REALITY_PRIVKEY|REALITY_PUBKEY|SHORT_ID|REALITY_FRONTS|STLS_PASS|STLS_SERVER_NAME)
+        # Retired Reality keys from legacy installs and the alternative
+        # ShadowTLS key spelling: ignore silently
         ;;
       '') ;;
       *) die "Unexpected key in /etc/telecom-engine.env: $key" ;;
     esac
   done < /etc/telecom-engine.env
-  for key in DOMAIN UUID HY2_PASS ZIVPN_PASS SSH_WS_PATH; do
+  for key in DOMAIN UUID HY2_PASS ZIVPN_PASS SSH_WS_PATH SHADOWTLS_PASS; do
     [ -n "${!key:-}" ] || die "Missing $key in /etc/telecom-engine.env."
   done
 }
@@ -397,8 +398,33 @@ download_verified \
 tar -xzf "$download_root/singbox.tar.gz" -C "$download_root"
 stage_bin "$download_root/sing-box-${SINGBOX_VERSION}-linux-$(case "$(dpkg --print-architecture)" in amd64) echo amd64 ;; arm64) echo arm64 ;; armhf) echo armv7 ;; esac)/sing-box" /usr/local/bin/sing-box
 
-run certbot certonly --standalone --keep-until-expiring --non-interactive --agree-tos \
-  --register-unsafely-without-email -d "$DOMAIN"
+# ACME certificate: prefer webroot whenever the installed nginx config is
+# startable (re-runs, where a rendered config and a previous certificate
+# exist), so the lineage renews cleanly against nginx holding port 80. A
+# fresh box cannot start that config yet - the TLS server references the
+# not-yet-issued certificate - so fall back to standalone; port 80 is
+# guaranteed free here (verified above). bin/set-domain uses the same
+# webroot-first pattern.
+install -d -m 0755 /var/www/html
+certbot_ok=0
+if command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1; then
+  if nginx; then
+    if certbot certonly --webroot -w /var/www/html --keep-until-expiring \
+         --non-interactive --agree-tos --register-unsafely-without-email \
+         -d "$DOMAIN"; then
+      certbot_ok=1
+    fi
+    nginx -s quit 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      ss -H -ltn 'sport = :80' | grep -q . || break
+      sleep 1
+    done
+  fi
+fi
+if [ "$certbot_ok" -eq 0 ]; then
+  run certbot certonly --standalone --keep-until-expiring --non-interactive \
+    --agree-tos --register-unsafely-without-email -d "$DOMAIN"
+fi
 command -v hysteria >/dev/null 2>&1 || die "Hysteria installation did not provide /usr/local/bin/hysteria."
 
 BUILD_ROOT="$(mktemp -d)"
