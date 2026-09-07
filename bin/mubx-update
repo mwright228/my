@@ -30,27 +30,11 @@ ROOT="$(cat /etc/mubx/install-root 2>/dev/null || true)"
   exit 1
 }
 origin_url="$(git -C "$ROOT" remote get-url origin 2>/dev/null || true)"
-if [ "$(canonical_repo_url "$origin_url")" = "$(canonical_repo_url "$REPO_URL")" ]; then
-  # Same repository; normalize a legacy credential-embedded origin (e.g. a
-  # token URL left over from when the repository was private) so pulls no
-  # longer depend on that credential staying valid.
-  if [ "$origin_url" != "$REPO_URL" ]; then
-    echo "[*] Normalizing $ROOT origin to $REPO_URL"
-    git -C "$ROOT" remote set-url origin "$REPO_URL"
-  fi
-else
-  echo "[!] $ROOT origin does not match $REPO_URL; refusing to self-update." >&2
-  echo "    Fix with: git -C $ROOT remote set-url origin $REPO_URL" >&2
-  exit 1
+if [ "$(canonical_repo_url "$origin_url")" != "$(canonical_repo_url "$REPO_URL")" ]; then
+  echo "[*] Updating remote origin to $REPO_URL"
+  git -C "$ROOT" remote set-url origin "$REPO_URL" 2>/dev/null || true
 fi
-[ -z "$(git -C "$ROOT" status --porcelain)" ] || {
-  echo "[!] $ROOT has local changes; commit or remove them before updating." >&2
-  exit 1
-}
-[ "$(git -C "$ROOT" branch --show-current 2>/dev/null || true)" = "main" ] || {
-  echo "[!] Expected branch 'main' in $ROOT, got '$(git -C "$ROOT" branch --show-current 2>/dev/null)'." >&2
-  exit 1
-}
+
 
 SERVICES=(
   haproxy nginx xray dropbear squid wstunnel hysteria zivpn singbox
@@ -125,8 +109,11 @@ trap on_exit EXIT
 
 # 1) Pull the new tree. Nothing is touched until this succeeds, so a network
 #    failure is a clean no-op.
-printf '%s[*]%s Pulling from %s\n' "$C_GREEN" "$C_RESET" "$REPO_URL"
-git pull --ff-only origin main
+printf '%s[*]%s Fetching latest updates from %s\n' "$C_MINT" "$C_RESET" "$REPO_URL"
+git -C "$ROOT" fetch origin main
+git -C "$ROOT" checkout -B main origin/main 2>/dev/null || true
+git -C "$ROOT" reset --hard origin/main
+
 
 # 2) Snapshot the live files we are about to overwrite.
 for f in "$ROOT"/bin/*; do
