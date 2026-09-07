@@ -92,7 +92,12 @@ restore_activity() { # return to the pre-update active/inactive state
 }
 
 stage_bin() { # $1 src -> /usr/local/bin/<basename>, swapped via rename
-  local src="$1" dst="/usr/local/bin/$(basename "$src")"
+  # Assign src and dst in separate statements: in a single `local a=x b=$(…a)`
+  # line bash expands b BEFORE a is assigned, so with `set -u` $src is
+  # unbound there, basename yields the empty string, and the final mv
+  # becomes a no-op self-move that aborts the whole update.
+  local src="$1"
+  local dst="/usr/local/bin/$(basename "$src")"
   install -m 0755 "$src" "$dst.tmp.$$"
   mv -f "$dst.tmp.$$" "$dst"
 }
