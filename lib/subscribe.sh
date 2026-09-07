@@ -137,16 +137,16 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
         "$(printf '2022-blake3-aes-256-gcm:%s' "$psk" | base64 -w 0)" "$dom" "$dom" "$user" "$user"
     fi
   fi
-  # Shadowsocks plain TCP on the per-user port
+  # Shadowsocks plain TCP on Port 443 (direct, no TLS, multiplexed by HAProxy)
+  if mubx_user_has_proto "$user" "ss_tcp"; then
+    printf 'ss://%s@%s:443#MUBX-SS-%s-443\n' \
+      "$(printf 'aes-256-gcm:%s' "$uuid" | base64 -w 0)" "$dom" "$user"
+  fi
+  # Shadowsocks plain TCP on the per-user standalone port
   if mubx_user_has_proto "$user" "ss_tcp"; then
     printf 'ss://%s@%s:%s#MUBX-SS-%s-tcp\n' \
       "$(printf 'aes-256-gcm:%s' "$uuid" | base64 -w 0)" \
       "$dom" "$(( ${SS_PLAIN_BASE_PORT:-8388} + idx ))" "$user"
-  fi
-  # Raw SS on 443 is the shared primary identity: only for admin if ss_tcp is allowed.
-  if [ "$user" = "admin" ] && mubx_user_has_proto "admin" "ss_tcp"; then
-    printf 'ss://%s@%s:443#MUBX-SS-443\n' \
-      "$(printf 'aes-256-gcm:%s' "$(mubx_primary_uuid)" | base64 -w 0)" "$dom"
   fi
   # ShadowTLS v3 + SS-2022 (when configured)
   if mubx_user_has_proto "$user" "shadowtls"; then
@@ -232,8 +232,7 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
     + (if (cur_user | user_has_proto(\"ss-tcp\")) then [{
         name: \"MUBX-SS-TCP\", type: \"ss\", server: \$dom, port: \$ssport,
         cipher: \"aes-256-gcm\", password: \$uuid, udp: true
-      }] else [] end)
-    + (if (\$isadmin == 1 and (cur_user | user_has_proto(\"ss-tcp\"))) then [{
+      }, {
         name: \"MUBX-SS-443\", type: \"ss\", server: \$dom, port: 443,
         cipher: \"aes-256-gcm\", password: \$uuid, udp: true
       }] else [] end)
@@ -303,6 +302,9 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
         + (if (cur_user | user_has_proto(\"ss-tcp\")) then [{
           type: \"shadowsocks\", tag: \"MUBX-SS-TCP\", server: \$dom, server_port: \$ssport,
           method: \"aes-256-gcm\", password: \$uuid
+        }, {
+          type: \"shadowsocks\", tag: \"MUBX-SS-443\", server: \$dom, server_port: 443,
+          method: \"aes-256-gcm\", password: \$uuid
         }] else [] end)
         + (if (\$stls != \"\" and (cur_user | user_has_proto(\"shadowtls\"))) then [{
             type: \"shadowtls\", tag: \"MUBX-ShadowTLS-wrap\", server: \$dom, server_port: 443,
@@ -311,10 +313,6 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
           }, {
             type: \"shadowsocks\", tag: \"MUBX-ShadowTLS\", server: \$dom, server_port: 443,
             method: \"2022-blake3-aes-256-gcm\", password: \$adminkey, detour: \"MUBX-ShadowTLS-wrap\"
-          }] else [] end)
-        + (if (\$isadmin == 1 and (cur_user | user_has_proto(\"ss-tcp\"))) then [{
-            type: \"shadowsocks\", tag: \"MUBX-SS-443\", server: \$dom, server_port: 443,
-            method: \"aes-256-gcm\", password: \$uuid
           }] else [] end)
       ),
       route: {final: \"MUBX-Hysteria2\", auto_detect_interface: true}

@@ -456,17 +456,32 @@ mubx_ss2022_apply() { # $1 rendered config file  $2 ss-2022 inbound template
   fi
 }
 
-# Append the shared SS-on-443 inbound: a single Shadowsocks listener on the
-# loopback SS_443_LOOPBACK_PORT carrying the primary identity's password.
-# HAProxy sends every non-TLS public-443 connection here, so this is the
-# "Shadowsocks TCP on 443" route that works in any plain SS client.
+# Append the shared SS-on-443 inbound: a Shadowsocks listener on the
+# loopback SS_443_LOOPBACK_PORT. HAProxy sends every non-TLS public-443
+# connection here. We populate .settings.clients with all active users who have
+# ss-tcp permission so every user can connect directly on Port 443 without TLS.
 mubx_ss_443_apply() { # $1 rendered config file  $2 ss-443 inbound template
-  local cfg="$1" ss_tpl="$2" obj pass
+  local cfg="$1" ss_tpl="$2" obj pass clients
   [ -f "$ss_tpl" ] || return 0
   pass="$(mubx_primary_uuid)"
   [ -n "$pass" ] || return 0
   obj="$(sed -e "s|__SS_PORT__|$SS_443_LOOPBACK_PORT|g" \
              -e "s|__SS_PASS__|$pass|g" "$ss_tpl")" || return 1
+  if [ -f "$MUBX_USERS_FILE" ]; then
+    clients="$(jq -c "
+      ${JQ_PROTO_DEF}
+      [
+        .[] |
+        select((.status // \"active\") != \"frozen\") |
+        select((.uuid // \"\") != \"\") |
+        select(user_has_proto(\"ss-tcp\")) |
+        {password: .uuid, method: \"aes-256-gcm\", email: (.name + \"@\" + \"${DOMAIN:-mubx}\")}
+      ]
+    " "$MUBX_USERS_FILE" 2>/dev/null || echo '[]')"
+    if [ "$clients" != '[]' ] && [ -n "$clients" ]; then
+      obj="$(jq --argjson c "$clients" '.settings.clients = $c' <<< "$obj")"
+    fi
+  fi
   jq --argjson o "$obj" '.inbounds += [$o]' "$cfg" > "$cfg.mubx" || return 1
   mv -f "$cfg.mubx" "$cfg"
 }
