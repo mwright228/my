@@ -479,7 +479,7 @@ mubx_ss_443_apply() { # $1 rendered config file  $2 ss-443 inbound template
       ]
     " "$MUBX_USERS_FILE" 2>/dev/null || echo '[]')"
     if [ "$clients" != '[]' ] && [ -n "$clients" ]; then
-      obj="$(jq --argjson c "$clients" '.settings.clients = $c' <<< "$obj")"
+      obj="$(jq --argjson c "$clients" '.settings.clients = $c | .settings.users = $c' <<< "$obj")"
     fi
   fi
   jq --argjson o "$obj" '.inbounds += [$o]' "$cfg" > "$cfg.mubx" || return 1
