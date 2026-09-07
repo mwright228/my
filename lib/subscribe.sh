@@ -112,31 +112,31 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
   printf 'trojan://%s@%s:443?security=tls&type=ws&host=%s&sni=%s&path=%%2Ftrojan-ws#MUBX-Trojan\n' \
     "$uuid" "$dom" "$dom" "$dom"
   # Shadowsocks WS+TLS (legacy aes-256-gcm) on the per-user nginx route
-  printf 'ss://%s@%s:443?plugin=v2ray-plugin%%3Btls%%3Bhost%%3D%s%%3Bpath%%3D%%2Fss-%s%%3Bmux%%3D0#MUBX-SS-%s\n' \
-    "$(printf 'aes-256-gcm:%s' "$uuid" | mubx_b64url)" "$dom" "$dom" "$user" "$user"
+  printf 'ss://%s@%s:443/?plugin=v2ray-plugin%%3Btls%%3Bhost%%3D%s%%3Bpath%%3D%%2Fss-%s%%3Bmux%%3D0#MUBX-SS-%s\n' \
+    "$(printf 'aes-256-gcm:%s' "$uuid" | base64 -w 0)" "$dom" "$dom" "$user" "$user"
   # Shadowsocks 2022 WS+TLS on the per-user route (when a key exists)
   local psk
   psk="$(mubx_ss2022_psk "$user")"
   if [ -n "$psk" ]; then
-    printf 'ss://%s@%s:443?plugin=v2ray-plugin%%3Btls%%3Bhost%%3D%s%%3Bpath%%3D%%2Fss22-%s%%3Bmux%%3D0#MUBX-SS22-%s\n' \
-      "$(printf '2022-blake3-aes-256-gcm:%s' "$psk" | mubx_b64url)" "$dom" "$dom" "$user" "$user"
+    printf 'ss://%s@%s:443/?plugin=v2ray-plugin%%3Btls%%3Bhost%%3D%s%%3Bpath%%3D%%2Fss22-%s%%3Bmux%%3D0#MUBX-SS22-%s\n' \
+      "$(printf '2022-blake3-aes-256-gcm:%s' "$psk" | base64 -w 0)" "$dom" "$dom" "$user" "$user"
   fi
   # Shadowsocks plain TCP on the per-user port
   printf 'ss://%s@%s:%s#MUBX-SS-%s-tcp\n' \
-    "$(printf 'aes-256-gcm:%s' "$uuid" | mubx_b64url)" \
+    "$(printf 'aes-256-gcm:%s' "$uuid" | base64 -w 0)" \
     "$dom" "$(( ${SS_PLAIN_BASE_PORT:-8388} + idx ))" "$user"
   # Raw SS on 443 is the shared primary identity: only for admin.
   if [ "$user" = "admin" ]; then
     printf 'ss://%s@%s:443#MUBX-SS-443\n' \
-      "$(printf 'aes-256-gcm:%s' "$(mubx_primary_uuid)" | mubx_b64url)" "$dom"
+      "$(printf 'aes-256-gcm:%s' "$(mubx_primary_uuid)" | base64 -w 0)" "$dom"
   fi
   # ShadowTLS v3 + SS-2022 (when configured)
   local stls_key
   if [ -n "${SHADOWTLS_PASS:-}" ]; then
     stls_key="$(mubx_ss2022_psk admin)"
     if [ -n "$stls_key" ]; then
-      printf 'ss://%s@%s:443?plugin=shadow-tls%%3Bhost%%3D%s%%3Bpassword%%3D%s%%3Bversion%%3D3#MUBX-ShadowTLS\n' \
-        "$(printf '2022-blake3-aes-256-gcm:%s' "$stls_key" | mubx_b64url)" "$dom" \
+      printf 'ss://%s@%s:443/?plugin=shadow-tls%%3Bhost%%3D%s%%3Bpassword%%3D%s%%3Bversion%%3D3#MUBX-ShadowTLS\n' \
+        "$(printf '2022-blake3-aes-256-gcm:%s' "$stls_key" | base64 -w 0)" "$dom" \
         "${SHADOWTLS_SNI:-www.microsoft.com}" "$SHADOWTLS_PASS"
     fi
   fi

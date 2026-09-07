@@ -166,37 +166,37 @@ mubx_box_bot
 # ============================================================================
 card_header "xray haproxy" "SHADOWSOCKS FAMILY" "WS & RAW TCP"
 
-SS_UI="$(printf 'aes-256-gcm:%s' "$UUID" | base64 -w 0 | tr '+/' '-_' | tr -d '=')"
+SS_B64="$(printf 'aes-256-gcm:%s' "$UUID" | base64 -w 0)"
 SS_PLAIN_PORT=$(( ${SS_PLAIN_BASE_PORT:-8388} + ${user_idx:-0} ))
 
 item "SS-WS-TLS" "Shadowsocks WS (Port 443 TLS)"
-block "ss://${SS_UI}@${DOMAIN}:443?plugin=v2ray-plugin%3Btls%3Bhost%3D${DOMAIN}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
+block "ss://${SS_B64}@${DOMAIN}:443/?plugin=v2ray-plugin%3Btls%3Bhost%3D${DOMAIN}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
 
 if [ "$BUG" != "$DOMAIN" ]; then
   item "SS-WS-SNI" "Shadowsocks WS (Port 443 SNI Bug-Host)"
-  block "ss://${SS_UI}@${BUG}:443?plugin=v2ray-plugin%3Btls%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}-${BUG}"
+  block "ss://${SS_B64}@${BUG}:443/?plugin=v2ray-plugin%3Btls%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}-${BUG}"
 fi
 
 item "SS-WS-80" "Shadowsocks WS (Port 80 Plain)"
-block "ss://${SS_UI}@${BUG}:80?plugin=v2ray-plugin%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
+block "ss://${SS_B64}@${BUG}:80/?plugin=v2ray-plugin%3Bhost%3D${BUG}%3Bpath%3D%2Fss-${USER_NAME}%3Bmux%3D0#MUBX-SS-${USER_NAME}"
 
 if [ "$PRIMARY_443" -eq 1 ]; then
   item "SS-TCP-443" "Shadowsocks Raw TCP (Port 443 Shared Primary)"
-  block "ss://${SS_UI}@${DOMAIN}:443#MUBX-SS-443"
+  block "ss://${SS_B64}@${DOMAIN}:443#MUBX-SS-443"
   note "Direct raw TCP on 443 without plugin/TLS; multiplexed automatically by HAProxy"
 fi
 
 item "SS-TCP" "Shadowsocks Raw TCP (Port ${SS_PLAIN_PORT} Direct)"
-block "ss://${SS_UI}@${DOMAIN}:${SS_PLAIN_PORT}#MUBX-SS-${USER_NAME}-tcp"
+block "ss://${SS_B64}@${DOMAIN}:${SS_PLAIN_PORT}#MUBX-SS-${USER_NAME}-tcp"
 note "Zero-overhead standalone port - instant connection in v2rayNG / Shadowrocket / sing-box"
 
 if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
   source /usr/local/lib/mubx/subscribe.sh
   SS22_PSK="$(mubx_ss2022_psk "$USER_NAME" 2>/dev/null || true)"
   if [ -n "$SS22_PSK" ]; then
-    SS22_UI="$(printf '2022-blake3-aes-256-gcm:%s' "$SS22_PSK" | base64 -w 0 | tr '+/' '-_' | tr -d '=')"
+    SS22_B64="$(printf '2022-blake3-aes-256-gcm:%s' "$SS22_PSK" | base64 -w 0)"
     item "SS-2022" "Shadowsocks 2022 WS (Port 443 BLAKE3 Cipher)"
-    block "ss://${SS22_UI}@${DOMAIN}:443?plugin=v2ray-plugin%3Btls%3Bhost%3D${DOMAIN}%3Bpath%3D%2Fss22-${USER_NAME}%3Bmux%3D0#MUBX-SS22-${USER_NAME}"
+    block "ss://${SS22_B64}@${DOMAIN}:443/?plugin=v2ray-plugin%3Btls%3Bhost%3D${DOMAIN}%3Bpath%3D%2Fss22-${USER_NAME}%3Bmux%3D0#MUBX-SS22-${USER_NAME}"
   fi
 fi
 mubx_box_bot
