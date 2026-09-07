@@ -282,4 +282,35 @@ mubx_clear() {
   return 0
 }
 
+# Robust file locking helper using flock (with fallback to mkdir lock)
+mubx_with_lock() { # $1 lock_file  $@ command
+  local lockfile="$1" lockdir=""
+  shift
+  mkdir -p "$(dirname "$lockfile")" 2>/dev/null || true
+  if command -v flock >/dev/null 2>&1; then
+    (
+      exec 200>"$lockfile"
+      flock -w 15 200 || { echo "[!] Failed to acquire lock on $lockfile" >&2; return 1; }
+      "$@"
+    )
+  else
+    lockdir="${lockfile}.lock"
+    local retry=0
+    while ! mkdir "$lockdir" 2>/dev/null; do
+      sleep 0.1
+      retry=$((retry + 1))
+      if [ "$retry" -ge 150 ]; then
+        echo "[!] Timeout waiting for lock on $lockfile" >&2
+        return 1
+      fi
+    done
+    "$@"
+    local rc=$?
+    rm -rf "$lockdir" 2>/dev/null || true
+    return $rc
+  fi
+}
 
+mubx_with_users_lock() {
+  mubx_with_lock "${MUBX_USERS_LOCK:-/etc/mubx/.users.lock}" "$@"
+}

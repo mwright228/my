@@ -419,27 +419,27 @@ interactive() {
         if declare -F mubx_proto_picker >/dev/null 2>&1; then
           protos_choice="$(mubx_proto_picker)"
         fi
-        cmd_add "$name" "$days" "$quota" "$protos_choice" || true
+        mubx_with_users_lock cmd_add "$name" "$days" "$quota" "$protos_choice" || true
         ;;
       p|proto|protocols)
         printf '  Username or # to configure protocols: '
         read -r name
-        cmd_proto "$(resolve_name "$name")" || true
+        mubx_with_users_lock cmd_proto "$(resolve_name "$name")" || true
         ;;
       r|remove)
         printf '  Username or # to remove: '
         read -r name
-        cmd_remove "$(resolve_name "$name")" || true
+        mubx_with_users_lock cmd_remove "$(resolve_name "$name")" || true
         ;;
       f|freeze)
         printf '  Username or # to freeze: '
         read -r name
-        cmd_freeze "$(resolve_name "$name")" || true
+        mubx_with_users_lock cmd_freeze "$(resolve_name "$name")" || true
         ;;
       u|unfreeze)
         printf '  Username or # to unfreeze: '
         read -r name
-        cmd_unfreeze "$(resolve_name "$name")" || true
+        mubx_with_users_lock cmd_unfreeze "$(resolve_name "$name")" || true
         ;;
       s|stats|usage)
         printf '  Username or # for stats (blank for all): '
@@ -453,7 +453,7 @@ interactive() {
       z|reset)
         printf '  Username or # to reset usage stats: '
         read -r name
-        cmd_reset_quota "$(resolve_name "$name")" || true
+        mubx_with_users_lock cmd_reset_quota "$(resolve_name "$name")" || true
         ;;
       q|quit|0) exit 0 ;;
     esac
@@ -467,12 +467,12 @@ interactive() {
 cmd="${1:-interactive}"
 case "$cmd" in
   list) cmd_list ;;
-  add) cmd_add "${2:?usage: mubx-users add <name> [days] [quota_gb] [protocols]}" "${3:-}" "${4:-0}" "${5:-all}" ;;
-  proto|protocols) cmd_proto "${2:?usage: mubx-users proto <name> [protocols]}" "${3:-}" ;;
-  remove) cmd_remove "${2:?usage: mubx-users remove <name>}" ;;
-  freeze) cmd_freeze "${2:?usage: mubx-users freeze <name>}" ;;
-  unfreeze) cmd_unfreeze "${2:?usage: mubx-users unfreeze <name>}" ;;
-  reset-quota|reset) cmd_reset_quota "${2:?usage: mubx-users reset-quota <name>}" ;;
+  add) mubx_with_users_lock cmd_add "${2:?usage: mubx-users add <name> [days] [quota_gb] [protocols]}" "${3:-}" "${4:-0}" "${5:-all}" ;;
+  proto|protocols) mubx_with_users_lock cmd_proto "${2:?usage: mubx-users proto <name> [protocols]}" "${3:-}" ;;
+  remove) mubx_with_users_lock cmd_remove "${2:?usage: mubx-users remove <name>}" ;;
+  freeze) mubx_with_users_lock cmd_freeze "${2:?usage: mubx-users freeze <name>}" ;;
+  unfreeze) mubx_with_users_lock cmd_unfreeze "${2:?usage: mubx-users unfreeze <name>}" ;;
+  reset-quota|reset) mubx_with_users_lock cmd_reset_quota "${2:?usage: mubx-users reset-quota <name>}" ;;
   usage|stats) cmd_usage "${2:-}" ;;
   interactive) interactive ;;
   *) echo "Unknown command: $cmd (use list/add/proto/remove/freeze/unfreeze/reset-quota/usage)" >&2; exit 1 ;;

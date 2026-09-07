@@ -430,6 +430,23 @@ PY
 fi
 rm -rf "$tmp4"
 
+say "Concurrency & file locking test"
+tmp5="$(mktemp -d)"
+lockfile="$tmp5/test.lock"
+(
+  source lib/common.sh
+  for i in $(seq 1 10); do
+    (
+      mubx_with_lock "$lockfile" bash -c "val=\$(cat $tmp5/count 2>/dev/null || echo 0); echo \$((val + 1)) > $tmp5/count"
+    ) &
+  done
+  wait
+  total="$(cat "$tmp5/count" 2>/dev/null || echo 0)"
+  [ "$total" -eq 10 ] || { echo "Concurrency lock test failed: expected 10, got $total"; exit 1; }
+) || fail=1
+rm -rf "$tmp5"
+echo "  concurrency lock test OK (10 parallel jobs cleanly serialized)"
+
 if [ "$fail" -eq 0 ]; then
   say "all checks passed"
 else
