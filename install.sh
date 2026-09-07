@@ -325,6 +325,7 @@ done
 install -m 0755 bin/* /usr/local/bin/
 install -D -m 0644 lib/common.sh /usr/local/lib/mubx/common.sh
 install -D -m 0644 lib/render.sh /usr/local/lib/mubx/render.sh
+install -D -m 0644 lib/subscribe.sh /usr/local/lib/mubx/subscribe.sh
 install -m 0644 configs/dropbear /etc/default/dropbear
 install -m 0644 configs/squid.conf /etc/squid/squid.conf
 install -m 0644 configs/nginx.conf /etc/nginx/nginx.conf

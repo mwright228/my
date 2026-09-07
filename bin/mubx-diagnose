@@ -80,12 +80,21 @@ mubx_group_close
 
 # --- UDP listeners (local check) --------------------------------------------
 mubx_group_open "UDP listeners (local)"
-for spec in "openvpn UDP|2200" "hysteria 2|4433" "wireguard|51820" "zivpn|5667" "badvpn udpgw|7100" "badvpn udpgw|7500" "badvpn udpgw|7700"; do
+# badvpn-udpgw accepts client connections over TCP (it forwards UDP on
+# their behalf), so probe TCP listeners, not UDP.
+for spec in "openvpn UDP|2200" "hysteria 2|4433" "wireguard|51820" "zivpn|5667"; do
   name="${spec%%|*}"; port="${spec##*|}"
   if ss -H -uln "sport = :$port" 2>/dev/null | grep -q .; then
     mubx_card "  $name" "$(printf '%s%s listening%s' "$C_GREEN" "$port" "$C_RESET")"
   else
     mubx_card "  $name" "$(printf '%s%s not listening%s' "$C_RED" "$port" "$C_RESET")"
+  fi
+done
+for port in 7100 7500 7700; do
+  if ss -H -tln "sport = :$port" 2>/dev/null | grep -q .; then
+    mubx_card "  badvpn udpgw" "$(printf '%s%s listening (TCP)%s' "$C_GREEN" "$port" "$C_RESET")"
+  else
+    mubx_card "  badvpn udpgw" "$(printf '%s%s not listening%s' "$C_RED" "$port" "$C_RESET")"
   fi
 done
 mubx_group_close
