@@ -16,7 +16,10 @@ d="${d,,}"
 [ -z "$d" ] && die "Domain is required"
 [[ "$d" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]] || die "Invalid domain format"
 
+success=0
+declare -A backups=()
 declare -A absent=()
+declare -A was_active=()
 backup_dir="$(mktemp -d)"
 backup_file() {
   local path="$1" target="$backup_dir${path}"

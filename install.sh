@@ -790,13 +790,19 @@ if command -v fail2ban-client >/dev/null 2>&1; then
 fi
 
 install_success=1
-echo ""
-echo -e "\033[38;5;240m╭─ \033[1;37mMUB-X TELECOM ENGINE\033[0m \033[38;5;240m─────────────────────── \033[38;5;48mONLINE\033[0m \033[38;5;240m─╮\033[0m"
-echo -e "\033[38;5;240m│\033[0m  \033[38;5;244mGateway Domain:\033[0m  \033[38;5;51m$DOMAIN\033[0m"
-echo -e "\033[38;5;240m│\033[0m  \033[38;5;244mControl Panel:\033[0m   \033[1;37mmenu\033[0m"
-echo -e "\033[38;5;240m│\033[0m  \033[38;5;244mClient Links:\033[0m    \033[1;37mlink-gen\033[0m"
-echo -e "\033[38;5;240m│\033[0m  \033[38;5;244mService Matrix:\033[0m  \033[1;37msvc-status\033[0m"
-echo -e "\033[38;5;240m│\033[0m  \033[38;5;244mUser Store:\033[0m      \033[1;37mmubx-users\033[0m"
-echo -e "\033[38;5;240m╰──────────────────────────────────────────────────────────╯\033[0m"
-echo ""
+printf '\n'
+if [ -r lib/common.sh ]; then
+  source lib/common.sh
+  mubx_box_top "MUB-X TELECOM ENGINE" "ONLINE"
+  mubx_kvrow "Gateway Host"   "$DOMAIN"
+  mubx_kvrow "Control Panel"  "menu"
+  mubx_kvrow "Client Links"   "link-gen"
+  mubx_kvrow "Service Matrix" "svc-status"
+  mubx_kvrow "User Store"     "mubx-users"
+  mubx_box_bot
+else
+  echo "[✓] MUB-X installed successfully on $DOMAIN."
+fi
+printf '\n'
+
 
