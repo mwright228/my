@@ -73,22 +73,39 @@ RE_HOST_HDR = re.compile(rb"(?i)\r?\n(?:X-Online-Host|X-Forward-Host|Host):\s*(?
 def load_local_identifiers() -> Set[str]:
     """Loads server domain names and localhost variants."""
     ids = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
-    for p in ("/etc/mubx/domain", "/etc/telecom-engine.domain"):
+    for p in ("/etc/mubx/domain", "/etc/telecom-engine.domain", "/usr/local/etc/xray/domain", "/etc/mubx/ip"):
         if os.path.isfile(p):
             try:
                 with open(p, "r", encoding="utf-8") as f:
-                    dom = f.read().strip().lower()
-                    if dom:
-                        ids.add(dom)
+                    val = f.read().strip().lower()
+                    if val:
+                        ids.add(val)
             except Exception:
                 pass
+    if os.path.isfile("/etc/telecom-engine.env"):
+        try:
+            with open("/etc/telecom-engine.env", "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("DOMAIN="):
+                        val = line.split("=", 1)[1].strip().strip('"\'').lower()
+                        if val:
+                            ids.add(val)
+        except Exception:
+            pass
     env_dom = os.environ.get("DOMAIN", "").strip().lower()
     if env_dom:
         ids.add(env_dom)
+    try:
+        h = socket.gethostname().lower()
+        if h:
+            ids.add(h)
+        for info in socket.getaddrinfo(socket.gethostname(), None):
+            ip = info[4][0]
+            if ip:
+                ids.add(ip.lower())
+    except Exception:
+        pass
     return ids
-
-
-LOCAL_IDS = load_local_identifiers()
 
 
 def parse_target(buffer: bytes) -> Tuple[Optional[str], Optional[int], bool]:
@@ -117,12 +134,22 @@ def parse_target(buffer: bytes) -> Tuple[Optional[str], Optional[int], bool]:
         port = int(m.group(3).decode("ascii")) if m.group(3) else 80
         return raw_host, port, False
 
-    # 4. Host / X-Online-Host header in split or front/back inject payloads
+    # 4. Host header with explicit port (e.g. Host: 127.0.0.1:2222 or Host: domain:2222)
     m = RE_HOST_HDR.search(buffer)
-    if m:
+    if m and m.group(3):
         raw_host = (m.group(1) or m.group(2)).decode("ascii", errors="ignore")
-        port = int(m.group(3).decode("ascii")) if m.group(3) else 443
+        port = int(m.group(3).decode("ascii"))
         return raw_host, port, True
+
+    # 5. If Host is a known local identifier (server domain / IP / localhost)
+    if m:
+        raw_host = (m.group(1) or m.group(2)).decode("ascii", errors="ignore").lower()
+        if raw_host in load_local_identifiers():
+            return DEFAULT_HOST, DEFAULT_PORT, True
+
+    # 6. Any HTTP request without explicit destination defaults to Dropbear SSH
+    if re.search(rb"(?i)\b(?:GET|POST|HEAD|OPTIONS|PUT|DELETE|TRACE|PATCH)\s+/\S*\s+HTTP/", buffer):
+        return DEFAULT_HOST, DEFAULT_PORT, True
 
     return None, None, False
 
@@ -130,9 +157,11 @@ def parse_target(buffer: bytes) -> Tuple[Optional[str], Optional[int], bool]:
 def is_local_target(host: str, port: int) -> bool:
     """Checks if target host/port refers to a local MUB-X service on this machine."""
     h = host.strip().lower()
-    if h in LOCAL_IDS or h in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
+    if h in ("127.0.0.1", "localhost", "::1", "0.0.0.0") or h.startswith("127."):
         return True
     if port in LOCAL_TUNNEL_PORTS:
+        return True
+    if h in load_local_identifiers():
         return True
     return False
 
@@ -203,10 +232,10 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
                 # If we have complete HTTP headers
                 if b"\r\n\r\n" in buffer or b"\n\n" in buffer:
                     # If this is not a CONNECT request and not a websocket upgrade,
-                    # peek briefly (up to 100ms) to see if a split CONNECT payload follows
+                    # peek briefly (up to 350ms) to see if a split CONNECT payload follows
                     if not is_connect and b"upgrade: websocket" not in bytes(buffer).lower():
                         try:
-                            more = await asyncio.wait_for(client_reader.read(4096), timeout=0.10)
+                            more = await asyncio.wait_for(client_reader.read(4096), timeout=0.35)
                             if more:
                                 buffer.extend(more)
                                 th2, tp2, ic2 = parse_target(buffer)
@@ -222,15 +251,26 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         client_writer.close()
         return
 
-    # Extract any pipelined data immediately following HTTP request headers
+    # Extract any pipelined data immediately following the actual tunnel request headers
     header_end = -1
-    idx = buffer.find(b"\r\n\r\n")
-    if idx != -1:
-        header_end = idx + 4
-    else:
-        idx = buffer.find(b"\n\n")
+    m_conn = RE_CONNECT.search(buffer)
+    if m_conn:
+        conn_pos = m_conn.start()
+        idx = buffer.find(b"\r\n\r\n", conn_pos)
         if idx != -1:
-            header_end = idx + 2
+            header_end = idx + 4
+        else:
+            idx = buffer.find(b"\n\n", conn_pos)
+            if idx != -1:
+                header_end = idx + 2
+    else:
+        idx = buffer.find(b"\r\n\r\n")
+        if idx != -1:
+            header_end = idx + 4
+        else:
+            idx = buffer.find(b"\n\n")
+            if idx != -1:
+                header_end = idx + 2
 
     leftover = bytes(buffer[header_end:]) if (header_end != -1 and header_end < len(buffer)) else b""
 
@@ -312,7 +352,7 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
     for writer in (client_writer, target_writer):
         try:
             writer.close()
-            await writer.wait_closed()
+            await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
         except Exception:
             pass
 

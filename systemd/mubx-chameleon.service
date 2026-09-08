@@ -5,9 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/local/bin/mubx-chameleon
 Restart=always
 RestartSec=3s
+TimeoutStopSec=5s
+KillMode=mixed
 LimitNOFILE=1048576
 NoNewPrivileges=true
 PrivateTmp=true

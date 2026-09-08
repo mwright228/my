@@ -102,7 +102,7 @@ else
 fi
 restore_path /etc/sysctl.d/99-mubx-forwarding.conf
 restore_path /etc/sysctl.d/99-mubx-network.conf
-for path in /etc/telecom-engine.env /usr/local/etc/xray/domain \
+for path in /etc/telecom-engine.env /usr/local/etc/xray/domain /etc/mubx/domain \
   /etc/hysteria/config.yaml /etc/sing-box/config.json \
   /etc/zivpn/config.json /etc/zivpn/zivpn.crt /etc/zivpn/zivpn.key; do
   restore_path "$path"

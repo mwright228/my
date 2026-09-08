@@ -317,6 +317,7 @@ for file in systemd/*.service systemd/*.timer; do
   backup_file "/etc/systemd/system/$(basename "$file")"
 done
 backup_file /usr/local/etc/xray/domain
+backup_file /etc/mubx/domain
 backup_file /usr/local/etc/xray/config.json
 backup_file /usr/local/share/xray/geoip.dat
 backup_file /usr/local/share/xray/geosite.dat
@@ -332,6 +333,8 @@ install -m 0644 configs/nginx.conf /etc/nginx/nginx.conf
 install -m 0644 systemd/*.service /etc/systemd/system/
 install -m 0644 systemd/*.timer /etc/systemd/system/
 printf '%s\n' "$DOMAIN" > /usr/local/etc/xray/domain
+install -d -m 0755 /etc/mubx
+printf '%s\n' "$DOMAIN" > /etc/mubx/domain
 
 case "$(dpkg --print-architecture)" in
   amd64)

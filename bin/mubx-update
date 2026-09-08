@@ -177,6 +177,14 @@ if [ -e /etc/squid/squid.conf ] || systemctl is-active --quiet squid 2>/dev/null
   rm -f /etc/squid/squid.conf 2>/dev/null || true
   echo "[*] Retired legacy Squid service (ports 8080/3128 migrated to mubx-chameleon)"
 fi
+install -d -m 0755 /etc/mubx
+if [ ! -f /etc/mubx/domain ]; then
+  if [ -f /usr/local/etc/xray/domain ]; then
+    cp -aP /usr/local/etc/xray/domain /etc/mubx/domain
+  elif [ -n "${DOMAIN:-}" ]; then
+    printf '%s\n' "$DOMAIN" > /etc/mubx/domain
+  fi
+fi
 systemctl daemon-reload
 for f in "$ROOT"/bin/*; do
   [ -f "$f" ] || continue

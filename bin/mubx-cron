@@ -5,7 +5,7 @@
 set -Eeuo pipefail
 
 
-DOMAIN="$(cat /etc/mubx/domain 2>/dev/null || true)"
+DOMAIN="$(cat /etc/mubx/domain 2>/dev/null || cat /usr/local/etc/xray/domain 2>/dev/null || true)"
 if [ -z "$DOMAIN" ] && [ -r /usr/local/lib/mubx/common.sh ]; then
   source /usr/local/lib/mubx/common.sh
   load_mubx_env 2>/dev/null || true

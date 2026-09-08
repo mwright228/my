@@ -63,6 +63,13 @@ load_mubx_env() {
       *) die "Unexpected key in $env_file: $key" ;;
     esac
   done < "$env_file"
+  if [ -z "${DOMAIN:-}" ]; then
+    if [ -r /etc/mubx/domain ]; then
+      DOMAIN="$(tr -d ' \t\r\n' < /etc/mubx/domain 2>/dev/null || true)"
+    elif [ -r /usr/local/etc/xray/domain ]; then
+      DOMAIN="$(tr -d ' \t\r\n' < /usr/local/etc/xray/domain 2>/dev/null || true)"
+    fi
+  fi
 }
 
 # --- System Telemetry Helpers ---------------------------------------------

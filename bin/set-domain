@@ -66,7 +66,7 @@ cleanup() {
   return "$status"
 }
 trap cleanup EXIT
-for path in /usr/local/etc/xray/domain /usr/local/etc/xray/config.json \
+for path in /usr/local/etc/xray/domain /etc/mubx/domain /usr/local/etc/xray/config.json \
   /etc/telecom-engine.env /etc/nginx/nginx.conf /etc/hysteria/config.yaml \
   /etc/wireguard/mubx-client.conf \
   /etc/zivpn/zivpn.crt /etc/zivpn/zivpn.key; do
@@ -94,6 +94,8 @@ if [ "$cert_obtained" -eq 0 ]; then
 fi
 
 echo "$d" > /usr/local/etc/xray/domain
+install -d -m 0755 /etc/mubx
+echo "$d" > /etc/mubx/domain
 if [ -f /etc/telecom-engine.env ]; then
   sed -i "s/^DOMAIN=.*/DOMAIN=\"$d\"/" /etc/telecom-engine.env
 fi

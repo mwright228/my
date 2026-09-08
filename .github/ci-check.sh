@@ -495,7 +495,17 @@ assert is_local_target("127.0.0.1", 443) is True
 assert is_local_target("my-vps-domain.com", 2222) is True
 assert is_local_target("example.com", 80) is False
 
-print("  Chameleon payload parser OK (split, front-inject, CONNECT, HTTP URL, IPv6, X-Target, local-normalizer)")
+# Test 8: Generic HTTP request with bug-host defaults to Dropbear SSH
+carrier_payload = b"GET / HTTP/1.1\r\nHost: free.facebook.com\r\n\r\n"
+h, p, ic = parse_target(carrier_payload)
+assert (h, p, ic) == ("127.0.0.1", 2222, True), (h, p, ic)
+
+# Test 9: Host header with explicit port
+host_port_payload = b"GET / HTTP/1.1\r\nHost: 127.0.0.1:2222\r\n\r\n"
+h, p, ic = parse_target(host_port_payload)
+assert (h, p, ic) == ("127.0.0.1", 2222, True), (h, p, ic)
+
+print("  Chameleon payload parser OK (split, front-inject, CONNECT, HTTP URL, IPv6, X-Target, local-normalizer, carrier-defaults)")
 PY
 
 if [ "$fail" -eq 0 ]; then
