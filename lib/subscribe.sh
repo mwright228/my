@@ -52,9 +52,8 @@ mubx_ss2022_psk() { # $1 user name -> psk on stdout
   local name="$1" dir="$MUBX_SS2022_DIR" file psk
   install -d -m 0700 "$dir"
   file="$dir/$name"
-  if [ -s "$file" ] && openssl base64 -in "$file" -A 2>/dev/null |
-       grep -Eq '^[A-Za-z0-9+/]{43}=$'; then
-    cat "$file"
+  if [ -s "$file" ] && tr -d '\r\n ' < "$file" | grep -Eq '^[A-Za-z0-9+/]{43}=$'; then
+    tr -d '\r\n ' < "$file"
     return 0
   fi
   psk="$(openssl rand -base64 32)"
@@ -76,7 +75,7 @@ mubx_ensure_ss2022_keys() {
 
 # base64url without padding - the form ss:// URIs expect.
 mubx_b64url() { # stdin -> stdout
-  base64 -w 0 | tr '+/' '-_' | tr -d '='
+  (base64 -w 0 2>/dev/null || base64 | tr -d '\r\n') | tr '+/' '-_' | tr -d '='
 }
 
 # The per-user subscription token: stored on first generation, stable after
@@ -161,7 +160,6 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
       "$dom" "$(( ${SS_PLAIN_BASE_PORT:-8388} + idx ))" "$user"
   fi
   # ShadowTLS v3 + SS-2022 (when configured)
-  # ShadowTLS v3 + SS-2022 (when configured)
   if mubx_user_has_proto "$user" "shadowtls"; then
     local stls_key
     if [ -n "${SHADOWTLS_PASS:-}" ]; then
@@ -228,7 +226,7 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
     (if (cur_user | user_has_proto(\"hysteria2\")) then [ hy2 ] else [] end)
     + (if (cur_user | user_has_proto(\"tuic\")) then [{
         name: \"MUBX-TUIC-v5\", type: \"tuic\", server: \$dom, port: 8443,
-        uuid: \$uuid, password: \$uuid, \"congestion-controller\": \"bbr\",
+        uuid: \$uuid, password: \$uuid, version: 5, \"congestion-controller\": \"bbr\",
         udp: true, tls: true, sni: \$dom, alpn: [\"h3\"], \"skip-cert-verify\": false
       }] else [] end)
     + (if (cur_user | user_has_proto(\"vless-ws\")) then [ vws(\"/vless-ws\"; \"MUBX-VLESS-WS\") ] else [] end)
@@ -335,7 +333,7 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
       ] else [] end)
       + (if (cur_user | user_has_proto(\"tuic\")) then [{
         type: \"tuic\", tag: \"MUBX-TUIC-v5\", server: \$dom, server_port: 8443, uuid: \$uuid,
-        password: \$uuid, congestion_control: \"bbr\",
+        password: \$uuid, congestion_control: \"bbr\", version: 5,
         tls: {enabled: true, server_name: \$dom, alpn: [\"h3\"]}
       }] else [] end)
       + (if (cur_user | user_has_proto(\"vless-ws\")) then [{

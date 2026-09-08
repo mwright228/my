@@ -260,12 +260,17 @@ mubx_users_apply() { # $1 rendered config file
             end
           ) as \$req_proto |
           [ \$users[] | select(user_has_proto(\$req_proto)) ] as \$matching_users |
+          (
+            if (\$matching_users | length) > 0 then \$matching_users
+            else [ {name: \"admin\", uuid: (\$users[0].uuid // \"00000000-0000-0000-0000-000000000000\")} ]
+            end
+          ) as \$active_clients |
           if .protocol == \"trojan\" then
-            .settings.clients = [ \$matching_users[] | {password: .uuid, email: (.name + \"@\" + \$dom)} ]
+            .settings.clients = [ \$active_clients[] | {password: .uuid, email: (.name + \"@\" + \$dom)} ]
           elif .protocol == \"vmess\" then
-            .settings.clients = [ \$matching_users[] | {id: .uuid, alterId: 0, email: (.name + \"@\" + \$dom)} ]
+            .settings.clients = [ \$active_clients[] | {id: .uuid, alterId: 0, email: (.name + \"@\" + \$dom)} ]
           else
-            .settings.clients = [ \$matching_users[] | {id: .uuid, email: (.name + \"@\" + \$dom)} ]
+            .settings.clients = [ \$active_clients[] | {id: .uuid, email: (.name + \"@\" + \$dom)} ]
           end
         )
       end

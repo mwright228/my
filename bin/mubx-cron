@@ -6,8 +6,12 @@ set -Eeuo pipefail
 
 
 DOMAIN="$(cat /etc/mubx/domain 2>/dev/null || cat /usr/local/etc/xray/domain 2>/dev/null || true)"
-if [ -z "$DOMAIN" ] && [ -r /usr/local/lib/mubx/common.sh ]; then
-  source /usr/local/lib/mubx/common.sh
+if [ -z "$DOMAIN" ]; then
+  if [ -r /usr/local/lib/mubx/common.sh ]; then
+    source /usr/local/lib/mubx/common.sh
+  elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
+    source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+  fi
   load_mubx_env 2>/dev/null || true
 fi
 
@@ -112,26 +116,34 @@ certbot renew --quiet --webroot -w /var/www/html --deploy-hook "$renew_hook" 2>/
 
 # Refresh the per-user subscription files weekly (keeps links in sync with
 # the store even if an add/remove missed its hook).
-if [ -r /usr/local/lib/mubx/subscribe.sh ] && [ -f /etc/mubx/users.json ]; then
+if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
   source /usr/local/lib/mubx/subscribe.sh
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/subscribe.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/subscribe.sh"
+fi
+user_store="${MUBX_USERS_FILE:-/etc/mubx/users.json}"
+if declare -F mubx_sub_generate >/dev/null 2>&1 && [ -f "$user_store" ]; then
   load_mubx_env 2>/dev/null || true
   while IFS= read -r sub_user; do
     [ -n "$sub_user" ] || continue
     mubx_sub_generate "$sub_user" >/dev/null 2>&1 || true
-  done < <(jq -r '.[].name' /etc/mubx/users.json)
+  done < <(jq -r '.[].name' "$user_store" 2>/dev/null || true)
 fi
 
 # Quota & Expiry Enforcement: Auto-freeze any active users who exceeded their assigned GB limit or validity
-if [ -x /usr/local/bin/mubx-users ] && [ -f /etc/mubx/users.json ]; then
+mubx_users_bin="/usr/local/bin/mubx-users"
+[ -x "$mubx_users_bin" ] || mubx_users_bin="$(dirname "${BASH_SOURCE[0]}")/mubx-users"
+
+if [ -x "$mubx_users_bin" ] && [ -f "$user_store" ]; then
   now_ts="$(date +%s)"
-  jq -r '.[] | select((.status // "active") != "frozen") | [.name, ((.quota_gb // 0)|tostring), (.expiry // "")] | @tsv' /etc/mubx/users.json 2>/dev/null |
+  jq -r '.[] | select((.status // "active") != "frozen") | [.name, ((.quota_gb // 0)|tostring), (.expiry // "")] | @tsv' "$user_store" 2>/dev/null |
     while IFS=$'\t' read -r q_user q_gb q_exp; do
       [ -n "$q_user" ] || continue
       # 1. Expiry check
       if [ -n "$q_exp" ] && [ "$q_exp" != "never" ] && [ "$q_user" != "admin" ]; then
         exp_ts="$(date -d "$q_exp 23:59:59" +%s 2>/dev/null || date -jf '%Y-%m-%d %H:%M:%S' "$q_exp 23:59:59" +%s 2>/dev/null || date -d "$q_exp" +%s 2>/dev/null || echo 0)"
         if [ "$exp_ts" -gt 0 ] && [ "$now_ts" -ge "$exp_ts" ]; then
-          /usr/local/bin/mubx-users freeze "$q_user" >/dev/null 2>&1 || true
+          "$mubx_users_bin" freeze "$q_user" >/dev/null 2>&1 || true
           continue
         fi
       fi
@@ -146,7 +158,7 @@ if [ -x /usr/local/bin/mubx-users ] && [ -f /etc/mubx/users.json ]; then
         total_bytes=$(( u_bytes + d_bytes ))
         limit_bytes=$(( q_gb * 1073741824 ))
         if [ "$total_bytes" -ge "$limit_bytes" ]; then
-          /usr/local/bin/mubx-users freeze "$q_user" >/dev/null 2>&1 || true
+          "$mubx_users_bin" freeze "$q_user" >/dev/null 2>&1 || true
         fi
       fi
     done

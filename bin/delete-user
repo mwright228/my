@@ -129,8 +129,11 @@ if id "$target_user" >/dev/null 2>&1; then
 fi
 
 # 2. Remove from MUB-X store & Xray
-if [ -x /usr/local/bin/mubx-users ] && [ -f "$STORE" ]; then
-  /usr/local/bin/mubx-users remove "$target_user" >/dev/null 2>&1 || true
+mubx_users_bin="/usr/local/bin/mubx-users"
+[ -x "$mubx_users_bin" ] || mubx_users_bin="$(dirname "${BASH_SOURCE[0]}")/mubx-users"
+
+if [ -x "$mubx_users_bin" ] && [ -f "$STORE" ]; then
+  "$mubx_users_bin" remove "$target_user" >/dev/null || true
 elif [ -f "$STORE" ]; then
   tmp="$(mktemp)"
   jq --arg n "$target_user" 'del(.[] | select(.name == $n))' "$STORE" > "$tmp" && mv "$tmp" "$STORE"

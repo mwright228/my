@@ -44,6 +44,7 @@ load_mubx_env 2>/dev/null || true
 
 STORE="${MUBX_USERS_FILE:-/etc/mubx/users.json}"
 TPL_DIR="$(cat /etc/mubx/install-root 2>/dev/null || true)"
+[ -d "$TPL_DIR/configs" ] || TPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [ -d "$TPL_DIR/configs" ] || {
   echo "[!] MUB-X templates not found under $TPL_DIR; re-run install.sh first." >&2
   exit 1
@@ -244,7 +245,9 @@ cmd_add() { # $1 name  $2 days (optional)  $3 quota_gb (optional)  $4 protocols 
   local p_sum; p_sum="$(mubx_proto_summary "$protos_json")"
   log "User $name provisioned (UUID: $uuid | Protocols: $p_sum | Expires: ${expiry:-never} | Quota: ${quota_gb:-unlimited} GB)"
   # Publish/refresh subscription files
-  if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
+  if declare -F mubx_sub_generate >/dev/null 2>&1; then
+    mubx_sub_generate "$name" >/dev/null 2>&1 || true
+  elif [ -r /usr/local/lib/mubx/subscribe.sh ]; then
     source /usr/local/lib/mubx/subscribe.sh
     mubx_sub_generate "$name" >/dev/null 2>&1 || true
   fi
@@ -278,7 +281,9 @@ cmd_proto() { # $1 name  $2 protocols (optional)
   rm -f "$backup"
   local p_sum; p_sum="$(mubx_proto_summary "$protos_json")"
   log "Protocols for $name updated to: $p_sum"
-  if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
+  if declare -F mubx_sub_generate >/dev/null 2>&1; then
+    mubx_sub_generate "$name" >/dev/null 2>&1 || true
+  elif [ -r /usr/local/lib/mubx/subscribe.sh ]; then
     source /usr/local/lib/mubx/subscribe.sh
     mubx_sub_generate "$name" >/dev/null 2>&1 || true
   fi
@@ -321,6 +326,12 @@ cmd_unfreeze() { # $1 name
   fi
   rm -f "$backup"
   log "User $name UNFROZEN (traffic restored)."
+  if declare -F mubx_sub_generate >/dev/null 2>&1; then
+    mubx_sub_generate "$name" >/dev/null 2>&1 || true
+  elif [ -r /usr/local/lib/mubx/subscribe.sh ]; then
+    source /usr/local/lib/mubx/subscribe.sh
+    mubx_sub_generate "$name" >/dev/null 2>&1 || true
+  fi
 }
 
 cmd_reset_quota() { # $1 name

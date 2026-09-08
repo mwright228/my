@@ -110,8 +110,12 @@ else
 fi
 
 # Provision in MUB-X user store with selected protocols
-if [ -x /usr/local/bin/mubx-users ] && [ -f /etc/mubx/users.json ]; then
-  /usr/local/bin/mubx-users add "$u" "$d" "$q" "$selected_protos" >/dev/null 2>&1 ||
+mubx_users_bin="/usr/local/bin/mubx-users"
+[ -x "$mubx_users_bin" ] || mubx_users_bin="$(dirname "${BASH_SOURCE[0]}")/mubx-users"
+user_store="${MUBX_USERS_FILE:-/etc/mubx/users.json}"
+
+if [ -x "$mubx_users_bin" ] && [ -f "$user_store" ]; then
+  "$mubx_users_bin" add "$u" "$d" "$q" "$selected_protos" >/dev/null ||
     warn "Xray identity for $u was not created"
 fi
 

@@ -10,7 +10,7 @@ fi
 DOMAIN=
 load_mubx_env 2>/dev/null || true
 
-XRAY_CONF=/usr/local/etc/xray/config.json
+XRAY_CONF="${XRAY_CONF:-/usr/local/etc/xray/config.json}"
 [ -f "$XRAY_CONF" ] || { echo "[!] Run install.sh first"; exit 1; }
 
 # Verdict check: unit active + socket listening

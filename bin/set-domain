@@ -2,6 +2,8 @@
 set -euo pipefail
 if [ -r /usr/local/lib/mubx/common.sh ]; then
   source /usr/local/lib/mubx/common.sh
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 fi
 
 mubx_clear
@@ -145,13 +147,18 @@ for svc in nginx haproxy hysteria zivpn xray singbox; do
   fi
 done
 # Subscription URLs embed the domain: regenerate them for the new name.
-if [ -r /usr/local/lib/mubx/subscribe.sh ] && [ -f /etc/mubx/users.json ]; then
+if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
   source /usr/local/lib/mubx/subscribe.sh
-  load_mubx_env
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/subscribe.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/subscribe.sh"
+fi
+user_store="${MUBX_USERS_FILE:-/etc/mubx/users.json}"
+if declare -F mubx_sub_generate >/dev/null 2>&1 && [ -f "$user_store" ]; then
+  load_mubx_env 2>/dev/null || true
   while IFS= read -r sub_user; do
     [ -n "$sub_user" ] || continue
     mubx_sub_generate "$sub_user" >/dev/null 2>&1 || true
-  done < <(jq -r '.[].name' /etc/mubx/users.json)
+  done < <(jq -r '.[].name' "$user_store" 2>/dev/null || true)
 fi
 success=1
 rm -rf -- "$backup_dir"

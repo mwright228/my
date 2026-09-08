@@ -5,6 +5,11 @@
 # stay clean. Scripts source this file for cohesive visual styling across
 # all CLI tools, status monitors, and link generators.
 
+case ":$PATH:" in
+  *":/usr/local/bin:"*) ;;
+  *) export PATH="/usr/local/bin:/usr/local/sbin:$PATH" ;;
+esac
+
 if [ -t 1 ]; then
   C_RESET=$'\033[0m'
   C_BOLD=$'\033[1m'
