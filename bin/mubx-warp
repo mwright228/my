@@ -64,10 +64,18 @@ warp_register() {
 EOF
   chmod 0600 "$WARP_CONF"
 
+  reload_xray_service() {
+    local mubx_users_bin="/usr/local/bin/mubx-users"
+    [ -x "$mubx_users_bin" ] || mubx_users_bin="$(dirname "${BASH_SOURCE[0]}")/mubx-users"
+    if [ -x "$mubx_users_bin" ]; then
+      "$mubx_users_bin" unfreeze admin >/dev/null 2>&1 || true
+    elif [ -x /usr/local/bin/mubx-update ]; then
+      /usr/local/bin/mubx-update >/dev/null 2>&1 || true
+    fi
+  }
+
   # Trigger Xray re-render to load WARP outbound
-  if [ -x /usr/local/bin/mubx-update ]; then
-    /usr/local/bin/mubx-update >/dev/null 2>&1 || true
-  fi
+  reload_xray_service
 
   mubx_box_top "WARP REGISTRATION COMPLETE" "ACTIVE"
   mubx_kvrow "Status" "ONLINE"
@@ -89,9 +97,7 @@ warp_status() {
 
 warp_disable() {
   rm -f "$WARP_CONF"
-  if [ -x /usr/local/bin/mubx-update ]; then
-    /usr/local/bin/mubx-update >/dev/null 2>&1 || true
-  fi
+  reload_xray_service
   log "Cloudflare WARP outbound removed. All traffic routed direct."
 }
 

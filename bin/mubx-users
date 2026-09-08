@@ -174,7 +174,9 @@ cmd_list() {
     local exp_str="${e:-never}"
     local exp_col="$C_MINT"
     if [ "$exp_str" != "never" ]; then
-      if [[ "$(date -d "$exp_str" +%s 2>/dev/null || echo 0)" -lt "$(date +%s)" ]]; then
+      local exp_ts
+      exp_ts="$(date -d "$exp_str 23:59:59" +%s 2>/dev/null || date -jf '%Y-%m-%d %H:%M:%S' "$exp_str 23:59:59" +%s 2>/dev/null || date -d "$exp_str" +%s 2>/dev/null || echo 0)"
+      if [ "$exp_ts" -gt 0 ] && [ "$exp_ts" -lt "$(date +%s)" ]; then
         exp_col="$C_CORAL"
         exp_str="EXPIRED"
       else
@@ -403,11 +405,11 @@ cmd_usage() { # $1 name (optional)
   fmt_bytes() {
     local b="${1:-0}"
     if [ "$b" -ge 1073741824 ]; then
-      printf '%.2f GB' "$(awk "BEGIN {print $b/1073741824}")"
+      LC_ALL=C awk -v b="$b" 'BEGIN {printf "%.2f GB", b/1073741824}'
     elif [ "$b" -ge 1048576 ]; then
-      printf '%.2f MB' "$(awk "BEGIN {print $b/1048576}")"
+      LC_ALL=C awk -v b="$b" 'BEGIN {printf "%.2f MB", b/1048576}'
     elif [ "$b" -ge 1024 ]; then
-      printf '%.2f KB' "$(awk "BEGIN {print $b/1024}")"
+      LC_ALL=C awk -v b="$b" 'BEGIN {printf "%.2f KB", b/1024}'
     else
       printf '%d B' "$b"
     fi

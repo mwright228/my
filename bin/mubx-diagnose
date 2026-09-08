@@ -5,8 +5,10 @@ set -Eeuo pipefail
 DOMAIN=
 if [ -r /usr/local/lib/mubx/common.sh ]; then
   source /usr/local/lib/mubx/common.sh
-  load_mubx_env 2>/dev/null || true
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 fi
+load_mubx_env 2>/dev/null || true
 
 TARGET="${1:-${DOMAIN:-1.1.1.1}}"
 ENDPOINTS=("1.1.1.1" "8.8.8.8" "9.9.9.9")

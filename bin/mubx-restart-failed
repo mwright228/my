@@ -11,8 +11,10 @@ set -Eeuo pipefail
 
 if [ -r /usr/local/lib/mubx/common.sh ]; then
   source /usr/local/lib/mubx/common.sh
-  mubx_clear
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 fi
+declare -F mubx_clear >/dev/null 2>&1 && mubx_clear || true
 
 SERVICES=(
   haproxy nginx xray dropbear wstunnel hysteria zivpn singbox mubx-chameleon

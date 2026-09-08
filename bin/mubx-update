@@ -227,11 +227,11 @@ rm -rf "$tmp"
 # no-op when the user store is absent).
 if [ -r "$ROOT/lib/subscribe.sh" ] && [ -f /etc/mubx/users.json ]; then
   source "$ROOT/lib/subscribe.sh"
-  load_mubx_env
+  load_mubx_env 2>/dev/null || true
   while IFS= read -r sub_user; do
     [ -n "$sub_user" ] || continue
     mubx_sub_generate "$sub_user" >/dev/null 2>&1 || true
-  done < <(jq -r '.[].name' /etc/mubx/users.json)
+  done < <(jq -r '.[].name' /etc/mubx/users.json 2>/dev/null || true)
 fi
 
 mubx_box_top "MUB-X ENGINE UPDATE" "CORE SYNC"
@@ -245,6 +245,10 @@ systemctl daemon-reload 2>/dev/null || true
 if systemctl cat mubx-chameleon.service >/dev/null 2>&1 && ! systemctl is-active --quiet mubx-chameleon 2>/dev/null; then
   systemctl enable --now mubx-chameleon.service 2>/dev/null || true
   was_active["mubx-chameleon"]=1
+fi
+if [ -s /etc/sing-box/config.json ] && systemctl cat singbox.service >/dev/null 2>&1 && ! systemctl is-active --quiet singbox 2>/dev/null; then
+  systemctl enable --now singbox.service 2>/dev/null || true
+  was_active["singbox"]=1
 fi
 mubx_group_open "SERVICES RELOAD"
 for svc in "${SERVICES[@]}"; do

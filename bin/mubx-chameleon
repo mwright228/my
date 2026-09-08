@@ -51,14 +51,14 @@ DEFAULT_PORT = 2222
 
 # Permitted internal local targets
 ALLOWED_LOCAL_PORTS = {
-    22, 53, 80, 109, 443, 1194, 2222, 5667, 8388, 8389, 8443, 8448,
-    17000, 18080, 18500, 20443
+    22, 53, 80, 109, 443, 1194, 2222, 5667, 7100, 7200, 7300, 7400, 7500, 7600, 7700,
+    8388, 8389, 8443, 8448, 17000, 18080, 18500, 20443
 }
 
 # Dedicated local tunnel service ports (always route to loopback)
 LOCAL_TUNNEL_PORTS = {
-    22, 53, 109, 1194, 2222, 5667, 8388, 8389, 8448,
-    17000, 18080, 18500, 20443
+    22, 53, 109, 1194, 2222, 5667, 7100, 7200, 7300, 7400, 7500, 7600, 7700,
+    8388, 8389, 8448, 17000, 18080, 18500, 20443
 }
 
 BUFFER_SIZE = 65536  # 64KB high-throughput buffer matching kernel TCP tuning

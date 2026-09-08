@@ -22,6 +22,9 @@ printf '\n'
 
 # --- Collect probe results ------------------------------------------------
 RESOLVED_IP=$(dig +short "$TARGET" 2>/dev/null | grep -E '^[0-9.]+' | head -n 1 || true)
+if [ -z "$RESOLVED_IP" ]; then
+  RESOLVED_IP=$(getent ahostsv4 "$TARGET" 2>/dev/null | awk '{print $1}' | head -n 1 || getent hosts "$TARGET" 2>/dev/null | awk '{print $1}' | head -n 1 || true)
+fi
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 4 "http://${TARGET}" 2>/dev/null || echo "000")
 RTT=$(curl -s -o /dev/null -w "%{time_appconnect}s" --connect-timeout 5 --max-time 8 "https://${TARGET}" 2>/dev/null || echo "")
 CHAMELEON_TEST=$(printf "CONNECT ${TARGET}:443 HTTP/1.1\r\nHost: ${TARGET}:443\r\n\r\n" \

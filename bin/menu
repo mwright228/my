@@ -87,45 +87,58 @@ draw() {
   mubx_box_bot
 }
 
+mubx_exec() {
+  local cmd="$1"; shift
+  if [ -x "/usr/local/bin/$cmd" ]; then
+    "/usr/local/bin/$cmd" "$@"
+  elif [ -x "$(dirname "${BASH_SOURCE[0]}")/$cmd" ]; then
+    "$(dirname "${BASH_SOURCE[0]}")/$cmd" "$@"
+  elif command -v "$cmd" >/dev/null 2>&1; then
+    "$cmd" "$@"
+  else
+    echo "[!] Command $cmd not found" >&2
+  fi
+}
+
 while true; do
   draw
   printf '  %s❯%s ' "$C_ELECTRIC" "$C_RESET"
   read -r opt || exit 0
   case "$opt" in
-    1|01)   /usr/local/bin/set-domain ;;
+    1|01)   mubx_exec set-domain ;;
     2|02)   read -r -p "  Bug-host [${DOMAIN:-}]: " b
             read -r -p "  User [admin]: " mu
-            /usr/local/bin/link-gen "${b:-$DOMAIN}" "${mu:-admin}" ;;
+            mubx_exec link-gen "${b:-$DOMAIN}" "${mu:-admin}" ;;
     3|03)   cat /etc/openvpn/client/mubx-client-tcp.ovpn 2>/dev/null || echo "OpenVPN client config not found" ;;
-    4|04)   /usr/local/bin/add-user ;;
-    5|05)   /usr/local/bin/delete-user ;;
+    4|04)   mubx_exec add-user ;;
+    5|05)   mubx_exec delete-user ;;
     6|06)   systemctl restart haproxy nginx xray dropbear mubx-chameleon wstunnel hysteria \
              zivpn singbox wg-quick@wg0 openvpn-server@tcp openvpn-server@udp \
              badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 \
              badvpn@7500 badvpn@7600 badvpn@7700 2>/dev/null || true
             echo "  [✓] All core services restarted" ;;
-    7|07)   /usr/local/bin/svc-status ;;
-    8|08)   /usr/local/bin/mubx-diagnose ;;
+    7|07)   mubx_exec svc-status ;;
+    8|08)   mubx_exec mubx-diagnose ;;
     9|09)   cat /var/lib/mubx/adaptive-recommendation 2>/dev/null || echo "No recommendation yet" ;;
-    10)     /usr/local/bin/mubx-users ;;
-    11)     /usr/local/bin/mubx-probe ;;
-    12)     /usr/local/bin/mubx-restart-failed ;;
-    13)     /usr/local/bin/mubx-update ;;
-    14)     /usr/local/bin/mubx-sub ;;
+    10)     mubx_exec mubx-users ;;
+    11)     mubx_exec mubx-probe ;;
+    12)     mubx_exec mubx-restart-failed ;;
+    13)     mubx_exec mubx-update ;;
+    14)     mubx_exec mubx-sub ;;
     15)     if [ -s /etc/mubx/warp.json ]; then
               printf '  %sCloudflare WARP is currently ENABLED.%s\n' "$C_MINT" "$C_RESET"
               read -r -p "  Disable Cloudflare WARP and route direct? [y/N]: " w_ans
               if [[ "$w_ans" =~ ^[yY] ]]; then
-                /usr/local/bin/mubx-warp disable
+                mubx_exec mubx-warp disable
               fi
             else
               printf '  %sCloudflare WARP is currently DISABLED.%s\n' "$C_SLATE" "$C_RESET"
               read -r -p "  Enable Cloudflare WARP streaming unblock? [Y/n]: " w_ans
               if [[ ! "$w_ans" =~ ^[nN] ]]; then
-                /usr/local/bin/mubx-warp register
+                mubx_exec mubx-warp register
               fi
             fi ;;
-    16)     /usr/local/bin/mubx-tune ;;
+    16)     mubx_exec mubx-tune ;;
     0|00|q|Q) exit 0 ;;
     *) echo "  Invalid choice: $opt"; sleep 1; continue ;;
   esac
