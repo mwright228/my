@@ -53,11 +53,11 @@ else
   mubx_hint "TLS handshake timed out or was intercepted/blocked"
 fi
 
-# 4. Squid CONNECT forwarding (127.0.0.1:8080)
-if echo "$SQUID_TEST" | grep -q "200 Connection established"; then
-  mubx_card "  Squid CONNECT Proxy (8080)" "$(mubx_pill OK "200 OK")"
+# 4. Chameleon / Squid CONNECT forwarding (127.0.0.1:8080)
+if echo "$SQUID_TEST" | grep -qi "200 Connection"; then
+  mubx_card "  Chameleon / Squid (8080)" "$(mubx_pill OK "200 OK")"
 else
-  mubx_card "  Squid CONNECT Proxy (8080)" "$(mubx_pill WARN "FAILED")"
+  mubx_card "  Chameleon / Squid (8080)" "$(mubx_pill WARN "FAILED")"
   mubx_hint "Proxy response: ${SQUID_TEST:-timed out}"
 fi
 

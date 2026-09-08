@@ -144,6 +144,10 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
     except (asyncio.TimeoutError, ConnectionResetError):
         pass
 
+    if not buffer:
+        client_writer.close()
+        return
+
     # Fallback to default SSH if no host could be parsed (raw injection payload)
     if not target_host:
         target_host = DEFAULT_HOST
@@ -176,10 +180,16 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
             pass
         return
 
-    # Acknowledge CONNECT with 200 Connection Established (Squid style)
+    # Acknowledge handshake with carrier-demanded status code
     try:
         if is_connect:
-            client_writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            buf_lower = bytes(buffer).lower()
+            if b"upgrade: websocket" in buf_lower:
+                client_writer.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+            elif b"200 ok" in buf_lower:
+                client_writer.write(b"HTTP/1.1 200 OK\r\n\r\n")
+            else:
+                client_writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
             await client_writer.drain()
         else:
             # For plain GET/POST, forward the accumulated initial buffer
@@ -205,7 +215,10 @@ async def main():
         try:
             # Use 127.0.0.1 for 18088, BIND_ADDR (0.0.0.0) for public ports
             listen_ip = "127.0.0.1" if port == 18088 else BIND_ADDR
-            server = await asyncio.start_server(handle_client, listen_ip, port, reuse_port=True)
+            try:
+                server = await asyncio.start_server(handle_client, listen_ip, port, reuse_port=True)
+            except (TypeError, OSError):
+                server = await asyncio.start_server(handle_client, listen_ip, port)
             servers.append(server)
             log.info("MUB-X Chameleon listening on %s:%d", listen_ip, port)
         except Exception as e:
