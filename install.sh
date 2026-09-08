@@ -189,7 +189,7 @@ DOMAIN="${DOMAIN,,}"
 export DEBIAN_FRONTEND=noninteractive
 run apt-get update
 run apt-get install -y ca-certificates curl certbot dnsutils lsof psmisc git jq \
-  uuid-runtime openssl nginx dropbear squid haproxy openvpn wireguard-tools \
+  uuid-runtime openssl nginx dropbear haproxy openvpn wireguard-tools \
   iptables iptables-persistent qrencode netcat-openbsd fail2ban python3-systemd \
   build-essential cmake libnspr4-dev libnss3-dev unzip iproute2
 grep -qxF '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shells
@@ -287,7 +287,6 @@ if ss -H -ltn 'sport = :80' | grep -q .; then
 fi
 install -d -m 0755 /usr/local/etc/xray
 backup_file /etc/default/dropbear
-backup_file /etc/squid/squid.conf
 backup_file /etc/haproxy/haproxy.cfg
 backup_file /etc/nginx/nginx.conf
 backup_file /etc/telecom-engine.env
@@ -329,7 +328,6 @@ install -D -m 0644 lib/common.sh /usr/local/lib/mubx/common.sh
 install -D -m 0644 lib/render.sh /usr/local/lib/mubx/render.sh
 install -D -m 0644 lib/subscribe.sh /usr/local/lib/mubx/subscribe.sh
 install -m 0644 configs/dropbear /etc/default/dropbear
-install -m 0644 configs/squid.conf /etc/squid/squid.conf
 install -m 0644 configs/nginx.conf /etc/nginx/nginx.conf
 install -m 0644 systemd/*.service /etc/systemd/system/
 install -m 0644 systemd/*.timer /etc/systemd/system/
@@ -725,8 +723,13 @@ fi
 # Xray config on the next re-render; stale REALITY_* env keys are stripped
 # by generate-secrets.
 rm -f /usr/local/bin/reality-fronts /usr/local/lib/mubx/reality-build.sh
+# Retire Squid proxy: replaced by mubx-chameleon (Universal Payload Engine)
+if [ -e /etc/squid/squid.conf ] || systemctl is-active --quiet squid 2>/dev/null; then
+  systemctl disable --now squid 2>/dev/null || true
+  rm -f /etc/squid/squid.conf 2>/dev/null || true
+fi
 run systemctl daemon-reload
-for svc in nginx haproxy xray dropbear squid wstunnel mubx-chameleon; do
+for svc in nginx haproxy xray dropbear wstunnel mubx-chameleon; do
   run systemctl enable "$svc"
   run systemctl restart "$svc"
   systemctl is-active --quiet "$svc" || die "$svc failed to start; inspect journalctl -u $svc."

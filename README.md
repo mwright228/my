@@ -35,7 +35,7 @@ release; the upstream project does not publish an armhf binary.
 - **Per-User Quotas & Live Telemetry:** Every user in the identity store (`mubx-users` / menu `10`) supports individual data quotas in GB, live progress bar telemetry, and automatic background freezing when quota is reached.
 - **Multi-Protocol Core (Xray-core):** Full support for VLESS-WebSocket, VLESS-HTTPUpgrade, VMess, Trojan and Shadowsocks (per user). Every TLS transport rides public port **443** (WebSocket transports via the nginx terminator, ShadowTLS via decoy-SNI routing); plain (non-TLS) transports ride **80**.
 - **Per-user identities & usage:** Every user (`mubx-users` / menu `10`, also auto-created with each SSH account) gets their own UUID across every transport — revoke one user without rekeying the rest. Shadowsocks follows the same model: each user gets their own WS inbound (`127.0.0.1:10006+`) and nginx route (`/ss-<user>` on 80/443) keyed to their UUID, plus a plain Shadowsocks TCP inbound (`0.0.0.0:8388+`, no WS/TLS) so any SS client — v2rayNG included — connects without a plugin. Public port 443 is shared between the TLS WebSocket transports and a raw **Shadowsocks TCP** channel: HAProxy sends every non-TLS connection to a shared SS inbound that carries the primary (`admin`) identity, which is the classic "SS on 443" link that works in any client. User add/remove re-renders both Xray and Nginx atomically. Xray's stats API is enabled, so per-user traffic can be read back with `mubx-users usage`. The legacy shared identity survives as the seeded `admin` user, keeping old links valid. `link-gen [bug-host] [user]` prints links for any user.
-- **Squid & SSH Ingestion:** Dropbear SSH via direct ports (`2222`, `109`, `53`) and Squid HTTP CONNECT proxies (`8080` & `3128`).
+- **Chameleon Universal Proxy & SSH Ingestion:** Dropbear SSH via direct ports (`2222`, `109`, `53`) and `mubx-chameleon` Universal Payload Engine (`8080`, `3128`, `8888`) — a zero-rejection HTTP CONNECT proxy purpose-built for mobile carrier bug-host payloads (split, delay_split, front/back inject), fully replacing legacy Squid.
 - **Mobile UDP Gaming Bridge:** Multi-port BadVPN UDPGW (`7100–7700`) instances forward low-latency UDP traffic for games and VoIP.
 - **ZivPN UDP VPN:** Password-authenticated UDP VPN server on port `5667` (amd64/arm64).
 - **Hysteria 2:** Installed from a pinned upstream release and configured with the issued certificate.
@@ -54,7 +54,7 @@ release; the upstream project does not publish an armhf binary.
 | **443** | TCP | TLS / raw SS | HAProxy | Demux: TLS ClientHello → Nginx (20443), non-TLS → shared SS TCP inbound |
 | **80** | TCP | HTTP / WebSocket | Nginx → Xray | Non-TLS VLESS-WS, plain payloads & ACME |
 | **20443** | TCP | TLS | Nginx | Local SSL Termination |
-| **8080 / 3128** | TCP | HTTP | Squid | Injector CONNECT Proxy |
+| **8080 / 3128 / 8888** | TCP | HTTP | Chameleon | Universal Payload Proxy (CONNECT, split, inject) |
 | **53 / 109 / 2222** | TCP | SSH | Dropbear | Core SSH Tunnel |
 | **10001** | TCP | WebSocket | Xray-core | VLESS-WS Inbound |
 | **10004** | TCP | HTTPUpgrade | Xray-core | High-Throughput Streaming |

@@ -52,7 +52,7 @@ draw() {
   mubx_box_div "SERVICE MATRIX"
   row haproxy    "HAProxy 443"   nginx        "Nginx Web/TLS"
   row xray       "Xray Core"     dropbear     "Dropbear SSH"
-  row wstunnel   "SSH over WS"   squid        "Squid Proxy"
+  row wstunnel   "SSH over WS"   mubx-chameleon "Chameleon Proxy"
   row hysteria   "Hysteria 2"    wg-quick@wg0 "WireGuard"
   row openvpn-server@tcp "OpenVPN TCP" openvpn-server@udp "OpenVPN UDP"
   row zivpn      "ZivPN UDP"     singbox      "ShadowTLS v3"
@@ -95,7 +95,7 @@ while true; do
     3|03)   cat /etc/openvpn/client/mubx-client-tcp.ovpn 2>/dev/null || echo "OpenVPN client config not found" ;;
     4|04)   /usr/local/bin/add-user ;;
     5|05)   /usr/local/bin/delete-user ;;
-    6|06)   systemctl restart haproxy nginx xray dropbear squid wstunnel hysteria \
+    6|06)   systemctl restart haproxy nginx xray dropbear mubx-chameleon wstunnel hysteria \
              zivpn singbox wg-quick@wg0 openvpn-server@tcp openvpn-server@udp \
              badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 \
              badvpn@7500 badvpn@7600 badvpn@7700 2>/dev/null || true

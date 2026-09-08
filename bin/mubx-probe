@@ -20,7 +20,7 @@ printf '\n'
 RESOLVED_IP=$(dig +short "$TARGET" 2>/dev/null | grep -E '^[0-9.]+' | head -n 1)
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 4 "http://${TARGET}")
 RTT=$(curl -s -o /dev/null -w "%{time_appconnect}s" --connect-timeout 5 --max-time 8 "https://${TARGET}" 2>/dev/null)
-SQUID_TEST=$(printf "CONNECT ${TARGET}:443 HTTP/1.1\r\nHost: ${TARGET}:443\r\n\r\n" \
+CHAMELEON_TEST=$(printf "CONNECT ${TARGET}:443 HTTP/1.1\r\nHost: ${TARGET}:443\r\n\r\n" \
   | nc -w 4 127.0.0.1 8080 2>/dev/null | head -n 1)
 
 mubx_group_open "SECURITY & CARRIER PROBE CHECKS"
@@ -53,12 +53,12 @@ else
   mubx_hint "TLS handshake timed out or was intercepted/blocked"
 fi
 
-# 4. Chameleon / Squid CONNECT forwarding (127.0.0.1:8080)
-if echo "$SQUID_TEST" | grep -qi "200 Connection"; then
-  mubx_card "  Chameleon / Squid (8080)" "$(mubx_pill OK "200 OK")"
+# 4. Chameleon Proxy CONNECT forwarding (127.0.0.1:8080)
+if echo "$CHAMELEON_TEST" | grep -qi "200 Connection"; then
+  mubx_card "  Chameleon Proxy (8080)" "$(mubx_pill OK "200 OK")"
 else
-  mubx_card "  Chameleon / Squid (8080)" "$(mubx_pill WARN "FAILED")"
-  mubx_hint "Proxy response: ${SQUID_TEST:-timed out}"
+  mubx_card "  Chameleon Proxy (8080)" "$(mubx_pill WARN "FAILED")"
+  mubx_hint "Proxy response: ${CHAMELEON_TEST:-timed out}"
 fi
 
 mubx_group_close

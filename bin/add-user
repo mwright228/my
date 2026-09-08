@@ -56,7 +56,7 @@ fi
 # Check if SSH or system authentication is needed
 has_ssh=true
 if [ "$selected_protos" != '["all"]' ] && [ "$selected_protos" != '["0"]' ]; then
-  if ! jq -e 'def user_has_proto($p): if (. == null or . == [] or (. | index("all") != null)) then true elif (. | index($p) != null) then true else false end; (user_has_proto("ssh") or user_has_proto("openvpn") or user_has_proto("squid"))' <<< "$selected_protos" >/dev/null 2>&1; then
+  if ! jq -e 'def user_has_proto($p): if (. == null or . == [] or (. | index("all") != null)) then true elif (. | index($p) != null) then true else false end; (user_has_proto("ssh") or user_has_proto("openvpn") or user_has_proto("squid") or user_has_proto("chameleon"))' <<< "$selected_protos" >/dev/null 2>&1; then
     has_ssh=false
   fi
 fi
@@ -143,7 +143,8 @@ show_p() { # $1 proto $2 label $3 port
   fi
 }
 show_p "ssh"                    "SSH Dropbear / WS"  "2222, 109, 53 / 443 wss, 80 ws"
-show_p "squid"                  "Squid CONNECT"      "8080, 3128"
+show_p "chameleon"              "Chameleon Proxy"    "8080, 3128, 8888, 443"
+show_p "squid"                  "Chameleon Proxy"    "8080, 3128, 8888, 443"
 show_p "openvpn"                "OpenVPN Server"     "1194 (TCP), 2200 (UDP)"
 show_p "wireguard"              "WireGuard VPN"      "51820 (UDP)"
 show_p "hysteria2"              "Hysteria 2"         "4433 (UDP QUIC)"

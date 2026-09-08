@@ -55,7 +55,7 @@ while IFS=: read -r lu _ luid _ _ _ lshell; do
   if [ "$already_in" = false ]; then
     user_names+=("$lu")
     user_expiries+=("system")
-    user_protos+=("SSH/Squid")
+    user_protos+=("SSH/Chameleon")
     user_statuses+=("active")
   fi
 done < <(getent passwd 2>/dev/null || cat /etc/passwd 2>/dev/null || true)

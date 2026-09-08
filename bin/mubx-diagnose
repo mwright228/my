@@ -66,7 +66,7 @@ mubx_group_close
 
 # --- TCP Reachability -------------------------------------------------------
 mubx_group_open "TCP PORTS ON $TARGET"
-for spec in "HAProxy 443 (TLS/SS)|443" "HAProxy 8443 (TLS/SS)|8443" "Nginx Web (80)|80" "Dropbear SSH (2222)|2222" "Dropbear Alt (109)|109" "Dropbear DNS (53)|53" "OpenVPN TCP (1194)|1194" "Shadowsocks TCP (8388)|8388" "Squid/Chameleon (8080)|8080" "Squid/Chameleon (3128)|3128" "Squid/Chameleon (8888)|8888"; do
+for spec in "HAProxy 443 (TLS/SS)|443" "HAProxy 8443 (TLS/SS)|8443" "Nginx Web (80)|80" "Dropbear SSH (2222)|2222" "Dropbear Alt (109)|109" "Dropbear DNS (53)|53" "OpenVPN TCP (1194)|1194" "Shadowsocks TCP (8388)|8388" "Chameleon Proxy (8080)|8080" "Chameleon Alt (3128)|3128" "Chameleon Alt (8888)|8888"; do
   name="${spec%%|*}"; port="${spec##*|}"
   if timeout 4 bash -c 'exec 3<>"/dev/tcp/$1/$2" && exec 3>&-' _ "$TARGET" "$port" 2>/dev/null; then
     mubx_card "  $name" "$(mubx_pill UP "OPEN")"

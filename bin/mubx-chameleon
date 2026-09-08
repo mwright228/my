@@ -2,7 +2,7 @@
 """
 MUB-X Chameleon Universal Payload Engine (bin/mubx-chameleon).
 
-Telecom-grade HTTP CONNECT & Injection Proxy with Squid 3.3.8 leniency.
+Telecom-grade HTTP CONNECT & Injection Proxy (replaces legacy Squid).
 Designed specifically for mobile carrier bug-host payloads (HTTP Injector,
 HTTP Custom, NetMod, KPN Tunnel):
   - Zero-rejection state machine: never returns 400 Bad Request on split

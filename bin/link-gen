@@ -280,8 +280,8 @@ fi
 # ============================================================================
 # 4. SSH, INJECTORS & PROXIES
 # ============================================================================
-if u_has "ssh" || u_has "squid"; then
-  card_header "dropbear wstunnel squid" "SSH & PAYLOAD INJECTORS" "PORTS"
+if u_has "ssh" || u_has "squid" || u_has "chameleon"; then
+  card_header "dropbear wstunnel mubx-chameleon" "SSH & PAYLOAD INJECTORS" "PORTS"
 
   if u_has "ssh"; then
     item "SSH" "Dropbear SSH Direct (Ports 2222 / 109 / 53)"
@@ -294,14 +294,14 @@ if u_has "ssh" || u_has "squid"; then
     block "ssh -o ProxyCommand='wstunnel client -L stdio://%h:%p ws://${DOMAIN}${SSH_WS_PATH}' ${USER_NAME}@${DOMAIN}"
   fi
 
-  if u_has "squid"; then
-    item "SQUID" "Squid HTTP CONNECT Proxy (Ports 8080 / 3128)"
-    block "${MYIP}:8080  |  Alt Port: 3128"
+  if u_has "squid" || u_has "chameleon"; then
+    item "CHAMELEON" "Universal Chameleon Proxy (Ports 8080 / 3128 / 8888)"
+    block "${MYIP}:8080  |  Alt Ports: 3128, 8888, and HTTP/443"
   fi
 
-  if u_has "ssh" || u_has "squid"; then
-    item "PAYLOAD" "HTTP Injector / Custom Payload Template"
-    block "CONNECT [host_port] HTTP/1.1[crlf]Host: ${BUG}[crlf]Connection: Keep-Alive[crlf][crlf]"
+  if u_has "ssh" || u_has "squid" || u_has "chameleon"; then
+    item "PAYLOAD" "HTTP Injector / Custom Split Payload"
+    block "CONNECT [host_port] [protocol][crlf]Host: ${BUG}[crlf]X-Online-Host: ${BUG}[crlf]Connection: Keep-Alive[crlf][split]GET http://${BUG}/ [protocol][crlf]Host: ${BUG}[crlf][crlf]"
   fi
   mubx_box_bot
 fi

@@ -37,7 +37,7 @@ fi
 
 
 SERVICES=(
-  haproxy nginx xray dropbear squid wstunnel hysteria zivpn singbox mubx-chameleon
+  haproxy nginx xray dropbear wstunnel hysteria zivpn singbox mubx-chameleon
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400
   badvpn@7500 badvpn@7600 badvpn@7700
@@ -170,6 +170,13 @@ fi
 # copies from upgraded hosts. Snapshot above, remove here - the Reality
 # inbounds disappear from the Xray config on the re-render below.
 rm -f /usr/local/bin/reality-fronts /usr/local/lib/mubx/reality-build.sh
+# Retire Squid proxy: replaced by mubx-chameleon (Universal Payload Engine)
+if [ -e /etc/squid/squid.conf ] || systemctl is-active --quiet squid 2>/dev/null || systemctl is-enabled --quiet squid 2>/dev/null; then
+  backup_path /etc/squid/squid.conf
+  systemctl disable --now squid 2>/dev/null || true
+  rm -f /etc/squid/squid.conf 2>/dev/null || true
+  echo "[*] Retired legacy Squid service (ports 8080/3128 migrated to mubx-chameleon)"
+fi
 systemctl daemon-reload
 for f in "$ROOT"/bin/*; do
   [ -f "$f" ] || continue

@@ -83,7 +83,7 @@ def user_has_proto($p):
   elif ($p == "ssh" and ((.protocols | index("ssh") != null))) then true
   elif ($p == "openvpn" and ((.protocols | index("openvpn") != null) or (.protocols | index("vpn") != null))) then true
   elif ($p == "wireguard" and ((.protocols | index("wireguard") != null) or (.protocols | index("wg") != null) or (.protocols | index("vpn") != null))) then true
-  elif ($p == "squid" and ((.protocols | index("squid") != null))) then true
+  elif (($p == "squid" or $p == "chameleon") and ((.protocols | index("squid") != null) or (.protocols | index("chameleon") != null))) then true
   elif ($p == "zivpn" and ((.protocols | index("zivpn") != null) or (.protocols | index("antidpi") != null))) then true
   else false
   end;
@@ -100,7 +100,7 @@ mubx_proto_normalize() { # $1 raw input string -> stdout JSON array
   for item in $input; do
     case "$item" in
       0|8|all) tags+=("all") ;;
-      1|ssh-bundle|ssh-only|ssh) tags+=("ssh" "squid") ;;
+      1|ssh-bundle|ssh-only|ssh) tags+=("ssh" "chameleon") ;;
       2|vless-bundle|vless) tags+=("vless_ws_tls" "vless_ws_ntls" "vless_httpupgrade_tls" "vless_httpupgrade_ntls" "vless_xhttp_tls" "vless_tcp_tls") ;;
       3|vmess-bundle|vmess) tags+=("vmess_ws_tls" "vmess_ws_ntls" "vmess_tcp") ;;
       4|trojan-bundle|trojan) tags+=("trojan_ws_tls" "trojan_ws_ntls" "trojan_tcp") ;;
@@ -110,7 +110,7 @@ mubx_proto_normalize() { # $1 raw input string -> stdout JSON array
       10|ssh) tags+=("ssh") ;;
       11|openvpn|ovpn) tags+=("openvpn") ;;
       12|wireguard|wg) tags+=("wireguard") ;;
-      13|squid) tags+=("squid") ;;
+      13|squid|chameleon) tags+=("chameleon") ;;
       20|vless-ws-tls|vless_ws_tls) tags+=("vless_ws_tls") ;;
       21|vless-ws-ntls|vless_ws_ntls|vless-ws-80) tags+=("vless_ws_ntls") ;;
       22|vless-upg-tls|vless_httpupgrade_tls|vless-httpupgrade) tags+=("vless_httpupgrade_tls") ;;
@@ -172,7 +172,7 @@ mubx_proto_summary() { # $1 json_array_or_user_object -> formatted string
         (if ($p | index("hysteria2") != null) then "HY2" else empty end),
         (if ($p | index("wireguard") != null) then "WG" else empty end),
         (if ($p | index("openvpn") != null) then "OVPN" else empty end),
-        (if ($p | index("squid") != null) then "Squid" else empty end),
+        (if (($p | index("squid") != null) or ($p | index("chameleon") != null)) then "Chameleon" else empty end),
         (if ($p | index("zivpn") != null) then "ZivPN" else empty end)
       ] as $cats |
       if ($cats | length) > 0 then ($cats | join("+"))
@@ -193,7 +193,7 @@ mubx_proto_picker() { # stdout: normalized JSON array
     mubx_box_top "PROTOCOL SELECTION" "SELECT PROTOCOL"
     mubx_put "$(printf '  %sSelect the protocol to create for this account:%s' "$C_SLATE" "$C_RESET")"
     mubx_box_div "DEDICATED SINGLE-PROTOCOL ACCOUNTS"
-    mubx_put "$(printf '  %s[1]%s SSH & Squid Proxy Only   (SSH Direct/WS, Squid HTTP)' "$C_PURPLE" "$C_RESET")"
+    mubx_put "$(printf '  %s[1]%s SSH & Chameleon Proxy  (SSH Direct/WS, Chameleon HTTP)' "$C_PURPLE" "$C_RESET")"
     mubx_put "$(printf '  %s[2]%s VLESS Only               (VLESS TCP, WS TLS/80, HTTPUpg)' "$C_PURPLE" "$C_RESET")"
     mubx_put "$(printf '  %s[3]%s VMess Only               (VMess WS TLS/80, TCP)' "$C_PURPLE" "$C_RESET")"
     mubx_put "$(printf '  %s[4]%s Trojan Only              (Trojan TCP, WS TLS/80)' "$C_PURPLE" "$C_RESET")"
@@ -203,7 +203,7 @@ mubx_proto_picker() { # stdout: normalized JSON array
     mubx_put "$(printf '  %s[8]%s ALL Protocols            (Full Suite - Everything)' "$C_ELECTRIC" "$C_RESET")"
     mubx_box_div "OR CUSTOM COMBINATIONS (E.G. 10,20,52)"
     mubx_put "$(printf '  %s[10]%s SSH Direct & WS         %s[11]%s OpenVPN TCP/UDP' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
-    mubx_put "$(printf '  %s[12]%s WireGuard VPN           %s[13]%s Squid HTTP CONNECT' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[12]%s WireGuard VPN           %s[13]%s Chameleon HTTP Proxy' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
     mubx_put "$(printf '  %s[20]%s VLESS WS (TLS 443)      %s[21]%s VLESS WS (Plain 80)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
     mubx_put "$(printf '  %s[22]%s VLESS HTTPUpgrade TLS   %s[23]%s VLESS HTTPUpgrade Plain' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
     mubx_put "$(printf '  %s[24]%s VLESS xHTTP (TLS 443)   %s[25]%s VLESS TCP Direct/TLS' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"

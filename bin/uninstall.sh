@@ -37,10 +37,10 @@ canonical_repo_url() {
 [ "$(canonical_repo_url "$(git -C "$INSTALL_ROOT" remote get-url origin 2>/dev/null || true)")" = \
   "$(canonical_repo_url "${MUBX_REPO_URL:-https://github.com/mwright228/my.git}")" ] ||
   { echo "[!] Refusing to remove an unexpected repository." >&2; exit 1; }
-for svc in nginx haproxy xray dropbear squid \
+for svc in nginx haproxy xray dropbear mubx-chameleon \
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0 \
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 badvpn@7500 badvpn@7600 badvpn@7700 \
-  hysteria zivpn singbox wstunnel mubx-cron.timer mubx-adaptive.timer; do
+  hysteria zivpn singbox wstunnel squid mubx-cron.timer mubx-adaptive.timer; do
   systemctl disable --now "$svc" 2>/dev/null || true
 done
 restore_path() {
@@ -134,7 +134,7 @@ done
 if [ -f /etc/mubx/ip_forward.previous ]; then
   sysctl -w net.ipv4.ip_forward="$(cat /etc/mubx/ip_forward.previous)" >/dev/null
 fi
-for path in /etc/default/dropbear /etc/squid/squid.conf /etc/haproxy/haproxy.cfg /etc/nginx/nginx.conf; do
+for path in /etc/default/dropbear /etc/haproxy/haproxy.cfg /etc/nginx/nginx.conf; do
   backup="/etc/mubx/backup$path"
   if [ -e "$backup" ] || [ -L "$backup" ]; then
     install -d -m 0755 "$(dirname "$path")"
