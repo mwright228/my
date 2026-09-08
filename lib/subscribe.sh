@@ -25,6 +25,14 @@ MUBX_SS2022_DIR="${MUBX_SS2022_DIR:-/etc/mubx/ss2022-keys}"
 # Where the per-user subscription tokens live (overridable for tests).
 MUBX_SUB_TOKEN_DIR="${MUBX_SUB_TOKEN_DIR:-/etc/mubx/sub-tokens}"
 
+if [ -z "${JQ_PROTO_DEF:-}" ]; then
+  if [ -r "$(dirname "${BASH_SOURCE[0]}")/render.sh" ]; then
+    source "$(dirname "${BASH_SOURCE[0]}")/render.sh"
+  elif [ -r /usr/local/lib/mubx/render.sh ]; then
+    source /usr/local/lib/mubx/render.sh
+  fi
+fi
+
 # --- Hysteria2 port hopping (shared with the DNAT in install.sh) ----------
 
 # The configured hopping range as "start:end" (empty when disabled).
