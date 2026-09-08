@@ -732,7 +732,7 @@ if [ -e /etc/squid/squid.conf ] || systemctl is-active --quiet squid 2>/dev/null
   rm -f /etc/squid/squid.conf 2>/dev/null || true
 fi
 run systemctl daemon-reload
-for svc in nginx haproxy xray dropbear wstunnel mubx-chameleon; do
+for svc in nginx haproxy xray dropbear mubx-chameleon; do
   run systemctl enable "$svc"
   run systemctl restart "$svc"
   systemctl is-active --quiet "$svc" || die "$svc failed to start; inspect journalctl -u $svc."

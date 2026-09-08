@@ -3,7 +3,11 @@
 if [ ! -f /etc/telecom-engine.env ]; then
   echo "[!] Run install.sh first"; exit 1
 fi
-source /usr/local/lib/mubx/common.sh
+if [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+fi
 
 DOMAIN=
 load_mubx_env 2>/dev/null || true

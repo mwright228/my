@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # MUB-X bug-host / SNI candidate audit.
-source /usr/local/lib/mubx/common.sh
+if [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+fi
 
 TARGET="${1:-}"
 if [ -z "$TARGET" ]; then

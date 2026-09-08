@@ -323,12 +323,9 @@ cmd_remove() { # $1 name
   fi
   rm -f "$backup"
   log "User $name revoked; UUID no longer authenticates."
-  if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
-    source /usr/local/lib/mubx/subscribe.sh
-    tok="$(cat "$MUBX_SUB_TOKEN_DIR/$name" 2>/dev/null || true)"
-    [ -z "$tok" ] || rm -rf "${MUBX_SUB_DIR:?}/$tok"
-    rm -f "$MUBX_SUB_TOKEN_DIR/$name" "$MUBX_SS2022_DIR/$name"
-  fi
+  tok="$(cat "${MUBX_SUB_TOKEN_DIR:-/etc/mubx/sub-tokens}/$name" 2>/dev/null || true)"
+  [ -z "$tok" ] || rm -rf "${MUBX_SUB_DIR:-/var/www/mubx-sub}/$tok"
+  rm -f "${MUBX_SUB_TOKEN_DIR:-/etc/mubx/sub-tokens}/$name" "${MUBX_SS2022_DIR:-/etc/mubx/ss2022-keys}/$name"
 }
 
 cmd_usage() { # $1 name (optional)

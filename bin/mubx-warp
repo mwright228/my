@@ -8,8 +8,13 @@ set -Eeuo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "[!] Run mubx-warp as root." >&2; exit 1; }
 
-source /usr/local/lib/mubx/common.sh
-source /usr/local/lib/mubx/render.sh
+if [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+  source /usr/local/lib/mubx/render.sh
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/render.sh"
+fi
 
 WARP_CONF=/etc/mubx/warp.json
 install -d -m 0700 "$(dirname "$WARP_CONF")"

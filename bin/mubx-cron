@@ -155,18 +155,18 @@ fi
 # Self-heal: revive anything that should be running but is not.
 for svc in "${SERVICES[@]}"; do
   systemctl cat "$svc.service" >/dev/null 2>&1 || continue
-  [ "${was_active[$svc]}" -eq 1 ] || continue
-  if ! systemctl is-active --quiet "$svc"; then
-    systemctl restart "$svc"
+  if [ "${was_active[$svc]}" -eq 1 ] || systemctl is-enabled --quiet "$svc" 2>/dev/null; then
+    if ! systemctl is-active --quiet "$svc" 2>/dev/null; then
+      systemctl restart "$svc" 2>/dev/null || true
+    fi
   fi
-  systemctl is-active --quiet "$svc"
 done
 
 # The sing-box ShadowTLS route is optional on pre-upgrade hosts: it is
 # revived only when its unit and config exist.
 if [ -f /etc/systemd/system/singbox.service ] && [ -s /etc/sing-box/config.json ] &&
-  [ "${was_active[singbox]:-0}" -eq 1 ] && ! systemctl is-active --quiet singbox; then
-  systemctl restart singbox
+   ! systemctl is-active --quiet singbox 2>/dev/null; then
+  systemctl restart singbox 2>/dev/null || true
 fi
 
 maintenance_success=1
