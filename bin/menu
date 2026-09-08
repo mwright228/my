@@ -59,7 +59,7 @@ draw() {
   row wstunnel   "SSH over WS"   mubx-chameleon "Chameleon Proxy"
   row hysteria   "Hysteria 2"    wg-quick@wg0 "WireGuard"
   row openvpn-server@tcp "OpenVPN TCP" openvpn-server@udp "OpenVPN UDP"
-  row zivpn      "ZivPN UDP"     singbox      "ShadowTLS v3"
+  row zivpn      "ZivPN UDP"     singbox      "ShadowTLS / TUIC"
   mubx_put "$(printf '  %s %-13s   %s●%s up  %s◐%s part  %s○%s down' \
     "$(svc_dot_set badvpn 7100 7200 7300 7400 7500 7600 7700)" "UDPGW Bridge" \
     "$C_MINT" "$C_RESET" "$C_AMBER" "$C_RESET" "$C_CORAL" "$C_RESET")"

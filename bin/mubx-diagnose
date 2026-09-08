@@ -78,7 +78,7 @@ mubx_group_close
 
 # --- UDP Listeners ----------------------------------------------------------
 mubx_group_open "LOCAL UDP LISTENERS"
-for spec in "OpenVPN UDP (2200)|2200" "Hysteria 2 QUIC (4433)|4433" "WireGuard (51820)|51820" "ZivPN Tunnel (5667)|5667"; do
+for spec in "OpenVPN UDP (2200)|2200" "Hysteria 2 QUIC (4433)|4433" "TUIC v5 QUIC (8443)|8443" "WireGuard (51820)|51820" "ZivPN Tunnel (5667)|5667"; do
   name="${spec%%|*}"; port="${spec##*|}"
   if ss -H -uln "sport = :$port" 2>/dev/null | grep -q .; then
     mubx_card "  $name" "$(mubx_pill UP "ACTIVE")"

@@ -58,16 +58,18 @@ store_require() {
   fi
 }
 
-# Regenerate the Xray and Nginx configs from the current store and reload
-# both. Every user owns a Shadowsocks WS route (/ss-<user>) in nginx, so a
-# store change must re-render nginx.conf as well as the Xray config. Both
-# candidates are validated (xray run -test, nginx -t) before the live files
-# are swapped; any restart failure rolls both files back atomically.
+# Regenerate the Xray, Nginx, and sing-box configs from the current store and reload
+# all services. Every user owns a Shadowsocks WS route (/ss-<user>) in nginx and
+# multi-user TUIC credentials in sing-box, so a store change must keep all in sync.
+# Candidates are validated before live files are swapped; any restart failure
+# rolls all touched configs back atomically.
 reload_xray() {
-  local tmpdir xray_new nginx_new
+  local tmpdir xray_new nginx_new singbox_new singbox_cfg="/etc/sing-box/config.json" has_singbox=0
   tmpdir="$(mktemp -d)"
   xray_new="$tmpdir/xray.json"
   nginx_new="$tmpdir/nginx.conf"
+  singbox_new="$tmpdir/singbox.json"
+
   if ! mubx_xray_render "$TPL_DIR/configs/xray.json" "$xray_new"; then
     echo "[!] Failed to render the Xray config." >&2
     rm -rf "$tmpdir"
@@ -88,21 +90,51 @@ reload_xray() {
     rm -rf "$tmpdir"
     return 1
   fi
+  if [ -f "$singbox_cfg" ] && [ -f "$TPL_DIR/configs/singbox.json" ]; then
+    has_singbox=1
+    if ! mubx_singbox_render "$TPL_DIR/configs/singbox.json" "$singbox_new"; then
+      echo "[!] Failed to render the sing-box config." >&2
+      rm -rf "$tmpdir"
+      return 1
+    fi
+    if command -v sing-box >/dev/null 2>&1; then
+      if ! sing-box check -c "$singbox_new" >/dev/null 2>&1; then
+        echo "[!] New sing-box config failed validation; nothing was changed." >&2
+        rm -rf "$tmpdir"
+        return 1
+      fi
+    fi
+  fi
+
   cp -a "$XRAY_CFG" "$tmpdir/xray.old"
   cp -a "$NGINX_CFG" "$tmpdir/nginx.old"
   cp -a "$xray_new" "$XRAY_CFG"
   chmod 0600 "$XRAY_CFG"
   cp -a "$nginx_new" "$NGINX_CFG"
+  if [ "$has_singbox" -eq 1 ]; then
+    cp -a "$singbox_cfg" "$tmpdir/singbox.old"
+    cp -a "$singbox_new" "$singbox_cfg"
+    chmod 0600 "$singbox_cfg"
+  fi
+
   if ! systemctl restart xray || ! systemctl is-active --quiet xray ||
      ! systemctl reload nginx; then
-    echo "[!] Service reload failed; rolling back both configs." >&2
+    echo "[!] Service reload failed; rolling back configs." >&2
     cp -a "$tmpdir/xray.old" "$XRAY_CFG"
     chmod 0600 "$XRAY_CFG"
     cp -a "$tmpdir/nginx.old" "$NGINX_CFG"
+    if [ "$has_singbox" -eq 1 ] && [ -f "$tmpdir/singbox.old" ]; then
+      cp -a "$tmpdir/singbox.old" "$singbox_cfg"
+      chmod 0600 "$singbox_cfg"
+      systemctl restart singbox 2>/dev/null || true
+    fi
     systemctl restart xray || true
     systemctl reload nginx || true
     rm -rf "$tmpdir"
     return 1
+  fi
+  if [ "$has_singbox" -eq 1 ] && systemctl is-active --quiet singbox 2>/dev/null; then
+    systemctl restart singbox 2>/dev/null || true
   fi
   rm -rf "$tmpdir"
 }

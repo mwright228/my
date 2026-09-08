@@ -106,7 +106,7 @@ fi
 
 # Zero-downtime certificate renewal via webroot (Nginx proxies /.well-known/acme-challenge/)
 install -d -m 0755 /var/www/html
-renew_hook='systemctl reload nginx 2>/dev/null || true; for s in hysteria zivpn; do systemctl is-active --quiet "$s" 2>/dev/null && systemctl restart "$s"; done; exit 0'
+renew_hook='systemctl reload nginx 2>/dev/null || true; for s in hysteria zivpn singbox; do systemctl is-active --quiet "$s" 2>/dev/null && systemctl restart "$s"; done; exit 0'
 certbot renew --quiet --webroot -w /var/www/html --deploy-hook "$renew_hook" 2>/dev/null || \
   certbot renew --quiet --deploy-hook "$renew_hook" 2>/dev/null || true
 

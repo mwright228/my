@@ -623,7 +623,7 @@ mubx_haproxy_render configs/haproxy.cfg /etc/haproxy/haproxy.cfg
 # expanded from the user store, so adding or removing a user later keeps the
 # routes in sync via `mubx-users`.
 mubx_nginx_render configs/nginx.conf /etc/nginx/nginx.conf
-chmod 0600 /usr/local/etc/xray/config.json
+chmod 0600 /usr/local/etc/xray/config.json /etc/sing-box/config.json /etc/hysteria/config.yaml
 # --- Hysteria2 UDP port hopping (opt-in via MUBX_HY2_HOPPING=START:END) -----
 # Adds an iptables DNAT from a UDP range onto Hysteria's 4433 listener.
 # Clients put mport=<domain>:<range> in the link and re-key across the
