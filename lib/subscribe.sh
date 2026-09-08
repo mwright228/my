@@ -236,6 +236,24 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
         name: \"MUBX-SS-443\", type: \"ss\", server: \$dom, port: 443,
         cipher: \"aes-256-gcm\", password: \$uuid, udp: true
       }] else [] end)
+    | {
+        port: 7890,
+        \"socks-port\": 7891,
+        \"allow-lan\": false,
+        mode: \"rule\",
+        \"log-level\": \"info\",
+        proxies: .,
+        \"proxy-groups\": [
+          {
+            name: \"PROXY\",
+            type: \"select\",
+            proxies: ([.[].name] + [\"DIRECT\"])
+          }
+        ],
+        rules: [
+          \"MATCH,PROXY\"
+        ]
+      }
   "
 }
 

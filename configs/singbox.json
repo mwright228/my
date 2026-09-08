@@ -20,6 +20,7 @@
                 "server": "__SNI_FRONT__",
                 "server_port": 443
             },
+            "wildcard_sni": "all",
             "detour": "ss22-in"
         },
         {

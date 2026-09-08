@@ -547,6 +547,6 @@ mubx_nginx_render() { # $1 template  $2 out
 # non-TLS connection on public 443 -> the shared SS-443 inbound.
 mubx_haproxy_render() { # $1 template  $2 out
   local tmpl="$1" out="$2"
-  sed -e "s|__SHADOWTLS_SNI__|${SHADOWTLS_SNI:-www.microsoft.com}|g" \
+  sed -e "s|__DOMAIN__|${DOMAIN:-}|g" \
     "$tmpl" > "$out"
 }
