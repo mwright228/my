@@ -194,6 +194,9 @@ fi
 xray run -test -config "$tmp/xray.json"
 nginx -t -c "$tmp/nginx.conf" >/dev/null
 haproxy -c -f "$tmp/haproxy.cfg" >/dev/null
+if command -v sing-box >/dev/null 2>&1 && [ -s "$tmp/singbox.json" ]; then
+  sing-box check -c "$tmp/singbox.json" >/dev/null || true
+fi
 
 # 5) Swap the validated configs in and restart everything that was running.
 install -m 0600 "$tmp/xray.json" /usr/local/etc/xray/config.json
@@ -235,6 +238,13 @@ for svc in "${SERVICES[@]}"; do
   fi
 done
 mubx_group_close
+
+# Re-apply kernel BBR & network tuning
+if [ -x /usr/local/bin/mubx-tune ]; then
+  /usr/local/bin/mubx-tune >/dev/null 2>&1 || true
+elif [ -x "$ROOT/bin/mubx-tune" ]; then
+  "$ROOT/bin/mubx-tune" >/dev/null 2>&1 || true
+fi
 
 # 6) Swap in the new copy of the running script, then commit the result.
 stage_bin "$ROOT/bin/mubx-update"

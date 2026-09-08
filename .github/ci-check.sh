@@ -153,12 +153,12 @@ PY
 # to the nginx loopback terminator, and a raw/SS fallback to the 17000
 # inbound. The template is installed verbatim by the renderer.
 check_haproxy_split() { # $1 haproxy config
-  grep -q 'use_backend srv_nginx if { req_ssl_hello_type 1 }' "$1" || {
-    echo "HAProxy TLS -> nginx rule missing"
+  grep -q 'use_backend srv_nginx if { req.ssl_sni -i ' "$1" || {
+    echo "HAProxy domain -> nginx rule missing"
     fail=1
   }
-  grep -q 'use_backend srv_singbox if { req.ssl_sni -i ' "$1" || {
-    echo "HAProxy ShadowTLS decoy-SNI rule missing"
+  grep -q 'use_backend srv_singbox if { req_ssl_hello_type 1 }' "$1" || {
+    echo "HAProxy TLS -> singbox rule missing"
     fail=1
   }
   grep -q 'server srv_singbox 127.0.0.1:8448' "$1" || {
