@@ -41,7 +41,7 @@ HOST="${DOMAIN:-127.0.0.1}"
 
 # Preference order: breaks ties between transports with equal scores and
 # ranks UDP transports, whose latency cannot be measured generically.
-ORDER=(xray-websocket wireguard hysteria openvpn-udp)
+ORDER=(xray-websocket tuic wireguard hysteria openvpn-udp)
 
 declare -A score=()
 declare -A detail=()
@@ -58,6 +58,10 @@ if lat="$(tcp_latency_ms "$HOST" 443)"; then
 fi
 
 # --- UDP transports: local listener health only ---
+if listener_up udp 8443; then
+  score[tuic]=52000
+  detail[tuic]="listener up (TUIC v5 QUIC 8443)"
+fi
 if listener_up udp 51820; then
   score[wireguard]=50000
   detail[wireguard]="listener up (UDP 51820)"
