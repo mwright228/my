@@ -224,7 +224,7 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
     + ss22
     + (if (\$stls != \"\" and (cur_user | user_has_proto(\"shadowtls\"))) then [{
         name: \"MUBX-ShadowTLS\", type: \"ss\", server: \$dom, port: 443,
-        cipher: \"2022-blake3-aes-256-gcm\", password: \$adminkey, udp: true,
+        cipher: \"2022-blake3-aes-256-gcm\", password: \$adminkey, udp: false,
         plugin: \"shadow-tls\", \"plugin-opts\": {
           version: 3, password: \$stls, host: \$sni
         }
@@ -251,6 +251,7 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
           }
         ],
         rules: [
+          \"AND,((DST-PORT,443),(NETWORK,UDP)),REJECT\",
           \"MATCH,PROXY\"
         ]
       }
