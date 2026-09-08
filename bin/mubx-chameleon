@@ -8,12 +8,15 @@ HTTP Custom, NetMod, KPN Tunnel):
   - Zero-rejection state machine: never returns 400 Bad Request on split
     payloads ([split], [delay_split]), leading/trailing CRLFs, front/back
     inject headers (X-Online-Host, Host:), or custom methods.
+  - Pipelined payload preservation: forwards any buffered payload data
+    following the HTTP header directly to the target service without packet loss.
   - Multi-port listener: binds 8080, 3128, 8888, and loopback 18088 (HAProxy
-    multiplexed from 443 / 8443).
+    multiplexed from 443 / 8443 / 2053 / 2083 / 2087 / 2096).
   - Smart Dispatcher: seamlessly bridges to local MUB-X services (Dropbear
     SSH :2222/:109/:53, Sing-box ShadowTLS :8448, SS-2022 :18500,
     wstunnel :18080, SS-443 :17000, ZivPN :5667, OpenVPN :1194) or
-    outbound internet targets (:80, :443) with zero-copy stream piping.
+    outbound internet targets (:80, :443) with zero-copy stream piping
+    and kernel TCP_NODELAY latency elimination.
 """
 
 import asyncio
@@ -21,8 +24,9 @@ import logging
 import os
 import re
 import signal
+import socket
 import sys
-from typing import Optional, Tuple
+from typing import Optional, Set, Tuple
 
 # Configure logging
 LOG_LEVEL = os.environ.get("CHAMELEON_LOG", "WARNING").upper()
@@ -51,13 +55,40 @@ ALLOWED_LOCAL_PORTS = {
     17000, 18080, 18500, 20443
 }
 
+# Dedicated local tunnel service ports (always route to loopback)
+LOCAL_TUNNEL_PORTS = {
+    22, 53, 109, 1194, 2222, 5667, 8388, 8389, 8448,
+    17000, 18080, 18500, 20443
+}
+
 BUFFER_SIZE = 65536  # 64KB high-throughput buffer matching kernel TCP tuning
 
 # Precompiled regexes for lenient payload extraction
-RE_CONNECT = re.compile(rb"(?i)\bCONNECT\s+([a-zA-Z0-9\.\-_]+):?(\d+)?")
-RE_HOST_HDR = re.compile(rb"(?i)\r?\n(?:X-Online-Host|X-Forward-Host|Host):\s*([a-zA-Z0-9\.\-_]+):?(\d+)?")
-RE_HTTP_URL = re.compile(rb"(?i)\b(?:GET|POST|HEAD|OPTIONS|PUT|DELETE|TRACE|PATCH)\s+https?://([a-zA-Z0-9\.\-_]+):?(\d+)?")
-RE_PROXY_CONN = re.compile(rb"(?i)\r?\nProxy-Connection:.*?\r?\n")
+RE_CONNECT = re.compile(rb"(?i)\bCONNECT\s+(?:\[([a-fA-F0-9:]+)\]|([a-zA-Z0-9\.\-_]+))(?::(\d+))?")
+RE_TARGET_HDR = re.compile(rb"(?i)\r?\n(?:X-Target|X-Real-Host):\s*(?:\[([a-fA-F0-9:]+)\]|([a-zA-Z0-9\.\-_]+))(?::(\d+))?")
+RE_HTTP_URL = re.compile(rb"(?i)\b(?:GET|POST|HEAD|OPTIONS|PUT|DELETE|TRACE|PATCH)\s+https?://(?:\[([a-fA-F0-9:]+)\]|([a-zA-Z0-9\.\-_]+))(?::(\d+))?")
+RE_HOST_HDR = re.compile(rb"(?i)\r?\n(?:X-Online-Host|X-Forward-Host|Host):\s*(?:\[([a-fA-F0-9:]+)\]|([a-zA-Z0-9\.\-_]+))(?::(\d+))?")
+
+
+def load_local_identifiers() -> Set[str]:
+    """Loads server domain names and localhost variants."""
+    ids = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+    for p in ("/etc/mubx/domain", "/etc/telecom-engine.domain"):
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    dom = f.read().strip().lower()
+                    if dom:
+                        ids.add(dom)
+            except Exception:
+                pass
+    env_dom = os.environ.get("DOMAIN", "").strip().lower()
+    if env_dom:
+        ids.add(env_dom)
+    return ids
+
+
+LOCAL_IDS = load_local_identifiers()
 
 
 def parse_target(buffer: bytes) -> Tuple[Optional[str], Optional[int], bool]:
@@ -65,33 +96,62 @@ def parse_target(buffer: bytes) -> Tuple[Optional[str], Optional[int], bool]:
     Leniently inspects any HTTP injector payload to extract the intended
     target host and port. Returns (host, port, is_connect).
     """
-    # 1. Standard or mangled CONNECT request
+    # 1. Standard or mangled CONNECT request (highest priority)
     m = RE_CONNECT.search(buffer)
     if m:
-        host = m.group(1).decode("ascii", errors="ignore")
-        port = int(m.group(2).decode("ascii")) if m.group(2) else 443
-        return host, port, True
+        raw_host = (m.group(1) or m.group(2)).decode("ascii", errors="ignore")
+        port = int(m.group(3).decode("ascii")) if m.group(3) else 443
+        return raw_host, port, True
 
-    # 2. Plain HTTP request with absolute URI (e.g. GET http://domain:port/ ...)
+    # 2. Explicit target header (X-Target / X-Real-Host)
+    m = RE_TARGET_HDR.search(buffer)
+    if m:
+        raw_host = (m.group(1) or m.group(2)).decode("ascii", errors="ignore")
+        port = int(m.group(3).decode("ascii")) if m.group(3) else DEFAULT_PORT
+        return raw_host, port, True
+
+    # 3. Plain HTTP request with absolute URI (e.g. GET http://domain:port/ ...)
     m = RE_HTTP_URL.search(buffer)
     if m:
-        host = m.group(1).decode("ascii", errors="ignore")
-        port = int(m.group(2).decode("ascii")) if m.group(2) else 80
-        return host, port, False
+        raw_host = (m.group(1) or m.group(2)).decode("ascii", errors="ignore")
+        port = int(m.group(3).decode("ascii")) if m.group(3) else 80
+        return raw_host, port, False
 
-    # 3. Host / X-Online-Host header in split or front/back inject payloads
+    # 4. Host / X-Online-Host header in split or front/back inject payloads
     m = RE_HOST_HDR.search(buffer)
     if m:
-        host = m.group(1).decode("ascii", errors="ignore")
-        port = int(m.group(2).decode("ascii")) if m.group(2) else 443
-        return host, port, True
+        raw_host = (m.group(1) or m.group(2)).decode("ascii", errors="ignore")
+        port = int(m.group(3).decode("ascii")) if m.group(3) else 443
+        return raw_host, port, True
 
     return None, None, False
 
 
-def is_local_ip(host: str) -> bool:
-    """Checks if target host refers to the local machine."""
-    return host in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
+def is_local_target(host: str, port: int) -> bool:
+    """Checks if target host/port refers to a local MUB-X service on this machine."""
+    h = host.strip().lower()
+    if h in LOCAL_IDS or h in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
+        return True
+    if port in LOCAL_TUNNEL_PORTS:
+        return True
+    return False
+
+
+def set_tcp_opts(writer: asyncio.StreamWriter):
+    """Enables TCP_NODELAY and SO_KEEPALIVE to eliminate latency and preserve NAT pinholes."""
+    try:
+        sock = writer.get_extra_info("socket")
+        if sock:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            if hasattr(socket, "TCP_KEEPIDLE"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
+            if hasattr(socket, "TCP_KEEPINTVL"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+            if hasattr(socket, "TCP_KEEPCNT"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+    except Exception:
+        pass
 
 
 async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -117,7 +177,9 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
     """
     Handles an incoming connection, buffering through potential [split] or
     [delay_split] chunks until an actionable HTTP request is received.
+    Preserves and forwards all pipelined bytes with zero packet loss.
     """
+    set_tcp_opts(client_writer)
     client_addr = client_writer.get_extra_info("peername")
     log.debug("Client connected: %s", client_addr)
 
@@ -138,8 +200,20 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
             th, tp, ic = parse_target(buffer)
             if th:
                 target_host, target_port, is_connect = th, tp, ic
-                # Check for end of HTTP headers (\r\n\r\n or \n\n)
+                # If we have complete HTTP headers
                 if b"\r\n\r\n" in buffer or b"\n\n" in buffer:
+                    # If this is not a CONNECT request and not a websocket upgrade,
+                    # peek briefly (up to 100ms) to see if a split CONNECT payload follows
+                    if not is_connect and b"upgrade: websocket" not in bytes(buffer).lower():
+                        try:
+                            more = await asyncio.wait_for(client_reader.read(4096), timeout=0.10)
+                            if more:
+                                buffer.extend(more)
+                                th2, tp2, ic2 = parse_target(buffer)
+                                if th2 and ic2:
+                                    target_host, target_port, is_connect = th2, tp2, ic2
+                        except (asyncio.TimeoutError, ConnectionResetError):
+                            pass
                     break
     except (asyncio.TimeoutError, ConnectionResetError):
         pass
@@ -148,14 +222,26 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         client_writer.close()
         return
 
-    # Fallback to default SSH if no host could be parsed (raw injection payload)
+    # Extract any pipelined data immediately following HTTP request headers
+    header_end = -1
+    idx = buffer.find(b"\r\n\r\n")
+    if idx != -1:
+        header_end = idx + 4
+    else:
+        idx = buffer.find(b"\n\n")
+        if idx != -1:
+            header_end = idx + 2
+
+    leftover = bytes(buffer[header_end:]) if (header_end != -1 and header_end < len(buffer)) else b""
+
+    # Fallback to default Dropbear SSH if no host could be parsed
     if not target_host:
         target_host = DEFAULT_HOST
         target_port = DEFAULT_PORT
         is_connect = True
 
-    # Normalize local loopback destinations
-    if is_local_ip(target_host):
+    # Normalize local loopback destinations (bypasses cloud NAT hairpinning)
+    if is_local_target(target_host, target_port):
         target_host = "127.0.0.1"
         if target_port not in ALLOWED_LOCAL_PORTS:
             log.warning("Blocked local port access: %s:%d from %s", target_host, target_port, client_addr)
@@ -164,12 +250,22 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
             client_writer.close()
             return
 
-    # Connect to target
-    log.info("Connecting %s -> %s:%d (is_connect=%s)", client_addr, target_host, target_port, is_connect)
+    # Check for direct SSH over HTTP (e.g. GET / with Upgrade: websocket)
+    buf_lower = bytes(buffer).lower()
+    is_ws_direct = (not is_connect) and (b"upgrade: websocket" in buf_lower)
+    if is_ws_direct and target_host == "127.0.0.1" and target_port in (80, 443):
+        # Direct websocket injection to SSH
+        target_port = DEFAULT_PORT
+        is_connect = True
+
+    # Connect to target service
+    log.info("Connecting %s -> %s:%d (is_connect=%s, leftover=%d B)",
+             client_addr, target_host, target_port, is_connect, len(leftover))
     try:
         target_reader, target_writer = await asyncio.wait_for(
             asyncio.open_connection(target_host, target_port), timeout=6.0
         )
+        set_tcp_opts(target_writer)
     except Exception as e:
         log.warning("Failed connecting to %s:%d: %s", target_host, target_port, e)
         try:
@@ -182,17 +278,23 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
 
     # Acknowledge handshake with carrier-demanded status code
     try:
-        if is_connect:
-            buf_lower = bytes(buffer).lower()
+        if is_connect or is_ws_direct:
             if b"upgrade: websocket" in buf_lower:
                 client_writer.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
             elif b"200 ok" in buf_lower:
                 client_writer.write(b"HTTP/1.1 200 OK\r\n\r\n")
+            elif b"http/1.0" in buf_lower[:30]:
+                client_writer.write(b"HTTP/1.0 200 Connection established\r\n\r\n")
             else:
                 client_writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
             await client_writer.drain()
+
+            # Forward any pipelined payload bytes (e.g. SSH identification string or TLS hello)
+            if leftover:
+                target_writer.write(leftover)
+                await target_writer.drain()
         else:
-            # For plain GET/POST, forward the accumulated initial buffer
+            # For plain GET/POST to external web targets, forward the HTTP request
             target_writer.write(buffer)
             await target_writer.drain()
     except Exception as e:
@@ -201,19 +303,24 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         target_writer.close()
         return
 
-    # Start bidirectional zero-copy pipe
-    await asyncio.gather(
-        pipe(client_reader, target_writer),
-        pipe(target_reader, client_writer),
-        return_exceptions=True,
-    )
+    # Start bidirectional zero-copy pipe and cleanly teardown on first close
+    pipe_client = asyncio.create_task(pipe(client_reader, target_writer))
+    pipe_target = asyncio.create_task(pipe(target_reader, client_writer))
+    done, pending = await asyncio.wait([pipe_client, pipe_target], return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+        task.cancel()
+    for writer in (client_writer, target_writer):
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
 
 
 async def main():
     servers = []
     for port in PORTS:
         try:
-            # Use 127.0.0.1 for 18088, BIND_ADDR (0.0.0.0) for public ports
             listen_ip = "127.0.0.1" if port == 18088 else BIND_ADDR
             try:
                 server = await asyncio.start_server(handle_client, listen_ip, port, reuse_port=True)

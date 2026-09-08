@@ -56,7 +56,7 @@ restore_path() {
 for path in /etc/systemd/system/badvpn@.service \
   /etc/systemd/system/wstunnel.service \
   /etc/systemd/system/hysteria.service /etc/systemd/system/zivpn.service \
-  /etc/systemd/system/singbox.service \
+  /etc/systemd/system/singbox.service /etc/systemd/system/mubx-chameleon.service \
   /etc/systemd/system/mubx-cron.service /etc/systemd/system/mubx-cron.timer \
   /etc/systemd/system/mubx-adaptive.service /etc/systemd/system/mubx-adaptive.timer \
   /etc/systemd/system/xray.service; do
@@ -72,7 +72,7 @@ for path in /usr/local/bin/menu /usr/local/bin/link-gen /usr/local/bin/add-user 
   /usr/local/bin/mubx-tune /usr/local/bin/mubx-warp /usr/local/bin/mubx-adaptive \
   /usr/local/bin/mubx-probe /usr/local/bin/mubx-restart-failed \
   /usr/local/bin/mubx-update /usr/local/bin/set-domain /usr/local/bin/mubx-cron \
-  /usr/local/bin/mubx-users /usr/local/bin/svc-status \
+  /usr/local/bin/mubx-users /usr/local/bin/svc-status /usr/local/bin/mubx-chameleon \
   /usr/local/bin/generate-secrets /usr/local/bin/uninstall.sh; do
   restore_path "$path"
 done

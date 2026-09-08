@@ -5,6 +5,12 @@
 set -Eeuo pipefail
 
 
+DOMAIN="$(cat /etc/mubx/domain 2>/dev/null || true)"
+if [ -z "$DOMAIN" ] && [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+  load_mubx_env 2>/dev/null || true
+fi
+
 # Every daemon MUB-X manages. Only services that were active when the
 # maintenance run started are revived afterwards, so an operator that
 # deliberately stopped something keeps it stopped.

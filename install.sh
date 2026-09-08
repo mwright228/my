@@ -190,7 +190,7 @@ export DEBIAN_FRONTEND=noninteractive
 run apt-get update
 run apt-get install -y ca-certificates curl certbot dnsutils lsof psmisc git jq \
   uuid-runtime openssl nginx dropbear haproxy openvpn wireguard-tools \
-  iptables iptables-persistent qrencode netcat-openbsd fail2ban python3-systemd \
+  iptables iptables-persistent qrencode netcat-openbsd fail2ban python3 python3-systemd \
   build-essential cmake libnspr4-dev libnss3-dev unzip iproute2
 grep -qxF '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shells
 install -d -m 0700 /etc/mubx

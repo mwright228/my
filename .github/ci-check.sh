@@ -479,7 +479,23 @@ web_payload = b"GET http://example.com:80/ HTTP/1.1\r\nHost: example.com\r\n\r\n
 h, p, ic = parse_target(web_payload)
 assert (h, p, ic) == ("example.com", 80, False), (h, p, ic)
 
-print("  Chameleon payload parser OK (split, front-inject, CONNECT, HTTP URL)")
+# Test 5: IPv6 CONNECT destination
+ipv6_payload = b"CONNECT [::1]:2222 HTTP/1.1\r\nHost: bug.com\r\n\r\n"
+h, p, ic = parse_target(ipv6_payload)
+assert (h, p, ic) == ("::1", 2222, True), (h, p, ic)
+
+# Test 6: Explicit X-Target header
+target_hdr = b"GET / HTTP/1.1\r\nHost: bug.com\r\nX-Target: 127.0.0.1:2222\r\n\r\n"
+h, p, ic = parse_target(target_hdr)
+assert (h, p, ic) == ("127.0.0.1", 2222, True), (h, p, ic)
+
+# Test 7: Local target normalization
+is_local_target = chameleon["is_local_target"]
+assert is_local_target("127.0.0.1", 443) is True
+assert is_local_target("my-vps-domain.com", 2222) is True
+assert is_local_target("example.com", 80) is False
+
+print("  Chameleon payload parser OK (split, front-inject, CONNECT, HTTP URL, IPv6, X-Target, local-normalizer)")
 PY
 
 if [ "$fail" -eq 0 ]; then
