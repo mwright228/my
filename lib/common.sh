@@ -56,8 +56,8 @@ load_mubx_env() {
         [[ "$value" != *$'\n'* ]] || die "Invalid newline in $key"
         printf -v "$key" '%s' "$value"
         ;;
-      REALITY_PRIVKEY|REALITY_PUBKEY|SHORT_ID|REALITY_FRONTS)
-        # Retired Reality keys from legacy installs: ignore silently
+      REALITY_PRIVKEY|REALITY_PUBKEY|SHORT_ID|REALITY_FRONTS|STLS_PASS|STLS_SERVER_NAME|SQUID_*)
+        # Retired Reality keys from legacy installs and legacy keys: ignore silently
         ;;
       '') ;;
       *) die "Unexpected key in $env_file: $key" ;;

@@ -35,9 +35,9 @@ load_secrets() {
         [[ "$value" != *$'\n'* ]] || die "Invalid secret value for $key."
         printf -v "$key" '%s' "$value"
         ;;
-      REALITY_PRIVKEY|REALITY_PUBKEY|SHORT_ID|REALITY_FRONTS|STLS_PASS|STLS_SERVER_NAME)
-        # Retired Reality keys from legacy installs and the alternative
-        # ShadowTLS key spelling: ignore silently
+      REALITY_PRIVKEY|REALITY_PUBKEY|SHORT_ID|REALITY_FRONTS|STLS_PASS|STLS_SERVER_NAME|SQUID_*)
+        # Retired Reality keys from legacy installs, alternative
+        # ShadowTLS spellings, and retired Squid keys: ignore silently
         ;;
       '') ;;
       *) die "Unexpected key in /etc/telecom-engine.env: $key" ;;
