@@ -73,6 +73,7 @@ def user_has_proto($p):
   elif (($p == "vless-ws" or $p == "vless_ws") and ((.protocols | index("vless") != null) or (.protocols | index("vless_ws") != null) or (.protocols | index("vless_ws_tls") != null) or (.protocols | index("vless_ws_ntls") != null))) then true
   elif (($p == "vless-httpupgrade" or $p == "vless_httpupgrade") and ((.protocols | index("vless") != null) or (.protocols | index("vless_httpupgrade") != null) or (.protocols | index("vless_httpupgrade_tls") != null) or (.protocols | index("vless_httpupgrade_ntls") != null))) then true
   elif (($p == "vless-xhttp" or $p == "vless_xhttp") and ((.protocols | index("vless") != null) or (.protocols | index("vless_xhttp") != null) or (.protocols | index("vless_xhttp_tls") != null))) then true
+  elif (($p == "vless-grpc" or $p == "vless_grpc" or $p == "vless_grpc_tls") and ((.protocols | index("vless") != null) or (.protocols | index("vless_grpc") != null) or (.protocols | index("vless_grpc_tls") != null))) then true
   elif (($p == "vmess-ws" or $p == "vmess_ws") and ((.protocols | index("vmess") != null) or (.protocols | index("vmess_ws") != null) or (.protocols | index("vmess_ws_tls") != null) or (.protocols | index("vmess_ws_ntls") != null))) then true
   elif (($p == "trojan-ws" or $p == "trojan_ws") and ((.protocols | index("trojan") != null) or (.protocols | index("trojan_ws") != null) or (.protocols | index("trojan_ws_tls") != null) or (.protocols | index("trojan_ws_ntls") != null))) then true
   elif (($p == "ss-ws" or $p == "ss_ws") and ((.protocols | index("ss") != null) or (.protocols | index("shadowsocks") != null) or (.protocols | index("ss_ws") != null) or (.protocols | index("ss_ws_tls") != null) or (.protocols | index("ss_ws_ntls") != null))) then true
@@ -85,6 +86,7 @@ def user_has_proto($p):
   elif ($p == "wireguard" and ((.protocols | index("wireguard") != null) or (.protocols | index("wg") != null) or (.protocols | index("vpn") != null))) then true
   elif (($p == "squid" or $p == "chameleon") and ((.protocols | index("squid") != null) or (.protocols | index("chameleon") != null))) then true
   elif ($p == "zivpn" and ((.protocols | index("zivpn") != null) or (.protocols | index("antidpi") != null))) then true
+  elif ($p == "tuic" and ((.protocols | index("tuic") != null) or (.protocols | index("antidpi") != null) or (.protocols | index("stealth") != null))) then true
   else false
   end;
 '
@@ -101,12 +103,12 @@ mubx_proto_normalize() { # $1 raw input string -> stdout JSON array
     case "$item" in
       0|8|all) tags+=("all") ;;
       1|ssh-bundle|ssh-only|ssh) tags+=("ssh" "chameleon") ;;
-      2|vless-bundle|vless) tags+=("vless_ws_tls" "vless_ws_ntls" "vless_httpupgrade_tls" "vless_httpupgrade_ntls" "vless_xhttp_tls" "vless_tcp_tls") ;;
+      2|vless-bundle|vless) tags+=("vless_ws_tls" "vless_ws_ntls" "vless_httpupgrade_tls" "vless_httpupgrade_ntls" "vless_xhttp_tls" "vless_grpc_tls" "vless_tcp_tls") ;;
       3|vmess-bundle|vmess) tags+=("vmess_ws_tls" "vmess_ws_ntls" "vmess_tcp") ;;
       4|trojan-bundle|trojan) tags+=("trojan_ws_tls" "trojan_ws_ntls" "trojan_tcp") ;;
       5|ss-bundle|shadowsocks|ss) tags+=("ss_ws_tls" "ss_ws_ntls" "ss_tcp" "ss_2022" "shadowtls") ;;
       6|vpn-bundle|vpn) tags+=("wireguard" "openvpn") ;;
-      7|antidpi-bundle|antidpi|stealth) tags+=("hysteria2" "shadowtls" "zivpn") ;;
+      7|antidpi-bundle|antidpi|stealth) tags+=("hysteria2" "shadowtls" "zivpn" "tuic") ;;
       10|ssh) tags+=("ssh") ;;
       11|openvpn|ovpn) tags+=("openvpn") ;;
       12|wireguard|wg) tags+=("wireguard") ;;
@@ -117,6 +119,7 @@ mubx_proto_normalize() { # $1 raw input string -> stdout JSON array
       23|vless-upg-ntls|vless_httpupgrade_ntls|vless-httpupgrade-80) tags+=("vless_httpupgrade_ntls") ;;
       24|vless-xhttp-tls|vless_xhttp_tls|vless-xhttp) tags+=("vless_xhttp_tls") ;;
       25|vless-tcp|vless_tcp_tls|vless-tcp-tls) tags+=("vless_tcp_tls") ;;
+      26|vless-grpc|vless-grpc-tls|vless_grpc_tls) tags+=("vless_grpc_tls") ;;
       30|vmess-ws-tls|vmess_ws_tls) tags+=("vmess_ws_tls") ;;
       31|vmess-ws-ntls|vmess_ws_ntls|vmess-ws-80) tags+=("vmess_ws_ntls") ;;
       32|vmess-tcp|vmess_tcp) tags+=("vmess_tcp") ;;
@@ -130,6 +133,7 @@ mubx_proto_normalize() { # $1 raw input string -> stdout JSON array
       60|shadowtls|stls) tags+=("shadowtls") ;;
       61|hysteria2|hy2) tags+=("hysteria2") ;;
       62|zivpn) tags+=("zivpn") ;;
+      63|tuic|tuic-v5) tags+=("tuic") ;;
       *) tags+=("$item") ;;
     esac
   done
@@ -173,7 +177,8 @@ mubx_proto_summary() { # $1 json_array_or_user_object -> formatted string
         (if ($p | index("wireguard") != null) then "WG" else empty end),
         (if ($p | index("openvpn") != null) then "OVPN" else empty end),
         (if (($p | index("squid") != null) or ($p | index("chameleon") != null)) then "Chameleon" else empty end),
-        (if ($p | index("zivpn") != null) then "ZivPN" else empty end)
+        (if ($p | index("zivpn") != null) then "ZivPN" else empty end),
+        (if ($p | index("tuic") != null) then "TUIC" else empty end)
       ] as $cats |
       if ($cats | length) > 0 then ($cats | join("+"))
       else ($p | length | tostring + " protos")
@@ -249,6 +254,7 @@ mubx_users_apply() { # $1 rendered config file
             elif \$tag == \"vmess-ws\" or \$proto == \"vmess\" then \"vmess-ws\"
             elif \$tag == \"vless-httpupgrade\" then \"vless-httpupgrade\"
             elif \$tag == \"vless-xhttp\" then \"vless-xhttp\"
+            elif \$tag == \"vless-grpc\" then \"vless_grpc_tls\"
             else \"vless-ws\"
             end
           ) as \$req_proto |
@@ -493,7 +499,7 @@ mubx_ss_443_apply() { # $1 rendered config file  $2 ss-443 inbound template
 # only then negotiate SS-2022 - the strongest anti-DPI pairing MUB-X ships.
 # Skipped when lib/subscribe.sh is unavailable (CI renders without keys).
 mubx_singbox_render() { # $1 template  $2 out
-  local tpl="$1" out="$2" ss22_pass
+  local tpl="$1" out="$2" ss22_pass tuic_users
   mubx_ensure_subscribe_loaded
   declare -F mubx_ss2022_psk >/dev/null 2>&1 || return 0
   ss22_pass="$(mubx_ss2022_psk admin)"
@@ -504,7 +510,18 @@ mubx_singbox_render() { # $1 template  $2 out
   }
   sed -e "s|__SHADOWTLS_PASS__|$SHADOWTLS_PASS|g" \
       -e "s|__SNI_FRONT__|${SHADOWTLS_SNI:-www.microsoft.com}|g" \
-      -e "s|__SS22_ADMIN_PASS__|$ss22_pass|g" "$tpl" > "$out"
+      -e "s|__SS22_ADMIN_PASS__|$ss22_pass|g" \
+      -e "s|__ADMIN_UUID__|${UUID:-11111111-2222-3333-4444-555555555555}|g" \
+      -e "s|__DOMAIN__|${DOMAIN:-example.com}|g" "$tpl" > "$out"
+  if [ -f "$MUBX_USERS_FILE" ]; then
+    tuic_users="$(jq -c "
+      ${JQ_PROTO_DEF}
+      [.[] | select((.status // \"active\") != \"frozen\") | select(user_has_proto(\"tuic\")) | {name: .name, uuid: .uuid, password: .uuid}]
+    " "$MUBX_USERS_FILE" 2>/dev/null || true)"
+    if [ -n "$tuic_users" ] && [ "$tuic_users" != "[]" ] && [ "$tuic_users" != "null" ]; then
+      jq --argjson tu "$tuic_users" '.inbounds |= map(if .tag == "tuic-in" then .users = $tu else . end)' "$out" > "$out.tmp" && mv -f "$out.tmp" "$out"
+    fi
+  fi
 }
 
 # Render /etc/nginx/nginx.conf from the template: expand the shared

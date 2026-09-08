@@ -122,6 +122,10 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
     printf 'vless://%s@%s:443?encryption=none&security=tls&type=xhttp&host=%s&sni=%s&path=%%2Fvless-xhttp#MUBX-XHTTP\n' \
       "$uuid" "$dom" "$dom" "$dom"
   fi
+  if mubx_user_has_proto "$user" "vless_grpc_tls"; then
+    printf 'vless://%s@%s:443?encryption=none&security=tls&type=grpc&serviceName=vless-grpc&host=%s&sni=%s#MUBX-VLESS-gRPC\n' \
+      "$uuid" "$dom" "$dom" "$dom"
+  fi
   if mubx_user_has_proto "$user" "vmess_ws_tls"; then
     printf 'vmess://%s\n' \
       "$(printf '{"v":"2","ps":"MUBX-VMess","add":"%s","port":"443","id":"%s","aid":"0","net":"ws","path":"/vmess-ws","type":"none","host":"%s","tls":"tls","sni":"%s"}' \
@@ -175,6 +179,11 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
     printf 'http://%s:3128#MUBX-Chameleon-3128\n' "$dom"
     printf 'http://%s:8888#MUBX-Chameleon-8888\n' "$dom"
   fi
+  # TUIC v5 Native QUIC (UDP 8443)
+  if mubx_user_has_proto "$user" "tuic"; then
+    printf 'tuic://%s:%s@%s:8443?congestion_control=bbr&alpn=h3&sni=%s&allow_insecure=0#MUBX-TUIC-v5\n' \
+      "$uuid" "$uuid" "$dom" "$dom"
+  fi
 }
 
 # --- Clash (YAML; JSON is a valid YAML subset and Clash parses it) --------
@@ -217,7 +226,17 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
         mode: \"websocket\", tls: true, host: \$dom, path: (\"/ss22-\" + \$user), mux: false
       }}] else [] end);
     (if (cur_user | user_has_proto(\"hysteria2\")) then [ hy2 ] else [] end)
+    + (if (cur_user | user_has_proto(\"tuic\")) then [{
+        name: \"MUBX-TUIC-v5\", type: \"tuic\", server: \$dom, port: 8443,
+        uuid: \$uuid, password: \$uuid, \"congestion-controller\": \"bbr\",
+        udp: true, tls: true, sni: \$dom, alpn: [\"h3\"], \"skip-cert-verify\": false
+      }] else [] end)
     + (if (cur_user | user_has_proto(\"vless-ws\")) then [ vws(\"/vless-ws\"; \"MUBX-VLESS-WS\") ] else [] end)
+    + (if (cur_user | user_has_proto(\"vless_grpc_tls\")) then [{
+        name: \"MUBX-VLESS-gRPC\", type: \"vless\", server: \$dom, port: 443,
+        uuid: \$uuid, udp: true, tls: true, servername: \$dom, network: \"grpc\",
+        \"grpc-opts\": {\"grpc-service-name\": \"vless-grpc\"}
+      }] else [] end)
     + (if (cur_user | user_has_proto(\"vless-httpupgrade\")) then [{
         name: \"MUBX-HTTPUpgrade\", type: \"vless\", server: \$dom, port: 443,
         uuid: \$uuid, udp: true, tls: true, servername: \$dom, network: \"ws\",
@@ -314,10 +333,20 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
         type: \"hysteria2\", tag: \"MUBX-Hysteria2\", server: \$dom, server_port: 4433,
         password: \$hy2pass, tls: {enabled: true, server_name: \$dom}} + hop(1)
       ] else [] end)
+      + (if (cur_user | user_has_proto(\"tuic\")) then [{
+        type: \"tuic\", tag: \"MUBX-TUIC-v5\", server: \$dom, server_port: 8443, uuid: \$uuid,
+        password: \$uuid, congestion_control: \"bbr\",
+        tls: {enabled: true, server_name: \$dom, alpn: [\"h3\"]}
+      }] else [] end)
       + (if (cur_user | user_has_proto(\"vless-ws\")) then [{
         type: \"vless\", tag: \"MUBX-VLESS-WS\", server: \$dom, server_port: 443, uuid: \$uuid,
         tls: {enabled: true, server_name: \$dom},
         transport: {type: \"ws\", path: \"/vless-ws\", headers: {Host: \$dom}}
+      }] else [] end)
+      + (if (cur_user | user_has_proto(\"vless_grpc_tls\")) then [{
+        type: \"vless\", tag: \"MUBX-VLESS-gRPC\", server: \$dom, server_port: 443, uuid: \$uuid,
+        tls: {enabled: true, server_name: \$dom},
+        transport: {type: \"grpc\", service_name: \"vless-grpc\"}
       }] else [] end)
       + (if (cur_user | user_has_proto(\"vless-httpupgrade\")) then [{
         type: \"vless\", tag: \"MUBX-HTTPUpgrade\", server: \$dom, server_port: 443, uuid: \$uuid,

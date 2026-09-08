@@ -240,7 +240,7 @@ assert cfg["policy"]["levels"]["0"]["statsUserUplink"] is True, "policy missing"
 tags = {i["tag"] for i in cfg["inbounds"]}
 assert "api" in tags, "api inbound missing"
 assert cfg["routing"]["rules"][0]["inboundTag"] == ["api"], "api routing missing"
-for tag in ("vless-ws", "vmess-ws", "trojan-ws", "vless-httpupgrade", "vless-xhttp"):
+for tag in ("vless-ws", "vmess-ws", "trojan-ws", "vless-httpupgrade", "vless-xhttp", "vless-grpc"):
     inbound = next(i for i in cfg["inbounds"] if i["tag"] == tag)
     clients = inbound["settings"]["clients"]
     assert len(clients) == len(users), (tag, len(clients))
@@ -270,7 +270,7 @@ PY
           fail=1
         }
       done
-      for loc in '/vless-httpupgrade' '/vless-xhttp'; do
+      for loc in '/vless-httpupgrade' '/vless-xhttp' '/vless-grpc'; do
         [ "$(grep -c "location $loc" "$tmp/nginx.conf")" -eq 2 ] || {
           echo "$loc must appear in both nginx servers (443 TLS + 80 plain)"
           fail=1
@@ -332,6 +332,12 @@ if command -v jq >/dev/null 2>&1; then
     }
     grep -q 'MUBX-SS22-alice' "$tmp2/sub/$tok/links.txt" || {
       echo "SS22 link missing from subscription"; fail=1
+    }
+    grep -q 'MUBX-VLESS-gRPC' "$tmp2/sub/$tok/links.txt" || {
+      echo "VLESS-gRPC link missing from subscription"; fail=1
+    }
+    grep -q 'MUBX-TUIC-v5' "$tmp2/sub/$tok/links.txt" || {
+      echo "TUIC-v5 link missing from subscription"; fail=1
     }
     grep -q 'mport' "$tmp2/sub/$tok/links.txt" && {
       echo "unexpected mport (port hopping is not configured)"; fail=1
@@ -422,9 +428,16 @@ ss = [i for i in cfg["inbounds"] if i["type"] == "shadowsocks"][0]
 assert ss["listen"] == "127.0.0.1" and ss["listen_port"] == 18500
 assert ss["method"] == "2022-blake3-aes-256-gcm"
 assert len(base64.b64decode(ss["password"])) == 32, "admin key must be 32 bytes"
-print("  sing-box render OK: shadowtls v3 loopback :8448 (SNI-routed from 443) -> ss2022 127.0.0.1:18500 (32B admin key)")
+tuics = [i for i in cfg["inbounds"] if i.get("tag") == "tuic-in"]
+assert len(tuics) == 1, "expected 1 tuic inbound"
+tu = tuics[0]
+assert tu["type"] == "tuic", tu["type"]
+assert tu["listen_port"] == 8443, tu["listen_port"]
+assert tu["congestion_control"] == "bbr", tu["congestion_control"]
+assert len(tu.get("users", [])) >= 1, "tuic users missing"
+print("  sing-box render OK: shadowtls v3 loopback :8448 (SNI-routed from 443) -> ss2022 127.0.0.1:18500 (32B admin key) + tuic v5 :8443")
 PY
-    # The subscription for admin must contain the ShadowTLS node.
+    # The subscription for admin must contain the ShadowTLS and TUIC nodes.
     tok="$(sed 's|https://example.com/sub/||; s|/index.txt||' "$tmp4/url")"
     if grep -q 'MUBX-ShadowTLS' "$tmp4/sub/$tok/clash.yaml" 2>/dev/null && \
        grep -q '\"port\": 443' "$tmp4/sub/$tok/clash.yaml" && \
@@ -432,6 +445,12 @@ PY
       echo "  ShadowTLS subscription entries OK (clash + sing-box)"
     else
       echo "ShadowTLS subscription entries missing or invalid"; fail=1
+    fi
+    if grep -q 'MUBX-TUIC-v5' "$tmp4/sub/$tok/clash.yaml" 2>/dev/null && \
+       python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); tags=[o["tag"] for o in d["outbounds"]]; assert "MUBX-TUIC-v5" in tags, tags' "$tmp4/sub/$tok/singbox.json" 2>/dev/null; then
+      echo "  TUIC v5 subscription entries OK (clash + sing-box)"
+    else
+      echo "TUIC v5 subscription entries missing or invalid"; fail=1
     fi
   fi
 fi

@@ -122,8 +122,17 @@ fi
 # ============================================================================
 # 1. ANTI-DPI & STEALTH PROTOCOLS
 # ============================================================================
-if u_has "hysteria2" || u_has "shadowtls" || u_has "zivpn"; then
+if u_has "hysteria2" || u_has "shadowtls" || u_has "zivpn" || u_has "tuic"; then
   card_header "hysteria singbox" "ANTI-DPI & STEALTH PROTOCOLS" "NEXT-GEN"
+
+  # TUIC v5
+  if u_has "tuic"; then
+    item "TUIC-v5" "TUIC v5 (QUIC 0-RTT / UDP 8443)"
+    block "tuic://${UUID}:${UUID}@${BUG}:8443?congestion_control=bbr&alpn=h3&sni=${BUG}&allow_insecure=0#MUBX-TUIC-v5"
+    manual "Address: ${BUG} | Port: 8443 | UUID: ${UUID} | Password: ${UUID} | Congestion: bbr | ALPN: h3 | SNI: ${BUG}"
+    note "Native QUIC 0-RTT handshake with BBR congestion control over UDP 8443"
+    note "Supported in sing-box, Clash.Meta / Mihomo, NekoBox, v2rayN"
+  fi
 
   # Hysteria 2
   if u_has "hysteria2" && [ -n "$HY2_PASS" ]; then
@@ -165,8 +174,15 @@ fi
 # ============================================================================
 # 2. XRAY MULTI-TRANSPORT INGRESS
 # ============================================================================
-if u_has "vless_ws_tls" || u_has "vless_ws_ntls" || u_has "vless_httpupgrade_tls" || u_has "vless_httpupgrade_ntls" || u_has "vless_xhttp_tls" || u_has "vmess_ws_tls" || u_has "vmess_ws_ntls" || u_has "trojan_ws_tls" || u_has "trojan_ws_ntls"; then
+if u_has "vless_ws_tls" || u_has "vless_ws_ntls" || u_has "vless_httpupgrade_tls" || u_has "vless_httpupgrade_ntls" || u_has "vless_xhttp_tls" || u_has "vless_grpc_tls" || u_has "vmess_ws_tls" || u_has "vmess_ws_ntls" || u_has "trojan_ws_tls" || u_has "trojan_ws_ntls"; then
   card_header "xray" "XRAY TRANSPORTS" "TLS & HTTP/80"
+
+  if u_has "vless_grpc_tls"; then
+    item "VLESS-gRPC" "VLESS gRPC (TLS 443)"
+    block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=grpc&serviceName=vless-grpc&host=${DOMAIN}&sni=${BUG}#MUBX-VLESS-gRPC"
+    manual "Address: ${BUG} | Port: 443 | UUID: ${UUID} | Network: grpc | ServiceName: vless-grpc | Host: ${DOMAIN} | Security: tls | SNI: ${BUG}"
+    note "Multiplexed HTTP/2 microservice tunnel; immune to WebSocket inspect/rst"
+  fi
 
   if u_has "vless_ws_tls"; then
     item "VLESS-WS" "VLESS WebSocket (TLS 443)"

@@ -96,6 +96,7 @@ while IFS=$'\t' read -r tag proto port; do
     trojan-ws)         label="Trojan WebSocket (TLS 443 / 80)" ;;
     vless-httpupgrade) label="VLESS HTTPUpgrade" ;;
     vless-xhttp)       label="VLESS xHTTP" ;;
+    vless-grpc)        label="VLESS gRPC (HTTP/2 Ingress)" ;;
     shadowsocks-*)     name="${tag#shadowsocks-}"
                        label="Shadowsocks WS ($name)" ;;
     ss2022-*)          name="${tag#ss2022-}"
@@ -114,6 +115,7 @@ group_open "STEALTH & TUNNELS" "CORE"
 row "Hysteria 2 (UDP 4433)"      hysteria           udp 4433
 if [ -f /etc/systemd/system/singbox.service ] && [ -s /etc/sing-box/config.json ]; then
   row "ShadowTLS v3 + SS-2022"    singbox            tcp 8448
+  row "TUIC v5 Native QUIC (8443)" singbox           udp 8443
 fi
 row "ZivPN UDP Tunnel (5667)"    zivpn              udp 5667
 row "WireGuard (UDP 51820)"      wg-quick@wg0       udp 51820
