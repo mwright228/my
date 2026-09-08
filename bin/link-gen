@@ -19,6 +19,7 @@ elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/render.sh" ]; then
 fi
 
 load_mubx_env 2>/dev/null || true
+[ -n "${DOMAIN:-}" ] || DOMAIN="$(cat /etc/mubx/domain 2>/dev/null || cat /usr/local/etc/xray/domain 2>/dev/null || true)"
 BUG="${1:-${DOMAIN:-}}"
 USER_NAME="${2:-admin}"
 
@@ -363,7 +364,7 @@ if [ -n "$sub_tok" ] && [ -n "${DOMAIN:-}" ]; then
   item "SINGBOX" "sing-box JSON Config URL"
   block "https://${DOMAIN}/sub/${sub_tok}/singbox.json"
   item "BASE64" "Universal Base64 Node List URL (v2rayNG / Shadowrocket)"
-  block "https://${DOMAIN}/sub/${sub_tok}/sub.txt"
+  block "https://${DOMAIN}/sub/${sub_tok}/index.txt"
   mubx_box_bot
 fi
 

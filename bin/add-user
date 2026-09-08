@@ -15,6 +15,7 @@ if [ -r /usr/local/lib/mubx/render.sh ]; then
 elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/render.sh" ]; then
   source "$(dirname "${BASH_SOURCE[0]}")/../lib/render.sh"
 fi
+[ -n "${DOMAIN:-}" ] || DOMAIN="$(cat /etc/mubx/domain 2>/dev/null || cat /usr/local/etc/xray/domain 2>/dev/null || true)"
 
 u="${1:-}"
 p="${2:-}"
