@@ -726,7 +726,7 @@ fi
 # by generate-secrets.
 rm -f /usr/local/bin/reality-fronts /usr/local/lib/mubx/reality-build.sh
 run systemctl daemon-reload
-for svc in nginx haproxy xray dropbear squid wstunnel; do
+for svc in nginx haproxy xray dropbear squid wstunnel mubx-chameleon; do
   run systemctl enable "$svc"
   run systemctl restart "$svc"
   systemctl is-active --quiet "$svc" || die "$svc failed to start; inspect journalctl -u $svc."

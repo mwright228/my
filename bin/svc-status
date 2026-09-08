@@ -121,11 +121,12 @@ group_close
 
 # --- Ingress & Proxy Layer --------------------------------------------------
 group_open "INGRESS & PROXY" "PORTS"
-row "HAProxy 443 Demux"          haproxy tcp 443
-row "Nginx Web & TLS (20443)"    nginx   tcp 20443
-row "Nginx HTTP (80)"            nginx   tcp 80
-row "Squid CONNECT (8080/3128)"  squid   tcp 8080
-row "Fail2ban Defense"           fail2ban "" ""
+row "HAProxy 443/8443 Demux"          haproxy tcp 443
+row "Nginx Web & TLS (20443)"        nginx   tcp 20443
+row "Nginx HTTP (80)"                nginx   tcp 80
+row "Chameleon Engine (8080/3128)"   mubx-chameleon tcp 8080
+row "Squid CONNECT (8080/3128)"      squid   tcp 8080
+row "Fail2ban Defense"               fail2ban "" ""
 group_close
 
 # --- BadVPN UDPGW -----------------------------------------------------------

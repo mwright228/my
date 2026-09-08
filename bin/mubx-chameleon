@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""
+MUB-X Chameleon Universal Payload Engine (bin/mubx-chameleon).
+
+Telecom-grade HTTP CONNECT & Injection Proxy with Squid 3.3.8 leniency.
+Designed specifically for mobile carrier bug-host payloads (HTTP Injector,
+HTTP Custom, NetMod, KPN Tunnel):
+  - Zero-rejection state machine: never returns 400 Bad Request on split
+    payloads ([split], [delay_split]), leading/trailing CRLFs, front/back
+    inject headers (X-Online-Host, Host:), or custom methods.
+  - Multi-port listener: binds 8080, 3128, 8888, and loopback 18088 (HAProxy
+    multiplexed from 443 / 8443).
+  - Smart Dispatcher: seamlessly bridges to local MUB-X services (Dropbear
+    SSH :2222/:109/:53, Sing-box ShadowTLS :8448, SS-2022 :18500,
+    wstunnel :18080, SS-443 :17000, ZivPN :5667, OpenVPN :1194) or
+    outbound internet targets (:80, :443) with zero-copy stream piping.
+"""
+
+import asyncio
+import logging
+import os
+import re
+import signal
+import sys
+from typing import Optional, Tuple
+
+# Configure logging
+LOG_LEVEL = os.environ.get("CHAMELEON_LOG", "WARNING").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.WARNING),
+    format="%(asctime)s [%(levelname)s] [chameleon] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger("chameleon")
+
+# Ports to listen on
+BIND_ADDR = os.environ.get("CHAMELEON_BIND", "0.0.0.0")
+PORTS = [
+    int(p.strip())
+    for p in os.environ.get("CHAMELEON_PORTS", "8080,3128,8888,18088").split(",")
+    if p.strip().isdigit()
+]
+
+# Default target when client doesn't specify port (e.g. raw SSH over HTTP)
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 2222
+
+# Permitted internal local targets
+ALLOWED_LOCAL_PORTS = {
+    22, 53, 80, 109, 443, 1194, 2222, 5667, 8388, 8389, 8443, 8448,
+    17000, 18080, 18500, 20443
+}
+
+BUFFER_SIZE = 65536  # 64KB high-throughput buffer matching kernel TCP tuning
+
+# Precompiled regexes for lenient payload extraction
+RE_CONNECT = re.compile(rb"(?i)\bCONNECT\s+([a-zA-Z0-9\.\-_]+):?(\d+)?")
+RE_HOST_HDR = re.compile(rb"(?i)\r?\n(?:X-Online-Host|X-Forward-Host|Host):\s*([a-zA-Z0-9\.\-_]+):?(\d+)?")
+RE_HTTP_URL = re.compile(rb"(?i)\b(?:GET|POST|HEAD|OPTIONS|PUT|DELETE|TRACE|PATCH)\s+https?://([a-zA-Z0-9\.\-_]+):?(\d+)?")
+RE_PROXY_CONN = re.compile(rb"(?i)\r?\nProxy-Connection:.*?\r?\n")
+
+
+def parse_target(buffer: bytes) -> Tuple[Optional[str], Optional[int], bool]:
+    """
+    Leniently inspects any HTTP injector payload to extract the intended
+    target host and port. Returns (host, port, is_connect).
+    """
+    # 1. Standard or mangled CONNECT request
+    m = RE_CONNECT.search(buffer)
+    if m:
+        host = m.group(1).decode("ascii", errors="ignore")
+        port = int(m.group(2).decode("ascii")) if m.group(2) else 443
+        return host, port, True
+
+    # 2. Plain HTTP request with absolute URI (e.g. GET http://domain:port/ ...)
+    m = RE_HTTP_URL.search(buffer)
+    if m:
+        host = m.group(1).decode("ascii", errors="ignore")
+        port = int(m.group(2).decode("ascii")) if m.group(2) else 80
+        return host, port, False
+
+    # 3. Host / X-Online-Host header in split or front/back inject payloads
+    m = RE_HOST_HDR.search(buffer)
+    if m:
+        host = m.group(1).decode("ascii", errors="ignore")
+        port = int(m.group(2).decode("ascii")) if m.group(2) else 443
+        return host, port, True
+
+    return None, None, False
+
+
+def is_local_ip(host: str) -> bool:
+    """Checks if target host refers to the local machine."""
+    return host in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
+
+
+async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    """Bidirectional asynchronous streaming with 64KB chunks."""
+    try:
+        while not reader.at_eof():
+            data = await reader.read(BUFFER_SIZE)
+            if not data:
+                break
+            writer.write(data)
+            await writer.drain()
+    except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
+        pass
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+
+async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter):
+    """
+    Handles an incoming connection, buffering through potential [split] or
+    [delay_split] chunks until an actionable HTTP request is received.
+    """
+    client_addr = client_writer.get_extra_info("peername")
+    log.debug("Client connected: %s", client_addr)
+
+    buffer = bytearray()
+    target_host = None
+    target_port = None
+    is_connect = False
+
+    # Accumulate payload chunks (handles [split], [delay_split], leading CRLFs)
+    try:
+        while len(buffer) < 8192:
+            chunk = await asyncio.wait_for(client_reader.read(4096), timeout=5.0)
+            if not chunk:
+                break
+            buffer.extend(chunk)
+
+            # Check if we have enough to identify the target
+            th, tp, ic = parse_target(buffer)
+            if th:
+                target_host, target_port, is_connect = th, tp, ic
+                # Check for end of HTTP headers (\r\n\r\n or \n\n)
+                if b"\r\n\r\n" in buffer or b"\n\n" in buffer:
+                    break
+    except (asyncio.TimeoutError, ConnectionResetError):
+        pass
+
+    # Fallback to default SSH if no host could be parsed (raw injection payload)
+    if not target_host:
+        target_host = DEFAULT_HOST
+        target_port = DEFAULT_PORT
+        is_connect = True
+
+    # Normalize local loopback destinations
+    if is_local_ip(target_host):
+        target_host = "127.0.0.1"
+        if target_port not in ALLOWED_LOCAL_PORTS:
+            log.warning("Blocked local port access: %s:%d from %s", target_host, target_port, client_addr)
+            client_writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+            await client_writer.drain()
+            client_writer.close()
+            return
+
+    # Connect to target
+    log.info("Connecting %s -> %s:%d (is_connect=%s)", client_addr, target_host, target_port, is_connect)
+    try:
+        target_reader, target_writer = await asyncio.wait_for(
+            asyncio.open_connection(target_host, target_port), timeout=6.0
+        )
+    except Exception as e:
+        log.warning("Failed connecting to %s:%d: %s", target_host, target_port, e)
+        try:
+            client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+            await client_writer.drain()
+            client_writer.close()
+        except Exception:
+            pass
+        return
+
+    # Acknowledge CONNECT with 200 Connection Established (Squid style)
+    try:
+        if is_connect:
+            client_writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            await client_writer.drain()
+        else:
+            # For plain GET/POST, forward the accumulated initial buffer
+            target_writer.write(buffer)
+            await target_writer.drain()
+    except Exception as e:
+        log.debug("Error sending handshake ack: %s", e)
+        client_writer.close()
+        target_writer.close()
+        return
+
+    # Start bidirectional zero-copy pipe
+    await asyncio.gather(
+        pipe(client_reader, target_writer),
+        pipe(target_reader, client_writer),
+        return_exceptions=True,
+    )
+
+
+async def main():
+    servers = []
+    for port in PORTS:
+        try:
+            # Use 127.0.0.1 for 18088, BIND_ADDR (0.0.0.0) for public ports
+            listen_ip = "127.0.0.1" if port == 18088 else BIND_ADDR
+            server = await asyncio.start_server(handle_client, listen_ip, port, reuse_port=True)
+            servers.append(server)
+            log.info("MUB-X Chameleon listening on %s:%d", listen_ip, port)
+        except Exception as e:
+            log.error("Failed to bind on port %d: %s", port, e)
+
+    if not servers:
+        sys.exit(1)
+
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except NotImplementedError:
+            pass
+
+    await stop_event.wait()
+    log.info("Shutting down MUB-X Chameleon...")
+    for s in servers:
+        s.close()
+        await s.wait_closed()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        pass

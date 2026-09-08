@@ -10,9 +10,16 @@ say() { printf '== %s\n' "$*"; }
 say "shell syntax"
 for f in install.sh bin/* lib/*.sh .github/ci-check.sh; do
   [ -f "$f" ] || continue
-  if ! bash -n "$f"; then
-    echo "SYNTAX FAIL: $f"
-    fail=1
+  if head -n 1 "$f" | grep -q 'python'; then
+    if ! python3 -m py_compile "$f"; then
+      echo "PYTHON SYNTAX FAIL: $f"
+      fail=1
+    fi
+  else
+    if ! bash -n "$f"; then
+      echo "SYNTAX FAIL: $f"
+      fail=1
+    fi
   fi
 done
 
@@ -446,6 +453,34 @@ lockfile="$tmp5/test.lock"
 ) || fail=1
 rm -rf "$tmp5"
 echo "  concurrency lock test OK (10 parallel jobs cleanly serialized)"
+
+say "Chameleon Universal Payload Engine smoke test"
+python3 - <<'PY' || fail=1
+import runpy
+chameleon = runpy.run_path("bin/mubx-chameleon")
+parse_target = chameleon["parse_target"]
+
+# Test 1: Standard CONNECT
+h, p, ic = parse_target(b"CONNECT 127.0.0.1:2222 HTTP/1.1\r\nHost: bug-host.com\r\n\r\n")
+assert (h, p, ic) == ("127.0.0.1", 2222, True), (h, p, ic)
+
+# Test 2: Split payload
+split_payload = b"GET http://downloads.vodafone.co.uk/ HTTP/1.1\r\nHost: downloads.vodafone.co.uk\r\n\r\nCONNECT 127.0.0.1:8448 HTTP/1.1\r\n\r\n"
+h, p, ic = parse_target(split_payload)
+assert (h, p, ic) == ("127.0.0.1", 8448, True), (h, p, ic)
+
+# Test 3: Front-inject with X-Online-Host
+front_inject = b"CONNECT 127.0.0.1:18500 HTTP/1.1\r\nX-Online-Host: downloads.vodafone.co.uk\r\nConnection: Keep-Alive\r\n\r\n"
+h, p, ic = parse_target(front_inject)
+assert (h, p, ic) == ("127.0.0.1", 18500, True), (h, p, ic)
+
+# Test 4: Web destination
+web_payload = b"GET http://example.com:80/ HTTP/1.1\r\nHost: example.com\r\n\r\n"
+h, p, ic = parse_target(web_payload)
+assert (h, p, ic) == ("example.com", 80, False), (h, p, ic)
+
+print("  Chameleon payload parser OK (split, front-inject, CONNECT, HTTP URL)")
+PY
 
 if [ "$fail" -eq 0 ]; then
   say "all checks passed"

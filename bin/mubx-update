@@ -37,7 +37,7 @@ fi
 
 
 SERVICES=(
-  haproxy nginx xray dropbear squid wstunnel hysteria zivpn singbox
+  haproxy nginx xray dropbear squid wstunnel hysteria zivpn singbox mubx-chameleon
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400
   badvpn@7500 badvpn@7600 badvpn@7700
@@ -226,6 +226,11 @@ mubx_box_bot
 printf '\n'
 
 down=0
+systemctl daemon-reload 2>/dev/null || true
+if systemctl cat mubx-chameleon.service >/dev/null 2>&1 && ! systemctl is-active --quiet mubx-chameleon 2>/dev/null; then
+  systemctl enable --now mubx-chameleon.service 2>/dev/null || true
+  was_active["mubx-chameleon"]=1
+fi
 mubx_group_open "SERVICES RELOAD"
 for svc in "${SERVICES[@]}"; do
   systemctl cat "$svc.service" >/dev/null 2>&1 || continue
