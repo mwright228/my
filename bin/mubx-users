@@ -177,12 +177,12 @@ cmd_add() { # $1 name  $2 days (optional)  $3 quota_gb (optional)  $4 protocols 
   store_require
   name_ok "$name" || { warn "Bad username (3-32 chars, lowercase, [a-z0-9_-])"; return 1; }
   user_exists "$name" && { warn "User '$name' already exists."; return 1; }
-  uuid="$(cat /proc/sys/kernel/random/uuid)"
+  uuid="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')"
   added="$(date -u '+%Y-%m-%d')"
   expiry=""
   if [ -n "$days" ]; then
     [[ "$days" =~ ^[1-9][0-9]*$ ]] || { warn "Days must be a positive integer"; return 1; }
-    expiry="$(date -d "+${days} days" '+%Y-%m-%d')"
+    expiry="$(date -d "+${days} days" '+%Y-%m-%d' 2>/dev/null || date -v "+${days}d" '+%Y-%m-%d' 2>/dev/null || echo '')"
   fi
   [[ "$quota_gb" =~ ^[0-9]+$ ]] || quota_gb=0
   

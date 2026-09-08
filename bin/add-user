@@ -53,6 +53,7 @@ else
 fi
 
 [[ "$u" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] || die "Bad username (must be 3-32 chars, lowercase, [a-z0-9_-])"
+[ "$u" != "admin" ] || die "The 'admin' account is reserved for the primary system identity."
 
 # Check if SSH or system authentication is needed
 has_ssh=true
