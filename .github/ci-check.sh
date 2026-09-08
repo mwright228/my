@@ -343,7 +343,13 @@ if command -v jq >/dev/null 2>&1; then
       echo "unexpected mport (port hopping is not configured)"; fail=1
     }
     grep -q 'MUBX-SS-443' "$tmp2/sub/$tok/links.txt" && {
-      echo "shared SS-443 link must not appear for non-admin users"; fail=1
+      echo "shared SS-443 link must not appear for non-admin users in links.txt"; fail=1
+    }
+    grep -q 'MUBX-SS-443' "$tmp2/sub/$tok/clash.yaml" && {
+      echo "shared SS-443 link must not appear for non-admin users in clash.yaml"; fail=1
+    }
+    grep -q 'MUBX-SS-443' "$tmp2/sub/$tok/singbox.json" && {
+      echo "shared SS-443 link must not appear for non-admin users in singbox.json"; fail=1
     }
     echo "  subscription files OK for alice (token path verified)"
   fi

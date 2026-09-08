@@ -268,13 +268,13 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
           version: 3, password: \$stls, host: \$sni
         }
       }] else [] end)
-    + (if (cur_user | user_has_proto(\"ss-tcp\")) then [{
+    + (if (cur_user | user_has_proto(\"ss-tcp\")) then ([{
         name: \"MUBX-SS-TCP\", type: \"ss\", server: \$dom, port: \$ssport,
         cipher: \"aes-256-gcm\", password: \$uuid, udp: true
-      }, {
+      }] + (if \$isadmin == 1 then [{
         name: \"MUBX-SS-443\", type: \"ss\", server: \$dom, port: 443,
         cipher: \"aes-256-gcm\", password: \$uuid, udp: true
-      }] else [] end)
+      }] else [] end)) else [] end)
     + (if (cur_user | user_has_proto(\"chameleon\")) then [
         {name: \"MUBX-Chameleon-8080\", type: \"http\", server: \$dom, port: 8080},
         {name: \"MUBX-Chameleon-3128\", type: \"http\", server: \$dom, port: 3128},
@@ -376,13 +376,13 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
           plugin: \"v2ray-plugin\",
           plugin_opts: (\"tls;host=\" + \$dom + \";path=/ss22-\" + \$user + \";mux=0\")
       }] else [] end)
-      + (if (cur_user | user_has_proto(\"ss-tcp\")) then [{
+      + (if (cur_user | user_has_proto(\"ss-tcp\")) then ([{
         type: \"shadowsocks\", tag: \"MUBX-SS-TCP\", server: \$dom, server_port: \$ssport,
         method: \"aes-256-gcm\", password: \$uuid
-      }, {
+      }] + (if \$isadmin == 1 then [{
         type: \"shadowsocks\", tag: \"MUBX-SS-443\", server: \$dom, server_port: 443,
         method: \"aes-256-gcm\", password: \$uuid
-      }] else [] end)
+      }] else [] end)) else [] end)
       + (if (\$stls != \"\" and (cur_user | user_has_proto(\"shadowtls\"))) then [{
           type: \"shadowtls\", tag: \"MUBX-ShadowTLS-wrap\", server: \$dom, server_port: 443,
           version: 3, password: \$stls,

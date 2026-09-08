@@ -500,7 +500,7 @@ mubx_ss_443_apply() { # $1 rendered config file  $2 ss-443 inbound template
 # only then negotiate SS-2022 - the strongest anti-DPI pairing MUB-X ships.
 # Skipped when lib/subscribe.sh is unavailable (CI renders without keys).
 mubx_singbox_render() { # $1 template  $2 out
-  local tpl="$1" out="$2" ss22_pass tuic_users
+  local tpl="$1" out="$2" ss22_pass tuic_users admin_uuid dom
   mubx_ensure_subscribe_loaded
   declare -F mubx_ss2022_psk >/dev/null 2>&1 || return 0
   ss22_pass="$(mubx_ss2022_psk admin)"
@@ -509,11 +509,15 @@ mubx_singbox_render() { # $1 template  $2 out
     echo "[!] SHADOWTLS_PASS is not loaded; cannot render the sing-box config." >&2
     return 1
   }
+  admin_uuid="$(mubx_primary_uuid)"
+  [ -n "$admin_uuid" ] || admin_uuid="${UUID:-11111111-2222-3333-4444-555555555555}"
+  dom="${DOMAIN:-}"
+  [ -n "$dom" ] || dom="$(cat /etc/mubx/domain 2>/dev/null || cat /usr/local/etc/xray/domain 2>/dev/null || echo example.com)"
   sed -e "s|__SHADOWTLS_PASS__|$SHADOWTLS_PASS|g" \
       -e "s|__SNI_FRONT__|${SHADOWTLS_SNI:-www.microsoft.com}|g" \
       -e "s|__SS22_ADMIN_PASS__|$ss22_pass|g" \
-      -e "s|__ADMIN_UUID__|${UUID:-11111111-2222-3333-4444-555555555555}|g" \
-      -e "s|__DOMAIN__|${DOMAIN:-example.com}|g" "$tpl" > "$out"
+      -e "s|__ADMIN_UUID__|$admin_uuid|g" \
+      -e "s|__DOMAIN__|$dom|g" "$tpl" > "$out"
   if [ -f "$MUBX_USERS_FILE" ]; then
     tuic_users="$(jq -c "
       ${JQ_PROTO_DEF}
