@@ -210,7 +210,8 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
     def cur_user: {name: \$user, protocols: \$protos};
     def hy2: {
       name: \"MUBX-Hysteria2\", type: \"hysteria2\", server: \$dom, port: 4433,
-      password: \$hy2pass, sni: \$dom, \"skip-cert-verify\": false
+      password: \$hy2pass, sni: \$dom, \"skip-cert-verify\": false,
+      up: \"100 Mbps\", down: \"500 Mbps\"
     } + (if \$hy2range != \"\" then {\"ports\": (\$hy2range | gsub(\":\"; \"-\"))} else {} end);
     def vws(path; name): {
       name: name, type: \"vless\", server: \$dom, port: 443, uuid: \$uuid,
@@ -226,7 +227,8 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
     (if (cur_user | user_has_proto(\"hysteria2\")) then [ hy2 ] else [] end)
     + (if (cur_user | user_has_proto(\"tuic\")) then [{
         name: \"MUBX-TUIC-v5\", type: \"tuic\", server: \$dom, port: 8444,
-        uuid: \$uuid, password: \$uuid, version: 5, \"congestion-controller\": \"bbr\",
+        uuid: \$uuid, password: \$uuid, \"congestion-controller\": \"bbr\",
+        \"udp-relay-mode\": \"native\", \"reduce-rtt\": true,
         udp: true, tls: true, sni: \$dom, alpn: [\"h3\"], \"skip-cert-verify\": false
       }] else [] end)
     + (if (cur_user | user_has_proto(\"vless-ws\")) then [ vws(\"/vless-ws\"; \"MUBX-VLESS-WS\") ] else [] end)
@@ -237,8 +239,13 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
       }] else [] end)
     + (if (cur_user | user_has_proto(\"vless-httpupgrade\")) then [{
         name: \"MUBX-HTTPUpgrade\", type: \"vless\", server: \$dom, port: 443,
-        uuid: \$uuid, udp: true, tls: true, servername: \$dom, network: \"ws\",
-        \"ws-opts\": {path: \"/vless-httpupgrade\", headers: {Host: \$dom}}
+        uuid: \$uuid, udp: true, tls: true, servername: \$dom, network: \"httpupgrade\",
+        \"httpupgrade-opts\": {path: \"/vless-httpupgrade\", headers: {Host: \$dom}}
+      }] else [] end)
+    + (if (cur_user | user_has_proto(\"vless-xhttp\")) then [{
+        name: \"MUBX-VLESS-XHTTP\", type: \"vless\", server: \$dom, port: 443,
+        uuid: \$uuid, udp: true, tls: true, servername: \$dom, network: \"xhttp\",
+        \"xhttp-opts\": {path: \"/vless-xhttp\", mode: \"auto\", headers: {Host: \$dom}}
       }] else [] end)
     + (if (cur_user | user_has_proto(\"vmess-ws\")) then [{
         name: \"MUBX-VMess\", type: \"vmess\", server: \$dom, port: 443,
@@ -262,8 +269,9 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
     + (if (\$stls != \"\" and (cur_user | user_has_proto(\"shadowtls\"))) then [{
         name: \"MUBX-ShadowTLS\", type: \"ss\", server: \$dom, port: 443,
         cipher: \"2022-blake3-aes-256-gcm\", password: \$adminkey, udp: false,
-        plugin: \"shadow-tls\", \"plugin-opts\": {
-          version: 3, password: \$stls, host: \$sni
+        tls: true, sni: \$sni, servername: \$sni, \"skip-cert-verify\": false,
+        \"shadow-tls-opts\": {
+          version: 3, password: \$stls
         }
       }] else [] end)
     + (if (cur_user | user_has_proto(\"ss-tcp\")) then ([{
@@ -350,6 +358,11 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
         type: \"vless\", tag: \"MUBX-HTTPUpgrade\", server: \$dom, server_port: 443, uuid: \$uuid,
         tls: {enabled: true, server_name: \$dom},
         transport: {type: \"httpupgrade\", path: \"/vless-httpupgrade\", headers: {Host: \$dom}}
+      }] else [] end)
+      + (if (cur_user | user_has_proto(\"vless-xhttp\")) then [{
+        type: \"vless\", tag: \"MUBX-VLESS-XHTTP\", server: \$dom, server_port: 443, uuid: \$uuid,
+        tls: {enabled: true, server_name: \$dom},
+        transport: {type: \"xhttp\", path: \"/vless-xhttp\", headers: {Host: \$dom}}
       }] else [] end)
       + (if (cur_user | user_has_proto(\"vmess-ws\")) then [{
         type: \"vmess\", tag: \"MUBX-VMess\", server: \$dom, server_port: 443, uuid: \$uuid,
