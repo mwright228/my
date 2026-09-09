@@ -52,6 +52,8 @@ ALLOWED_LOCAL_PORTS = chameleon.get("ALLOWED_LOCAL_PORTS")
 FORBIDDEN_LOCAL_PORTS = chameleon.get("FORBIDDEN_LOCAL_PORTS")
 _active_tarpits_per_ip = chameleon.get("_active_tarpits_per_ip")
 MAX_TARPIT_PER_IP = chameleon.get("MAX_TARPIT_PER_IP")
+handle_ssl_client = chameleon.get("handle_ssl_client")
+create_ssl_context = chameleon.get("create_ssl_context")
 
 
 class TestChameleonParsing(unittest.TestCase):
@@ -506,6 +508,8 @@ class TestProtocolSniffingAndRewriting(unittest.TestCase):
         self.assertEqual(rewrite_absolute_uri(req), req)
 
     def test_build_ack(self):
+        if set_carrier_profile:
+            set_carrier_profile(None)
         # Default
         ack_def = build_ack(None, is_ws=False)
         self.assertEqual(ack_def, b"HTTP/1.1 200 Connection established\r\n\r\n")
@@ -976,7 +980,198 @@ class TestSecurityHardening(unittest.IsolatedAsyncioTestCase):
             await server.wait_closed()
             globals_dict["DEFAULT_PORT"] = orig_default_port
             chameleon["LOCAL_TUNNEL_PORTS"].discard(ssh_port)
+
+class TestChameleonSSLMultiplexer(unittest.IsolatedAsyncioTestCase):
+    """Tests for Chameleon's SSL/TLS termination and multiplexing (SSH SSL SNI, Payload Proxy, Decrypted Web)."""
+
+    def setUp(self):
+        if set_carrier_profile:
+            self.orig_p = get_carrier_profile()
+            set_carrier_profile(None)
+
+    def tearDown(self):
+        if set_carrier_profile:
+            set_carrier_profile(getattr(self, "orig_p", None))
+
+    def test_create_ssl_context_self_signed_fallback(self):
+        """Verifies create_ssl_context returns a valid SSLContext even without Let's Encrypt."""
+        ctx = create_ssl_context()
+        self.assertIsNotNone(ctx)
+
+    async def test_ssl_direct_ssh_stunnel(self):
+        """When client connects inside TLS with raw SSH banner (Stunnel / SSH Direct SNI),
+        it routes directly to Dropbear SSH without expecting HTTP headers."""
+        received_by_dropbear = bytearray()
+
+        async def dropbear_server_handler(d_reader, d_writer):
+            d_writer.write(b"SSH-2.0-dropbear_2022.82\r\n")
+            await d_writer.drain()
+            while True:
+                chunk = await d_reader.read(4096)
+                if not chunk:
+                    break
+                received_by_dropbear.extend(chunk)
+            d_writer.close()
+            await d_writer.wait_closed()
+
+        server = await asyncio.start_server(dropbear_server_handler, "127.0.0.1", 0)
+        ssh_port = server.sockets[0].getsockname()[1]
+        globals_dict = chameleon["handle_client"].__globals__
+        orig_default_port = globals_dict["DEFAULT_PORT"]
+        globals_dict["DEFAULT_PORT"] = ssh_port
+
+        try:
+            reader = asyncio.StreamReader()
+            writer_transport = asyncio.StreamWriter(
+                transport=mock.MagicMock(),
+                protocol=asyncio.StreamReaderProtocol(reader),
+                reader=reader,
+                loop=asyncio.get_running_loop()
+            )
+            client_written = bytearray()
+            writer_transport.write = lambda d: client_written.extend(d)
+            writer_transport.wait_closed = mock.AsyncMock()
+            writer_transport.get_extra_info = lambda info: ("127.0.0.1", 54321) if info == "peername" else None
+
+            # Feed SSH identification string
+            reader.feed_data(b"SSH-2.0-TestStunnel\r\n")
+
+            async def feed_eof_later():
+                await asyncio.sleep(0.08)
+                reader.feed_eof()
+
+            asyncio.create_task(feed_eof_later())
+
+            await handle_ssl_client(reader, writer_transport)
+
+            # Dropbear should receive the raw SSH banner
+            self.assertTrue(received_by_dropbear.startswith(b"SSH-2.0-TestStunnel"))
+            # Client should receive Dropbear's banner
+            self.assertIn(b"SSH-2.0-dropbear", bytes(client_written))
+        finally:
+            server.close()
+            await server.wait_closed()
+            globals_dict["DEFAULT_PORT"] = orig_default_port
+
+    async def test_ssl_payload_proxy_ssh(self):
+        """When client connects inside TLS with HTTP CONNECT + split carrier payload,
+        Chameleon sends 200 Connection Established and filters split decoys from Dropbear."""
+        received_by_dropbear = bytearray()
+
+        async def dropbear_server_handler(d_reader, d_writer):
+            d_writer.write(b"SSH-2.0-dropbear_2022.82\r\n")
+            await d_writer.drain()
+            while True:
+                chunk = await d_reader.read(4096)
+                if not chunk:
+                    break
+                received_by_dropbear.extend(chunk)
+            d_writer.close()
+            await d_writer.wait_closed()
+
+        server = await asyncio.start_server(dropbear_server_handler, "127.0.0.1", 0)
+        ssh_port = server.sockets[0].getsockname()[1]
+        globals_dict = chameleon["handle_client"].__globals__
+        orig_default_port = globals_dict["DEFAULT_PORT"]
+        globals_dict["DEFAULT_PORT"] = ssh_port
+        chameleon["LOCAL_TUNNEL_PORTS"].add(ssh_port)
+        chameleon["ALLOWED_LOCAL_PORTS"].add(ssh_port)
+
+        try:
+            reader = asyncio.StreamReader()
+            writer_transport = asyncio.StreamWriter(
+                transport=mock.MagicMock(),
+                protocol=asyncio.StreamReaderProtocol(reader),
+                reader=reader,
+                loop=asyncio.get_running_loop()
+            )
+            client_written = bytearray()
+            writer_transport.write = lambda d: client_written.extend(d)
+            writer_transport.wait_closed = mock.AsyncMock()
+            writer_transport.get_extra_info = lambda info: ("127.0.0.1", 54322) if info == "peername" else None
+
+            # Feed SSL proxy payload with carrier split decoy
+            payload = (
+                f"CONNECT 127.0.0.1:{ssh_port} HTTP/1.1\r\n"
+                f"Host: portal.ncnd.jazz.com.pk\r\n"
+                f"Connection: Keep-Alive\r\n\r\n"
+                f"GET http://filter.ncnd.jazz.com.pk/nc HTTP/1.1\r\n"
+                f"Host: filter.ncnd.jazz.com.pk\r\n\r\n"
+            ).encode()
+            reader.feed_data(payload)
+
+            async def feed_ssh():
+                await asyncio.sleep(0.05)
+                reader.feed_data(b"SSH-2.0-InjectorSSH\r\n")
+                await asyncio.sleep(0.08)
+                reader.feed_eof()
+
+            asyncio.create_task(feed_ssh())
+
+            await handle_ssl_client(reader, writer_transport)
+
+            # Client must receive 200 Connection Established (or profile ACK)
+            self.assertIn(b"200 ", bytes(client_written))
+            # Dropbear must receive the real SSH banner and NOT the split HTTP decoy
+            self.assertTrue(received_by_dropbear.startswith(b"SSH-2.0-InjectorSSH"))
+            self.assertNotIn(b"GET http://", bytes(received_by_dropbear))
+        finally:
+            server.close()
+            await server.wait_closed()
+            globals_dict["DEFAULT_PORT"] = orig_default_port
+            chameleon["LOCAL_TUNNEL_PORTS"].discard(ssh_port)
             chameleon["ALLOWED_LOCAL_PORTS"].discard(ssh_port)
+
+    async def test_ssl_web_forwarded_to_nginx(self):
+        """When client connects inside TLS with standard HTTP GET (Web or WebSocket),
+        Chameleon proxies the decrypted HTTP stream to local Nginx port."""
+        received_by_nginx = bytearray()
+
+        async def nginx_mock_handler(n_reader, n_writer):
+            chunk = await n_reader.read(4096)
+            received_by_nginx.extend(chunk)
+            n_writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello")
+            await n_writer.drain()
+            n_writer.close()
+            await n_writer.wait_closed()
+
+        server = await asyncio.start_server(nginx_mock_handler, "127.0.0.1", 0)
+        nginx_port = server.sockets[0].getsockname()[1]
+        globals_dict = chameleon["handle_client"].__globals__
+        orig_nginx_port = globals_dict["CHAMELEON_NGINX_PORT"]
+        globals_dict["CHAMELEON_NGINX_PORT"] = nginx_port
+
+        try:
+            reader = asyncio.StreamReader()
+            writer_transport = asyncio.StreamWriter(
+                transport=mock.MagicMock(),
+                protocol=asyncio.StreamReaderProtocol(reader),
+                reader=reader,
+                loop=asyncio.get_running_loop()
+            )
+            client_written = bytearray()
+            writer_transport.write = lambda d: client_written.extend(d)
+            writer_transport.wait_closed = mock.AsyncMock()
+            writer_transport.get_extra_info = lambda info: ("127.0.0.1", 54323) if info == "peername" else None
+
+            reader.feed_data(b"GET / HTTP/1.1\r\nHost: portal.ncnd.jazz.com.pk\r\n\r\n")
+
+            async def feed_eof_later():
+                await asyncio.sleep(0.15)
+                reader.feed_eof()
+
+            asyncio.create_task(feed_eof_later())
+
+            await handle_ssl_client(reader, writer_transport)
+
+            # Nginx should receive the HTTP GET request
+            self.assertIn(b"GET / HTTP/1.1", bytes(received_by_nginx))
+            # Client should receive Nginx's HTTP response
+            self.assertIn(b"HTTP/1.1 200 OK", bytes(client_written))
+        finally:
+            server.close()
+            await server.wait_closed()
+            globals_dict["CHAMELEON_NGINX_PORT"] = orig_nginx_port
 
 
 if __name__ == "__main__":

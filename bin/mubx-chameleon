@@ -36,6 +36,7 @@ proxy, replaces legacy Squid), extended with:
 import asyncio
 import base64
 import collections
+import glob
 import ipaddress
 import json
 import logging
@@ -43,7 +44,10 @@ import os
 import re
 import signal
 import socket
+import ssl
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 from typing import Any, Dict, Optional, Set, Tuple
@@ -84,9 +88,13 @@ PORTS = [
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 2222
 
-# Local TLS terminator (nginx) — where raw TLS ClientHellos get sent that
-# aren't otherwise identified as a specific local service.
-TLS_FALLBACK_PORT = int(os.environ.get("CHAMELEON_TLS_FALLBACK_PORT", "20443"))
+# Internal SSL multiplexer port (terminates TLS for carrier bug-host SNIs and direct SSL)
+CHAMELEON_SSL_PORT = int(os.environ.get("CHAMELEON_SSL_PORT", "18443"))
+CHAMELEON_NGINX_PORT = int(os.environ.get("CHAMELEON_NGINX_PORT", "80"))
+
+# Local TLS terminator — where raw TLS ClientHellos get sent when received on Chameleon ports.
+# Defaults to Chameleon's internal SSL multiplexer (18443) so mobile injector TLS modes work seamlessly.
+TLS_FALLBACK_PORT = int(os.environ.get("CHAMELEON_TLS_FALLBACK_PORT", str(CHAMELEON_SSL_PORT)))
 
 # Permitted internal local targets (services requiring their own cryptographic auth)
 ALLOWED_LOCAL_PORTS: Set[int] = {
@@ -100,9 +108,10 @@ LOCAL_TUNNEL_PORTS: Set[int] = {
     8388, 8389, 8444, 8448, 17000, 18080, 18500, 20443
 }
 
-# Explicitly forbidden local ports (e.g. Chameleon control & telemetry port 18088)
+# Explicitly forbidden local ports (e.g. Chameleon control 18088 and internal SSL 18443)
 FORBIDDEN_LOCAL_PORTS: Set[int] = {
     18088,
+    18443,
 }
 
 BUFFER_SIZE = 131072  # 128KB high-throughput buffer matching kernel TCP tuning
@@ -232,6 +241,10 @@ STATS: Dict[str, Any] = {
     "connections_active": 0,
     "routes_local": 0,
     "routes_external": 0,
+    "ssl_connections": 0,
+    "routes_ssl_direct_ssh": 0,
+    "routes_ssl_payload_ssh": 0,
+    "routes_ssl_web": 0,
     "blocked_unauthorized": 0,
     "blocked_forbidden_port": 0,
     "tarpitted_connections": 0,
@@ -516,6 +529,89 @@ def record_abrupt_disconnect(client_ip: str = "?") -> bool:
     return False
 
 
+_SSL_CONTEXT: Optional[ssl.SSLContext] = None
+
+
+def find_ssl_certificates() -> Tuple[Optional[str], Optional[str]]:
+    """Discovers TLS certificate and key from environment or Let's Encrypt."""
+    cert = os.environ.get("CHAMELEON_SSL_CERT")
+    key = os.environ.get("CHAMELEON_SSL_KEY")
+    if cert and key and os.path.exists(cert) and os.path.exists(key):
+        return cert, key
+
+    # Check Let's Encrypt live directory for domain certificates
+    candidates = sorted(glob.glob("/etc/letsencrypt/live/*/fullchain.pem"))
+    for c in candidates:
+        d = os.path.dirname(c)
+        k = os.path.join(d, "privkey.pem")
+        if os.path.exists(k) and os.path.getsize(c) > 0 and os.path.getsize(k) > 0:
+            return c, k
+
+    return None, None
+
+
+def generate_self_signed_cert() -> Tuple[str, str]:
+    """Generates an ephemeral self-signed fallback certificate so Chameleon SSL
+    never fails to start even before ACME domain issuance."""
+    cert_dir = tempfile.mkdtemp(prefix="mubx_ssl_")
+    cert_path = os.path.join(cert_dir, "fallback_cert.pem")
+    key_path = os.path.join(cert_dir, "fallback_key.pem")
+    try:
+        subprocess.run(
+            [
+                "openssl", "req", "-x509", "-newkey", "rsa:2048",
+                "-keyout", key_path, "-out", cert_path, "-days", "365",
+                "-nodes", "-subj", "/CN=mubx-chameleon"
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return cert_path, key_path
+    except Exception as e:
+        log.warning("Could not generate self-signed fallback cert: %s", e)
+        return "", ""
+
+
+def create_ssl_context() -> Optional[ssl.SSLContext]:
+    """Creates a TLS server SSLContext with modern ciphers and ALPN support."""
+    cert_file, key_file = find_ssl_certificates()
+    if not cert_file or not key_file:
+        cert_file, key_file = generate_self_signed_cert()
+
+    if not cert_file or not key_file:
+        log.warning("No SSL certificate available; SSL termination listener disabled")
+        return None
+
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.set_ciphers(
+            "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:"
+            "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:"
+            "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305"
+        )
+        try:
+            ctx.set_alpn_protocols(["http/1.1", "h2"])
+        except (AttributeError, NotImplementedError):
+            pass
+        ctx.load_cert_chain(certfile=cert_file, keyfile=key_file)
+        log.info("Loaded TLS certificate for Chameleon SSL multiplexer: %s", cert_file)
+        return ctx
+    except Exception as e:
+        log.error("Failed to initialize SSL context: %s", e)
+        return None
+
+
+def reload_ssl_context() -> None:
+    """Reloads the SSL context on SIGHUP or certificate renewal."""
+    global _SSL_CONTEXT
+    ctx = create_ssl_context()
+    if ctx:
+        _SSL_CONTEXT = ctx
+        log.info("Chameleon SSL context reloaded successfully")
+
+
 def reload_caches():
     global _LOCAL_IDENTIFIERS, _RESPONSE_PROFILES, _AUTH_TOKENS, _responses_cache, _CARRIER_PROFILE
     _LOCAL_IDENTIFIERS = set()
@@ -524,6 +620,7 @@ def reload_caches():
     _RESPONSE_PROFILES = load_response_profiles()
     _AUTH_TOKENS = load_auth_tokens()
     _CARRIER_PROFILE = load_carrier_profile()
+    reload_ssl_context()
     log.info(
         "Caches reloaded: %d local identifiers, %d response profiles, %d auth tokens, carrier_profile=%s",
         len(_LOCAL_IDENTIFIERS), len(_RESPONSE_PROFILES), len(_AUTH_TOKENS), _CARRIER_PROFILE or "default",
@@ -1155,26 +1252,29 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
             _connections_per_ip[peer_ip] = new_count
 
 
-async def _handle_client_inner(client_reader, client_writer, client_addr):
+async def _handle_client_inner(client_reader, client_writer, client_addr, initial_buffer=None, is_ssl=False):
     set_tcp_opts(client_writer)
-    log.debug("Client connected: %s", client_addr)
+    log.debug("Client connected: %s (ssl=%s)", client_addr, is_ssl)
     STATS["connections_accepted"] += 1
 
     # Resolve the peer IP inside this function so it is available both when
     # dispatched through handle_client and when called directly (e.g. tests).
     peer_ip = client_addr[0] if client_addr else "?"
 
-    # --- Step 1: grab the first chunk and sniff protocol before parsing ---
-    try:
-        first = await asyncio.wait_for(client_reader.read(4096), timeout=5.0)
-    except (asyncio.TimeoutError, ConnectionResetError):
-        client_writer.close()
-        return
-    if not first:
-        client_writer.close()
-        return
+    if initial_buffer is not None:
+        buffer = bytearray(initial_buffer)
+    else:
+        # --- Step 1: grab the first chunk and sniff protocol before parsing ---
+        try:
+            first = await asyncio.wait_for(client_reader.read(4096), timeout=5.0)
+        except (asyncio.TimeoutError, ConnectionResetError):
+            client_writer.close()
+            return
+        if not first:
+            client_writer.close()
+            return
 
-    buffer = bytearray(first)
+        buffer = bytearray(first)
 
     # Fast-path stats endpoint — loopback-only (port 18088 / 127.0.0.1).
     # Reject the same GET /stats request arriving on a public port so we
@@ -1292,17 +1392,19 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
         await send_response_and_close(client_writer, resp)
         return
 
-    proto = sniff_protocol(bytes(buffer))
+    proto: Optional[str] = None
+    if not is_ssl:
+        proto = sniff_protocol(bytes(buffer))
 
-    if proto == "tls":
-        # Raw TLS ClientHello: hand straight to local TLS terminator (nginx)
-        await raw_passthrough(client_reader, client_writer, bytes(buffer), "127.0.0.1", TLS_FALLBACK_PORT)
-        return
+        if proto == "tls":
+            # Raw TLS ClientHello: hand straight to local TLS multiplexer
+            await raw_passthrough(client_reader, client_writer, bytes(buffer), "127.0.0.1", TLS_FALLBACK_PORT)
+            return
 
-    if proto == "ssh":
-        # Raw SSH banner with no HTTP wrapper at all.
-        await raw_passthrough(client_reader, client_writer, bytes(buffer), DEFAULT_HOST, DEFAULT_PORT)
-        return
+        if proto == "ssh":
+            # Raw SSH banner with no HTTP wrapper at all.
+            await raw_passthrough(client_reader, client_writer, bytes(buffer), DEFAULT_HOST, DEFAULT_PORT)
+            return
 
     # --- Step 2: HTTP-shaped (or genuinely unknown) — accumulate more ---
     target_host = target_port = None
@@ -1328,12 +1430,13 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
             if not chunk:
                 break
             buffer.extend(chunk)
-            proto2 = sniff_protocol(bytes(buffer))
-            if proto2 in ("tls", "ssh"):
-                target_host2 = "127.0.0.1"
-                target_port2 = TLS_FALLBACK_PORT if proto2 == "tls" else DEFAULT_PORT
-                await raw_passthrough(client_reader, client_writer, bytes(buffer), target_host2, target_port2)
-                return
+            if not is_ssl:
+                proto2 = sniff_protocol(bytes(buffer))
+                if proto2 in ("tls", "ssh"):
+                    target_host2 = "127.0.0.1"
+                    target_port2 = TLS_FALLBACK_PORT if proto2 == "tls" else DEFAULT_PORT
+                    await raw_passthrough(client_reader, client_writer, bytes(buffer), target_host2, target_port2)
+                    return
     except (asyncio.TimeoutError, ConnectionResetError):
         pass
 
@@ -1490,6 +1593,79 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
         record_abrupt_disconnect(peer_ip)
 
 
+async def handle_ssl_client(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
+    """Terminates TLS on loopback CHAMELEON_SSL_PORT (default 18443) and demultiplexes:
+    1. Direct SSH over SSL (Stunnel / SNI Direct): starts with 'SSH-' -> Dropbear:2222
+    2. SSL/TLS Proxy -> SSH (Custom Payload): contains 'CONNECT ' -> Chameleon payload engine
+    3. Decrypted Web / WebSocket routes -> Nginx on port 80
+    """
+    global _active_connections
+    client_addr = client_writer.get_extra_info("peername") or ("127.0.0.1", 0)
+    peer_ip = client_addr[0]
+    set_tcp_opts(client_writer)
+
+    if _active_connections >= MAX_CONCURRENT_CONNECTIONS:
+        STATS["tarpitted_connections"] += 1
+        await tarpit_client(client_writer, peer_ip, "server_concurrency_cap")
+        return
+
+    _active_connections += 1
+    STATS["ssl_connections"] += 1
+
+    try:
+        try:
+            first = await asyncio.wait_for(client_reader.read(4096), timeout=10.0)
+        except (asyncio.TimeoutError, ConnectionResetError, ssl.SSLError):
+            client_writer.close()
+            return
+        if not first:
+            client_writer.close()
+            return
+
+        buffer = bytearray(first)
+
+        # 1. SSH Direct SNI (Stunnel mode): client immediately sends SSH identification string
+        if buffer.startswith(b"SSH-"):
+            STATS["routes_ssl_direct_ssh"] += 1
+            log.info("Direct SSH over SSL/TLS detected from %s — routing directly to Dropbear :%d", client_addr, DEFAULT_PORT)
+            await raw_passthrough(client_reader, client_writer, bytes(buffer), DEFAULT_HOST, DEFAULT_PORT)
+            return
+
+        buf_lower = bytes(buffer).lower()
+
+        # 2. SSL/TLS Proxy -> SSH (Custom Payload): client sends HTTP CONNECT inside TLS,
+        # or mobile injector markers (X-Online-Host, X-Target, X-Real-Host, [split])
+        is_injector_payload = (
+            RE_CONNECT.search(buffer) is not None or
+            b"connect " in buf_lower or
+            b"x-online-host:" in buf_lower or
+            b"x-target:" in buf_lower or
+            b"x-real-host:" in buf_lower or
+            b"[split]" in buf_lower or
+            b"[delay_split]" in buf_lower
+        )
+
+        if is_injector_payload:
+            STATS["routes_ssl_payload_ssh"] += 1
+            log.info("SSL/TLS Proxy -> SSH payload detected from %s — routing to Chameleon payload engine", client_addr)
+            await _handle_client_inner(client_reader, client_writer, client_addr, initial_buffer=buffer, is_ssl=True)
+            return
+
+        # 3. Standard Web / WebSocket / HTTPUpgrade routes -> forward immediately to local Nginx on port 80
+        STATS["routes_ssl_web"] += 1
+        log.info("Decrypted HTTP/WebSocket request from %s — proxying to local Nginx :%d", client_addr, CHAMELEON_NGINX_PORT)
+        await raw_passthrough(client_reader, client_writer, bytes(buffer), "127.0.0.1", CHAMELEON_NGINX_PORT)
+    except Exception as e:
+        log.debug("Unhandled error in SSL client connection %s: %s", client_addr, e)
+    finally:
+        try:
+            client_writer.close()
+            await asyncio.wait_for(client_writer.wait_closed(), timeout=1.0)
+        except (Exception, asyncio.CancelledError):
+            pass
+        _active_connections = max(0, _active_connections - 1)
+
+
 # --------------------------------------------------------------------------
 # Entry point & Periodic Telemetry
 # --------------------------------------------------------------------------
@@ -1565,6 +1741,20 @@ async def main():
             log.info("MUB-X Embedded UDPGW bridge active on 127.0.0.1:%d", UDPGW_PORT)
         except OSError as e:
             log.info("UDPGW port %d in use (external BadVPN daemon active): %s", UDPGW_PORT, e)
+
+    # Start SSL Termination Multiplexer on loopback (SSH SSL SNI, Payload Proxy, Decrypted Web)
+    global _SSL_CONTEXT
+    if _SSL_CONTEXT is None:
+        _SSL_CONTEXT = create_ssl_context()
+    if _SSL_CONTEXT:
+        try:
+            ssl_server = await asyncio.start_server(
+                handle_ssl_client, "127.0.0.1", CHAMELEON_SSL_PORT, ssl=_SSL_CONTEXT
+            )
+            servers.append(ssl_server)
+            log.info("MUB-X Chameleon SSL Multiplexer active on 127.0.0.1:%d", CHAMELEON_SSL_PORT)
+        except Exception as e:
+            log.error("Failed to bind Chameleon SSL listener on port %d: %s", CHAMELEON_SSL_PORT, e)
 
     if not servers:
         sys.exit(1)
