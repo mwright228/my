@@ -67,7 +67,7 @@ for path in /usr/local/bin/xray /usr/local/bin/hysteria /usr/local/bin/wstunnel 
   /usr/local/bin/sing-box /usr/local/bin/badvpn-udpgw; do
   restore_path "$path"
 done
-for path in /usr/local/bin/menu /usr/local/bin/link-gen /usr/local/bin/add-user \
+for path in /usr/local/bin/mubx /usr/local/bin/mubx-udp443 /usr/local/bin/menu /usr/local/bin/link-gen /usr/local/bin/add-user \
   /usr/local/bin/delete-user /usr/local/bin/mubx-diagnose \
   /usr/local/bin/mubx-tune /usr/local/bin/mubx-warp /usr/local/bin/mubx-adaptive \
   /usr/local/bin/mubx-probe /usr/local/bin/mubx-restart-failed \

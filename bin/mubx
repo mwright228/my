@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# mubx - Master CLI and Control Panel Entrypoint for MUB-X
+set -Eeuo pipefail
+
+resolve_cmd() {
+  local target="$1"
+  if [ -x "/usr/local/bin/$target" ]; then
+    echo "/usr/local/bin/$target"
+  elif [ -x "$(dirname "${BASH_SOURCE[0]}")/$target" ]; then
+    echo "$(dirname "${BASH_SOURCE[0]}")/$target"
+  elif command -v "$target" >/dev/null 2>&1; then
+    echo "$target"
+  elif [ -x "/usr/local/bin/mubx-$target" ]; then
+    echo "/usr/local/bin/mubx-$target"
+  elif [ -x "$(dirname "${BASH_SOURCE[0]}")/mubx-$target" ]; then
+    echo "$(dirname "${BASH_SOURCE[0]}")/mubx-$target"
+  elif command -v "mubx-$target" >/dev/null 2>&1; then
+    echo "mubx-$target"
+  else
+    return 1
+  fi
+}
+
+if [ $# -eq 0 ]; then
+  menu_bin="$(resolve_cmd menu || true)"
+  if [ -n "$menu_bin" ]; then
+    exec "$menu_bin"
+  else
+    echo "[!] MUB-X menu not found." >&2
+    exit 1
+  fi
+fi
+
+cmd="$1"; shift
+target_bin="$(resolve_cmd "$cmd" || true)"
+
+if [ -n "$target_bin" ]; then
+  exec "$target_bin" "$@"
+else
+  echo "[!] Unknown mubx command: $cmd" >&2
+  echo "Usage: mubx [menu|update|link-gen|status|udp443|users|diagnose|top|shield|awg|warp|sub]" >&2
+  exit 1
+fi

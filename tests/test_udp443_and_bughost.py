@@ -205,5 +205,21 @@ class TestSubscribeBugHostNodes(unittest.TestCase):
         self.assertIn(f"&sni={carrier_bug}&allow_insecure=1#MUBX-TUIC-BugHost", links)
 
 
+class TestMubxMasterCli(unittest.TestCase):
+    def test_mubx_cli_routes_to_subcommand(self):
+        cmd = ["bash", "bin/mubx", "udp443", "status"]
+        env = dict(os.environ)
+        env["MUBX_DRY_RUN"] = "1"
+        res = subprocess.run(cmd, cwd=REPO_ROOT, env=env, capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("UDP 443 Ingress:", res.stdout)
+
+    def test_mubx_cli_unknown_command_shows_usage(self):
+        cmd = ["bash", "bin/mubx", "invalidcommandxyz"]
+        res = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("Usage: mubx", res.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
