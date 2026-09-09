@@ -12,6 +12,7 @@ RestartSec=3s
 TimeoutStopSec=5s
 KillMode=mixed
 LimitNOFILE=1048576
+Nice=-5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

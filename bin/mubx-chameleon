@@ -105,7 +105,7 @@ FORBIDDEN_LOCAL_PORTS: Set[int] = {
     18088,
 }
 
-BUFFER_SIZE = 65536  # 64KB high-throughput buffer matching kernel TCP tuning
+BUFFER_SIZE = 131072  # 128KB high-throughput buffer matching kernel TCP tuning
 STATS_FILE_PATH = os.environ.get("CHAMELEON_STATS_FILE", "/run/mubx/chameleon-stats.json")
 
 # Auth / abuse controls
@@ -727,11 +727,9 @@ def set_tcp_opts(writer: asyncio.StreamWriter):
         if sock:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            try:
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
-            except Exception:
-                pass
+            # Purposely omit hardcoded SO_RCVBUF/SO_SNDBUF: explicit setsockopt
+            # disables Linux kernel dynamic TCP window auto-tuning. Omitting them
+            # allows Linux BBR to dynamically scale buffer windows up to 64MB.
             if hasattr(socket, "TCP_QUICKACK"):
                 try:
                     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_QUICKACK, 1)
@@ -1548,6 +1546,13 @@ async def main():
             except (TypeError, OSError):
                 server = await asyncio.start_server(handle_client, listen_ip, port)
             servers.append(server)
+            # Enable TCP Fast Open on listening sockets where supported
+            TCP_FASTOPEN = getattr(socket, "TCP_FASTOPEN", 23)
+            for s in server.sockets:
+                try:
+                    s.setsockopt(socket.IPPROTO_TCP, TCP_FASTOPEN, 128)
+                except Exception:
+                    pass
             log.info("MUB-X Chameleon listening on %s:%d", listen_ip, port)
         except Exception as e:
             log.error("Failed to bind on port %d: %s", port, e)

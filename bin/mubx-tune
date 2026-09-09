@@ -32,11 +32,20 @@ net.ipv4.tcp_slow_start_after_idle=0
 net.ipv4.tcp_fastopen=3
 net.ipv4.tcp_tw_reuse=1
 net.ipv4.tcp_fin_timeout=15
+net.ipv4.tcp_adv_win_scale=1
+net.ipv4.tcp_notsent_lowat=16384
+net.ipv4.tcp_autocorking=1
+net.ipv4.tcp_sack=1
+net.ipv4.tcp_dsack=1
 
 # Keepalive for NAT Pinholes
 net.ipv4.tcp_keepalive_time=300
 net.ipv4.tcp_keepalive_intvl=15
 net.ipv4.tcp_keepalive_probes=5
+
+# High-Performance BPF JIT Compiler
+net.core.bpf_jit_enable=1
+net.core.bpf_jit_harden=2
 
 # Queue Backlog & Memory
 net.core.netdev_max_backlog=100000
