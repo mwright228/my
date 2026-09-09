@@ -40,7 +40,7 @@ canonical_repo_url() {
 for svc in nginx haproxy xray dropbear mubx-chameleon \
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0 \
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 badvpn@7500 badvpn@7600 badvpn@7700 \
-  hysteria zivpn singbox wstunnel squid mubx-cron.timer mubx-adaptive.timer; do
+  hysteria zivpn singbox wstunnel squid mubx-cron.timer mubx-adaptive.timer mubx-quota.timer; do
   systemctl disable --now "$svc" 2>/dev/null || true
 done
 restore_path() {
@@ -59,6 +59,7 @@ for path in /etc/systemd/system/badvpn@.service \
   /etc/systemd/system/singbox.service /etc/systemd/system/mubx-chameleon.service \
   /etc/systemd/system/mubx-cron.service /etc/systemd/system/mubx-cron.timer \
   /etc/systemd/system/mubx-adaptive.service /etc/systemd/system/mubx-adaptive.timer \
+  /etc/systemd/system/mubx-quota.service /etc/systemd/system/mubx-quota.timer \
   /etc/systemd/system/xray.service; do
   restore_path "$path"
 done
@@ -74,6 +75,7 @@ for path in /usr/local/bin/mubx /usr/local/bin/mubx-udp443 /usr/local/bin/menu /
   /usr/local/bin/mubx-update /usr/local/bin/set-domain /usr/local/bin/mubx-cron \
   /usr/local/bin/mubx-users /usr/local/bin/svc-status /usr/local/bin/mubx-chameleon \
   /usr/local/bin/mubx-shield /usr/local/bin/mubx-awg /usr/local/bin/mubx-bughost-eval /usr/local/bin/mubx-top \
+  /usr/local/bin/mubx-quota \
   /usr/local/bin/mubx-sub /usr/local/bin/generate-secrets /usr/local/bin/uninstall.sh; do
   restore_path "$path"
 done

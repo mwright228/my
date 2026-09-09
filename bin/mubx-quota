@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+# MUB-X User Quota and Expiry Watchdog
+#
+# Periodically inspects /etc/mubx/users.json against:
+# 1. Account expiration date (YYYY-MM-DD)
+# 2. Xray traffic stats (uplink + downlink bytes vs quota_gb)
+#
+# Auto-freezes any non-admin accounts that breach limits, logging the event
+# and triggering service reloads to terminate active connections immediately.
+set -Eeuo pipefail
+
+[ "$(id -u)" -eq 0 ] || [ "${MUBX_ALLOW_NON_ROOT:-0}" -eq 1 ] || { echo "[!] Run mubx-quota as root." >&2; exit 1; }
+
+if [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+fi
+
+load_mubx_env 2>/dev/null || true
+
+DOMAIN="$(cat /etc/mubx/domain 2>/dev/null || cat /usr/local/etc/xray/domain 2>/dev/null || echo "${DOMAIN:-mubx}")"
+STORE="${MUBX_USERS_FILE:-/etc/mubx/users.json}"
+MUBX_USERS_BIN="/usr/local/bin/mubx-users"
+[ -x "$MUBX_USERS_BIN" ] || MUBX_USERS_BIN="$(dirname "${BASH_SOURCE[0]}")/mubx-users"
+
+fmt_bytes() {
+  local b="${1:-0}"
+  if [ "$b" -ge 1073741824 ]; then
+    LC_ALL=C awk -v b="$b" 'BEGIN {printf "%.2f GB", b/1073741824}'
+  elif [ "$b" -ge 1048576 ]; then
+    LC_ALL=C awk -v b="$b" 'BEGIN {printf "%.2f MB", b/1048576}'
+  elif [ "$b" -ge 1024 ]; then
+    LC_ALL=C awk -v b="$b" 'BEGIN {printf "%.2f KB", b/1024}'
+  else
+    printf '%d B' "$b"
+  fi
+}
+
+quota_check() {
+  local dry_run=0
+  for arg in "$@"; do
+    [ "$arg" = "--dry-run" ] || [ "$arg" = "-n" ] && dry_run=1
+  done
+
+  if [ ! -f "$STORE" ]; then
+    [ "$dry_run" -eq 1 ] && echo "No user store at $STORE"
+    return 0
+  fi
+
+  local now_ts exp_ts raw_stats=""
+  now_ts="$(date +%s)"
+
+  # Query Xray API stats once for all users (fast O(1) query)
+  if [ -n "${MUBX_XRAY_STATS_MOCK:-}" ] && [ -f "${MUBX_XRAY_STATS_MOCK:-}" ]; then
+    raw_stats="$(cat "$MUBX_XRAY_STATS_MOCK" 2>/dev/null || true)"
+  elif command -v xray >/dev/null 2>&1; then
+    raw_stats="$(xray api statsquery --server=127.0.0.1:10085 --pattern="user>>>" 2>/dev/null || true)"
+  fi
+
+  local users_to_freeze=()
+  local reasons=()
+
+  while IFS=$'\t' read -r q_user q_status q_gb q_exp; do
+    [ -n "$q_user" ] || continue
+    [ "$q_user" != "admin" ] || continue
+    [ "$q_status" != "frozen" ] || continue
+
+    # 1. Expiration check
+    if [ -n "$q_exp" ] && [ "$q_exp" != "never" ]; then
+      exp_ts="$(date -d "$q_exp 23:59:59" +%s 2>/dev/null || date -jf '%Y-%m-%d %H:%M:%S' "$q_exp 23:59:59" +%s 2>/dev/null || date -d "$q_exp" +%s 2>/dev/null || echo 0)"
+      if [ "$exp_ts" -gt 0 ] && [ "$now_ts" -ge "$exp_ts" ]; then
+        users_to_freeze+=("$q_user")
+        reasons+=("Expired on $q_exp")
+        continue
+      fi
+    fi
+
+    # 2. Bandwidth Quota check
+    if [ "${q_gb:-0}" -gt 0 ]; then
+      local u_bytes=0 d_bytes=0 total_bytes=0 limit_bytes=0
+      limit_bytes=$(( q_gb * 1073741824 ))
+
+      if [ -n "$raw_stats" ]; then
+        local pat_up="user>>>${q_user}@${DOMAIN}>>>traffic>>>uplink"
+        local pat_down="user>>>${q_user}@${DOMAIN}>>>traffic>>>downlink"
+        u_bytes="$(printf '%s\n' "$raw_stats" | jq -r '.stat[]? | select(.name == $p) | .value' --arg p "$pat_up" 2>/dev/null | head -n 1 || echo 0)"
+        d_bytes="$(printf '%s\n' "$raw_stats" | jq -r '.stat[]? | select(.name == $p) | .value' --arg p "$pat_down" 2>/dev/null | head -n 1 || echo 0)"
+        [ -n "$u_bytes" ] && [ "$u_bytes" != "null" ] || u_bytes=0
+        [ -n "$d_bytes" ] && [ "$d_bytes" != "null" ] || d_bytes=0
+        total_bytes=$(( u_bytes + d_bytes ))
+      fi
+
+      if [ "$total_bytes" -ge "$limit_bytes" ]; then
+        users_to_freeze+=("$q_user")
+        reasons+=("Quota exceeded: $(fmt_bytes "$total_bytes") / ${q_gb} GB")
+        continue
+      fi
+    fi
+  done < <(jq -r '.[] | [.name, (.status // "active"), ((.quota_gb // 0)|tostring), (.expiry // "")] | @tsv' "$STORE" 2>/dev/null || true)
+
+  local count="${#users_to_freeze[@]}"
+  if [ "$count" -eq 0 ]; then
+    [ "$dry_run" -eq 1 ] && echo "All active user accounts are within expiry and quota limits."
+    return 0
+  fi
+
+  for ((i = 0; i < count; i++)); do
+    local u="${users_to_freeze[i]}"
+    local r="${reasons[i]}"
+    if [ "$dry_run" -eq 1 ]; then
+      echo "[DRY RUN] Would freeze '$u' - Reason: $r"
+    else
+      warn "Auto-freezing user '$u' - Reason: $r"
+      logger -t "mubx-quota" "Auto-frozen user $u: $r" 2>/dev/null || true
+      if [ -x "$MUBX_USERS_BIN" ]; then
+        "$MUBX_USERS_BIN" freeze "$u" >/dev/null 2>&1 || true
+      fi
+    fi
+  done
+}
+
+quota_status() {
+  if [ ! -f "$STORE" ]; then
+    echo "[!] No user store at $STORE" >&2
+    return 1
+  fi
+
+  mubx_box_top "USER EXPIRY & QUOTA WATCHDOG" "MONITOR"
+  printf '  %s%-12s %-8s %-12s %-16s %-18s %s%s\n' \
+    "$C_PURPLE" "USERNAME" "STATUS" "EXPIRY" "COUNTDOWN" "QUOTA USAGE" "BREACH RISK" "$C_RESET"
+  mubx_rule
+
+  local now_ts
+  now_ts="$(date +%s)"
+
+  local raw_stats=""
+  if [ -n "${MUBX_XRAY_STATS_MOCK:-}" ] && [ -f "${MUBX_XRAY_STATS_MOCK:-}" ]; then
+    raw_stats="$(cat "$MUBX_XRAY_STATS_MOCK" 2>/dev/null || true)"
+  elif command -v xray >/dev/null 2>&1; then
+    raw_stats="$(xray api statsquery --server=127.0.0.1:10085 --pattern="user>>>" 2>/dev/null || true)"
+  fi
+
+  while IFS=$'\t' read -r q_user q_status q_gb q_exp; do
+    [ -n "$q_user" ] || continue
+    local st_col="$C_MINT"
+    [ "$q_status" = "frozen" ] && st_col="$C_CORAL"
+
+    local exp_str="${q_exp:-never}"
+    local exp_countdown="never"
+    local breach="OK"
+    local breach_col="$C_MINT"
+
+    if [ "$exp_str" != "never" ] && [ -n "$exp_str" ]; then
+      local exp_ts
+      exp_ts="$(date -d "$exp_str 23:59:59" +%s 2>/dev/null || date -jf '%Y-%m-%d %H:%M:%S' "$exp_str 23:59:59" +%s 2>/dev/null || date -d "$exp_str" +%s 2>/dev/null || echo 0)"
+      if [ "$exp_ts" -gt 0 ]; then
+        local diff_sec=$(( exp_ts - now_ts ))
+        if [ "$diff_sec" -lt 0 ]; then
+          exp_countdown="EXPIRED"
+          breach="EXPIRED"
+          breach_col="$C_CORAL"
+        else
+          local diff_days=$(( diff_sec / 86400 ))
+          if [ "$diff_days" -eq 0 ]; then
+            exp_countdown="Today (<24h)"
+            breach="EXPIRING"
+            breach_col="$C_AMBER"
+          else
+            exp_countdown="${diff_days}d left"
+          fi
+        fi
+      fi
+    fi
+
+    local usage_str="Unlimited"
+    if [ "${q_gb:-0}" -gt 0 ]; then
+      local u_bytes=0 d_bytes=0 total_bytes=0 limit_bytes=0
+      limit_bytes=$(( q_gb * 1073741824 ))
+      if [ -n "$raw_stats" ]; then
+        local pat_up="user>>>${q_user}@${DOMAIN}>>>traffic>>>uplink"
+        local pat_down="user>>>${q_user}@${DOMAIN}>>>traffic>>>downlink"
+        u_bytes="$(printf '%s\n' "$raw_stats" | jq -r '.stat[]? | select(.name == $p) | .value' --arg p "$pat_up" 2>/dev/null | head -n 1 || echo 0)"
+        d_bytes="$(printf '%s\n' "$raw_stats" | jq -r '.stat[]? | select(.name == $p) | .value' --arg p "$pat_down" 2>/dev/null | head -n 1 || echo 0)"
+        [ -n "$u_bytes" ] && [ "$u_bytes" != "null" ] || u_bytes=0
+        [ -n "$d_bytes" ] && [ "$d_bytes" != "null" ] || d_bytes=0
+        total_bytes=$(( u_bytes + d_bytes ))
+      fi
+      local pct=$(( (total_bytes * 100) / limit_bytes ))
+      usage_str="$(fmt_bytes "$total_bytes") / ${q_gb}G (${pct}%)"
+      if [ "$total_bytes" -ge "$limit_bytes" ]; then
+        breach="OVER QUOTA"
+        breach_col="$C_CORAL"
+      elif [ "$pct" -ge 85 ]; then
+        breach="NEAR LIMIT"
+        breach_col="$C_AMBER"
+      fi
+    fi
+
+    printf '  %s%-12s%s %s%-8s%s %s%-12s%s %-16s %-18s %s%-12s%s\n' \
+      "$C_BRIGHT" "$q_user" "$C_RESET" \
+      "$st_col" "$q_status" "$C_RESET" \
+      "$C_SLATE" "$exp_str" "$C_RESET" \
+      "$exp_countdown" \
+      "$usage_str" \
+      "$breach_col" "$breach" "$C_RESET"
+  done < <(jq -r '.[] | [.name, (.status // "active"), ((.quota_gb // 0)|tostring), (.expiry // "")] | @tsv' "$STORE" 2>/dev/null || true)
+
+  mubx_box_bot
+}
+
+case "${1:-check}" in
+  check) shift; quota_check "$@" ;;
+  status) quota_status ;;
+  daemon)
+    while true; do
+      quota_check
+      sleep 300
+    done
+    ;;
+  *)
+    echo "Usage: mubx-quota [check [--dry-run]|status|daemon]" >&2
+    exit 1
+    ;;
+esac

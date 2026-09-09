@@ -274,6 +274,14 @@ if [ -s /etc/sing-box/config.json ] && systemctl cat singbox.service >/dev/null 
   systemctl enable --now singbox.service 2>/dev/null || true
   was_active["singbox"]=1
 fi
+if [ -d "$ROOT/systemd" ]; then
+  install -m 0644 "$ROOT"/systemd/*.service /etc/systemd/system/ 2>/dev/null || true
+  install -m 0644 "$ROOT"/systemd/*.timer /etc/systemd/system/ 2>/dev/null || true
+  systemctl daemon-reload 2>/dev/null || true
+fi
+if systemctl cat mubx-quota.timer >/dev/null 2>&1; then
+  systemctl enable --now mubx-quota.timer 2>/dev/null || true
+fi
 mubx_group_open "SERVICES RELOAD"
 for svc in "${SERVICES[@]}"; do
   systemctl cat "$svc.service" >/dev/null 2>&1 || continue

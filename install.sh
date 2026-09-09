@@ -790,7 +790,7 @@ if command -v sing-box >/dev/null 2>&1 && [ -s /etc/sing-box/config.json ]; then
   run systemctl restart singbox
   systemctl is-active --quiet singbox || die "singbox failed to start; inspect journalctl -u singbox."
 fi
-run systemctl enable --now mubx-cron.timer
+run systemctl enable --now mubx-cron.timer mubx-quota.timer
 run /usr/local/bin/mubx-tune
 if [ -x /usr/local/bin/mubx-shield ]; then
   /usr/local/bin/mubx-shield init >/dev/null 2>&1 || true

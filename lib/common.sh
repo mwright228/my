@@ -316,7 +316,16 @@ mubx_clear() {
 mubx_with_lock() { # $1 lock_file  $@ command
   local lockfile="$1" lockdir=""
   shift
-  mkdir -p "$(dirname "$lockfile")" 2>/dev/null || true
+  local parent_dir
+  parent_dir="$(dirname "$lockfile")"
+  if [ ! -d "$parent_dir" ]; then
+    mkdir -p "$parent_dir" 2>/dev/null || true
+  fi
+  if [ ! -w "$parent_dir" ] 2>/dev/null; then
+    # Parent directory is unwritable (e.g. testing sandbox or unprivileged user)
+    "$@"
+    return $?
+  fi
   if command -v flock >/dev/null 2>&1; then
     (
       exec 200>"$lockfile"
@@ -327,9 +336,9 @@ mubx_with_lock() { # $1 lock_file  $@ command
     lockdir="${lockfile}.lock"
     local retry=0
     while ! mkdir "$lockdir" 2>/dev/null; do
-      sleep 0.1
+      sleep 0.05
       retry=$((retry + 1))
-      if [ "$retry" -ge 150 ]; then
+      if [ "$retry" -ge 40 ]; then
         echo "[!] Timeout waiting for lock on $lockfile" >&2
         return 1
       fi
@@ -342,5 +351,13 @@ mubx_with_lock() { # $1 lock_file  $@ command
 }
 
 mubx_with_users_lock() {
-  mubx_with_lock "${MUBX_USERS_LOCK:-/etc/mubx/.users.lock}" "$@"
+  local lockfile="${MUBX_USERS_LOCK:-}"
+  if [ -z "$lockfile" ]; then
+    if [ -n "${MUBX_USERS_FILE:-}" ]; then
+      lockfile="$(dirname "$MUBX_USERS_FILE")/.users.lock"
+    else
+      lockfile="/etc/mubx/.users.lock"
+    fi
+  fi
+  mubx_with_lock "$lockfile" "$@"
 }

@@ -1,0 +1,9 @@
+[Unit]
+Description=MUB-X User Quota and Expiry Watchdog
+After=network.target xray.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mubx-quota check
+StandardOutput=journal
+StandardError=journal

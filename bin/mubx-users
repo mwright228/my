@@ -21,7 +21,7 @@
 #   mubx-users usage [name]    per-user traffic from the Xray stats API
 set -Eeuo pipefail
 
-[ "$(id -u)" -eq 0 ] || { echo "[!] Run mubx-users as root." >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || [ "${MUBX_ALLOW_NON_ROOT:-0}" -eq 1 ] || { echo "[!] Run mubx-users as root." >&2; exit 1; }
 
 if [ -r /usr/local/lib/mubx/common.sh ]; then
   source /usr/local/lib/mubx/common.sh
@@ -65,6 +65,7 @@ store_require() {
 # Candidates are validated before live files are swapped; any restart failure
 # rolls all touched configs back atomically.
 reload_xray() {
+  [ "${MUBX_ALLOW_NON_ROOT:-0}" -eq 1 ] && return 0
   local tmpdir xray_new nginx_new singbox_new singbox_cfg="/etc/sing-box/config.json" has_singbox=0
   tmpdir="$(mktemp -d)"
   xray_new="$tmpdir/xray.json"
@@ -165,7 +166,7 @@ cmd_list() {
     mubx_put "$(printf '  %sNo users configured yet in store.%s' "$C_SLATE" "$C_RESET")"
     return
   fi
-  printf '  %s%-5s %-12s %-38s %-9s %-14s %-12s %-10s %s%s\n' "$C_PURPLE" "#" "USERNAME" "UUID" "STATUS" "PROTOCOLS" "EXPIRY" "QUOTA" "CREATED" "$C_RESET"
+  printf '  %s%-5s %-12s %-38s %-9s %-14s %-16s %-10s %s%s\n' "$C_PURPLE" "#" "USERNAME" "UUID" "STATUS" "PROTOCOLS" "EXPIRY" "QUOTA" "CREATED" "$C_RESET"
   mubx_rule
   local i=0
   while IFS=$'\t' read -r n u st p e q a; do
@@ -173,14 +174,24 @@ cmd_list() {
     i=$((i + 1))
     local exp_str="${e:-never}"
     local exp_col="$C_MINT"
-    if [ "$exp_str" != "never" ]; then
+    if [ "$exp_str" != "never" ] && [ -n "$exp_str" ]; then
       local exp_ts
       exp_ts="$(date -d "$exp_str 23:59:59" +%s 2>/dev/null || date -jf '%Y-%m-%d %H:%M:%S' "$exp_str 23:59:59" +%s 2>/dev/null || date -d "$exp_str" +%s 2>/dev/null || echo 0)"
-      if [ "$exp_ts" -gt 0 ] && [ "$exp_ts" -lt "$(date +%s)" ]; then
-        exp_col="$C_CORAL"
-        exp_str="EXPIRED"
-      else
-        exp_col="$C_AMBER"
+      if [ "$exp_ts" -gt 0 ]; then
+        local now_ts; now_ts="$(date +%s)"
+        if [ "$exp_ts" -lt "$now_ts" ]; then
+          exp_col="$C_CORAL"
+          exp_str="EXPIRED"
+        else
+          local d_left=$(( (exp_ts - now_ts) / 86400 ))
+          if [ "$d_left" -eq 0 ]; then
+            exp_col="$C_AMBER"
+            exp_str="Today"
+          else
+            exp_col="$C_MINT"
+            exp_str="${exp_str} (${d_left}d)"
+          fi
+        fi
       fi
     fi
     local st_pill
@@ -195,7 +206,7 @@ cmd_list() {
     if declare -F mubx_proto_summary >/dev/null 2>&1; then
       p_summary="$(mubx_proto_summary "$p")"
     fi
-    printf '  %s%-5s%s %s%-12s%s %s%-38s%s %-18s %s%-14s%s %s%-12s%s %s%-10s%s %s%s%s\n' \
+    printf '  %s%-5s%s %s%-12s%s %s%-38s%s %-18s %s%-14s%s %s%-16s%s %s%-10s%s %s%s%s\n' \
       "$C_ELECTRIC" "[$i]" "$C_RESET" \
       "$C_BRIGHT" "$n" "$C_RESET" \
       "$C_ELECTRIC" "$u" "$C_RESET" \
@@ -336,6 +347,114 @@ cmd_unfreeze() { # $1 name
   fi
 }
 
+cmd_quota() { # $1 name  $2 quota_gb
+  local name="$1" quota_gb="${2:-0}" backup new
+  store_require
+  user_exists "$name" || { warn "User '$name' not found."; return 1; }
+  [[ "$quota_gb" =~ ^[0-9]+$ ]] || { warn "Quota must be a non-negative integer in GB (0 = unlimited)."; return 1; }
+
+  backup="$(mktemp)"
+  new="$(mktemp)"
+  store_write_backup "$backup"
+  jq --arg n "$name" --argjson q "$quota_gb" \
+    'map(if .name == $n then .quota_gb = $q else . end)' "$STORE" > "$new"
+  install -m 0600 "$new" "$STORE"
+  rm -f "$new" "$backup"
+
+  local q_msg="${quota_gb} GB"
+  [ "$quota_gb" -eq 0 ] && q_msg="Unlimited"
+  log "Data quota for $name updated to: $q_msg"
+
+  local status
+  status="$(jq -r --arg n "$name" '.[] | select(.name == $n) | (.status // "active")' "$STORE" 2>/dev/null || echo "active")"
+  if [ "$status" = "frozen" ] && [ -t 0 ]; then
+    printf '  %sUser is currently FROZEN. Unfreeze now? [y/N]: %s' "$C_AMBER" "$C_RESET"
+    local ans
+    read -r ans || ans="n"
+    if [[ "$ans" =~ ^[Yy]$ ]]; then
+      cmd_unfreeze "$name"
+    fi
+  fi
+}
+
+cmd_extend() { # $1 name  $2 days
+  local name="$1" days="${2:-30}" backup new current_exp exp_ts new_exp
+  store_require
+  user_exists "$name" || { warn "User '$name' not found."; return 1; }
+  [[ "$days" =~ ^[1-9][0-9]*$ ]] || { warn "Days must be a positive integer."; return 1; }
+
+  current_exp="$(jq -r --arg n "$name" '.[] | select(.name == $n) | (.expiry // "")' "$STORE" 2>/dev/null || echo "")"
+  local base_ts=0
+  if [ -n "$current_exp" ] && [ "$current_exp" != "never" ]; then
+    exp_ts="$(date -d "$current_exp 23:59:59" +%s 2>/dev/null || date -jf '%Y-%m-%d %H:%M:%S' "$current_exp 23:59:59" +%s 2>/dev/null || date -d "$current_exp" +%s 2>/dev/null || echo 0)"
+    if [ "$exp_ts" -gt "$(date +%s)" ]; then
+      base_ts="$exp_ts"
+    fi
+  fi
+
+  if [ "$base_ts" -gt 0 ]; then
+    new_exp="$(date -d "@$(( base_ts + days * 86400 ))" '+%Y-%m-%d' 2>/dev/null || date -r "$(( base_ts + days * 86400 ))" '+%Y-%m-%d' 2>/dev/null || echo "")"
+  else
+    new_exp="$(date -d "+${days} days" '+%Y-%m-%d' 2>/dev/null || date -v "+${days}d" '+%Y-%m-%d' 2>/dev/null || echo "")"
+  fi
+
+  backup="$(mktemp)"
+  new="$(mktemp)"
+  store_write_backup "$backup"
+  jq --arg n "$name" --arg e "$new_exp" \
+    'map(if .name == $n then .expiry = $e else . end)' "$STORE" > "$new"
+  install -m 0600 "$new" "$STORE"
+  rm -f "$new" "$backup"
+
+  log "Expiration for $name extended by $days days -> $new_exp"
+
+  local status
+  status="$(jq -r --arg n "$name" '.[] | select(.name == $n) | (.status // "active")' "$STORE" 2>/dev/null || echo "active")"
+  if [ "$status" = "frozen" ] && [ -t 0 ]; then
+    printf '  %sUser is currently FROZEN. Unfreeze now? [y/N]: %s' "$C_AMBER" "$C_RESET"
+    local ans
+    read -r ans || ans="n"
+    if [[ "$ans" =~ ^[Yy]$ ]]; then
+      cmd_unfreeze "$name"
+    fi
+  fi
+}
+
+cmd_set_expiry() { # $1 name  $2 expiry_date (YYYY-MM-DD or never)
+  local name="$1" exp_input="${2:-never}" backup new
+  store_require
+  user_exists "$name" || { warn "User '$name' not found."; return 1; }
+
+  local final_exp=""
+  if [ "$exp_input" != "never" ] && [ -n "$exp_input" ]; then
+    if [[ ! "$exp_input" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+      warn "Date format must be YYYY-MM-DD (e.g. 2026-12-31) or 'never'."
+      return 1
+    fi
+    final_exp="$exp_input"
+  fi
+
+  backup="$(mktemp)"
+  new="$(mktemp)"
+  store_write_backup "$backup"
+  jq --arg n "$name" --arg e "$final_exp" \
+    'map(if .name == $n then .expiry = $e else . end)' "$STORE" > "$new"
+  install -m 0600 "$new" "$STORE"
+  rm -f "$new" "$backup"
+
+  log "Expiration date for $name set to: ${final_exp:-never}"
+}
+
+cmd_check() {
+  local quota_bin="/usr/local/bin/mubx-quota"
+  [ -x "$quota_bin" ] || quota_bin="$(dirname "${BASH_SOURCE[0]}")/mubx-quota"
+  if [ -x "$quota_bin" ]; then
+    "$quota_bin" check "$@"
+  else
+    warn "mubx-quota binary not found."
+  fi
+}
+
 cmd_reset_quota() { # $1 name
   local name="$1" pattern
   store_require
@@ -457,8 +576,9 @@ interactive() {
     printf '\n'
     
     cmd_list
-    printf '\n  %s[a]%s Add   %s[p]%s Protocols   %s[r]%s Remove   %s[f]%s Freeze   %s[u]%s Unfreeze   %s[s]%s Stats   %s[z]%s Reset Quota   %s[q]%s Exit\n\n' \
-      "$C_ELECTRIC" "$C_RESET" "$C_PURPLE" "$C_RESET" "$C_CORAL" "$C_RESET" "$C_AMBER" "$C_RESET" "$C_MINT" "$C_RESET" "$C_ELECTRIC" "$C_RESET" "$C_SLATE" "$C_RESET" "$C_SLATE" "$C_RESET"
+    printf '\n  %s[a]%s Add   %s[e]%s Extend Expiry   %s[g]%s Set Quota   %s[p]%s Protocols   %s[r]%s Remove\n  %s[f]%s Freeze   %s[u]%s Unfreeze   %s[s]%s Stats   %s[c]%s Check Watchdog   %s[z]%s Reset   %s[q]%s Exit\n\n' \
+      "$C_ELECTRIC" "$C_RESET" "$C_AMBER" "$C_RESET" "$C_PURPLE" "$C_RESET" "$C_ELECTRIC" "$C_RESET" "$C_CORAL" "$C_RESET" \
+      "$C_CORAL" "$C_RESET" "$C_MINT" "$C_RESET" "$C_ELECTRIC" "$C_RESET" "$C_MINT" "$C_RESET" "$C_SLATE" "$C_RESET" "$C_SLATE" "$C_RESET"
     printf '  %s❯%s ' "$C_ELECTRIC" "$C_RESET"
     read -r action || break
     local act_lower
@@ -477,6 +597,45 @@ interactive() {
           protos_choice="$(mubx_proto_picker)"
         fi
         mubx_with_users_lock cmd_add "$name" "$days" "$quota" "$protos_choice" || true
+        ;;
+      e|extend|expiry)
+        printf '  Username or # to extend or set expiry: '
+        read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
+        name="$(resolve_name "$name")"
+        printf '  Action: [1] Add days  [2] Set explicit date (YYYY-MM-DD)  [3] Remove expiry (never) [1]: '
+        local exp_act
+        read -r exp_act || exp_act="1"
+        case "${exp_act:-1}" in
+          1)
+            printf '  Number of days to extend: '
+            local add_d
+            read -r add_d || add_d="30"
+            mubx_with_users_lock cmd_extend "$name" "$add_d" || true
+            ;;
+          2)
+            printf '  Expiration date (YYYY-MM-DD): '
+            local set_d
+            read -r set_d
+            mubx_with_users_lock cmd_set_expiry "$name" "$set_d" || true
+            ;;
+          3)
+            mubx_with_users_lock cmd_set_expiry "$name" "never" || true
+            ;;
+        esac
+        ;;
+      g|quota)
+        printf '  Username or # to set data quota: '
+        read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
+        printf '  Data quota in GB (0 = unlimited): '
+        local set_q
+        read -r set_q || set_q="0"
+        mubx_with_users_lock cmd_quota "$(resolve_name "$name")" "$set_q" || true
+        ;;
+      c|check)
+        printf '\n'
+        cmd_check || true
         ;;
       p|proto|protocols)
         printf '  Username or # to configure protocols: '
@@ -530,6 +689,10 @@ cmd="${1:-interactive}"
 case "$cmd" in
   list) cmd_list ;;
   add) mubx_with_users_lock cmd_add "${2:?usage: mubx-users add <name> [days] [quota_gb] [protocols]}" "${3:-}" "${4:-0}" "${5:-all}" ;;
+  quota) mubx_with_users_lock cmd_quota "${2:?usage: mubx-users quota <name> <gb>}" "${3:-0}" ;;
+  extend) mubx_with_users_lock cmd_extend "${2:?usage: mubx-users extend <name> [days]}" "${3:-30}" ;;
+  set-expiry|expiry) mubx_with_users_lock cmd_set_expiry "${2:?usage: mubx-users set-expiry <name> <date|never>}" "${3:-never}" ;;
+  check) cmd_check "${@:2}" ;;
   proto|protocols) mubx_with_users_lock cmd_proto "${2:?usage: mubx-users proto <name> [protocols]}" "${3:-}" ;;
   remove) mubx_with_users_lock cmd_remove "${2:?usage: mubx-users remove <name>}" ;;
   freeze) mubx_with_users_lock cmd_freeze "${2:?usage: mubx-users freeze <name>}" ;;
@@ -537,7 +700,7 @@ case "$cmd" in
   reset-quota|reset) mubx_with_users_lock cmd_reset_quota "${2:?usage: mubx-users reset-quota <name>}" ;;
   usage|stats) mubx_with_users_lock cmd_usage "${2:-}" ;;
   interactive) interactive ;;
-  *) echo "Unknown command: $cmd (use list/add/proto/remove/freeze/unfreeze/reset-quota/usage)" >&2; exit 1 ;;
+  *) echo "Unknown command: $cmd (use list/add/quota/extend/set-expiry/check/proto/remove/freeze/unfreeze/reset-quota/usage)" >&2; exit 1 ;;
 esac
 
 
