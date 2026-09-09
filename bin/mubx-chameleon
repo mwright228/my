@@ -268,14 +268,22 @@ def load_response_profiles() -> Dict[str, dict]:
     return profiles
 
 
+def _sanitize_header_field(value: str) -> str:
+    """Strip CR/LF from any header field value to prevent HTTP response splitting."""
+    return value.replace("\r", "").replace("\n", "")
+
+
 def render_response(profile: Dict[str, Any]) -> bytes:
     """Renders HTTP status line and headers into wire bytes."""
-    status = profile.get("status", "HTTP/1.1 200 Connection established").strip()
+    raw_status = profile.get("status", "HTTP/1.1 200 Connection established")
+    status = _sanitize_header_field(raw_status).strip()
     headers = profile.get("headers", {})
     lines = [status]
     if isinstance(headers, dict):
         for k, v in headers.items():
-            lines.append(f"{k}: {v}")
+            safe_k = _sanitize_header_field(str(k))
+            safe_v = _sanitize_header_field(str(v))
+            lines.append(f"{safe_k}: {safe_v}")
     return ("\r\n".join(lines) + "\r\n\r\n").encode("utf-8")
 
 
@@ -463,14 +471,20 @@ def is_local_target(host: str, port: int) -> bool:
 
 def is_authorized_external(buffer: bytes) -> bool:
     """Gate for CONNECTs to destinations that are NOT a recognized local
-    MUB-X service. Supports both X-MUBX-Token and Proxy-Authorization: Basic."""
+    MUB-X service. Supports both X-MUBX-Token and Proxy-Authorization: Basic.
+    Uses the startup-loaded (and SIGHUP-refreshable) _AUTH_TOKENS cache to
+    avoid a disk read on every connection."""
     require_auth = os.environ.get("CHAMELEON_REQUIRE_AUTH", "1" if REQUIRE_AUTH_FOR_EXTERNAL else "0") == "1"
     if not require_auth:
         return True
 
+    # Use cached token set (populated at startup and on SIGHUP reload).
+    # Fall back to a live disk read only when the cache is empty (first call
+    # before reload_caches has run, or if users.json is genuinely empty).
+    tokens = _AUTH_TOKENS if _AUTH_TOKENS else load_auth_tokens()
+
     # 1. X-MUBX-Token header
     m = re.search(rb"(?i)\r?\nX-MUBX-Token:\s*([a-zA-Z0-9\-]+)", buffer)
-    tokens = load_auth_tokens()
     if m:
         token = m.group(1).decode("ascii", errors="ignore")
         if token in tokens:
@@ -592,13 +606,21 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         await _handle_client_inner(client_reader, client_writer, peer)
     finally:
         _active_connections = max(0, _active_connections - 1)
-        _connections_per_ip[peer_ip] = max(0, _connections_per_ip.get(peer_ip, 1) - 1)
+        new_count = max(0, _connections_per_ip.get(peer_ip, 1) - 1)
+        if new_count == 0:
+            _connections_per_ip.pop(peer_ip, None)  # prune zero entries to prevent unbounded growth
+        else:
+            _connections_per_ip[peer_ip] = new_count
 
 
 async def _handle_client_inner(client_reader, client_writer, client_addr):
     set_tcp_opts(client_writer)
     log.debug("Client connected: %s", client_addr)
     STATS["connections_accepted"] += 1
+
+    # Resolve the peer IP inside this function so it is available both when
+    # dispatched through handle_client and when called directly (e.g. tests).
+    peer_ip = client_addr[0] if client_addr else "?"
 
     # --- Step 1: grab the first chunk and sniff protocol before parsing ---
     try:
@@ -612,8 +634,15 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
 
     buffer = bytearray(first)
 
-    # Fast-path stats endpoint on loopback
+    # Fast-path stats endpoint — loopback-only (port 18088 / 127.0.0.1).
+    # Reject the same GET /stats request arriving on a public port so we
+    # don't accidentally leak operational metrics to the open internet.
     if buffer.startswith(b"GET /stats ") or buffer.startswith(b"GET /metrics "):
+        if peer_ip not in ("127.0.0.1", "::1", "0:0:0:0:0:0:0:1"):
+            client_writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+            await client_writer.drain()
+            client_writer.close()
+            return
         st = json.dumps(get_stats(), indent=2).encode("utf-8")
         resp = (
             b"HTTP/1.1 200 OK\r\n"
