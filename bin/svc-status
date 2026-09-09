@@ -72,6 +72,42 @@ row() { # $1 label  $2 unit  $3 tcp|udp  $4 port
   fi
   mubx_card "  $label" "$right"
 }
+# Status row for kernel-redirected ports (e.g. UDP 443 -> 4433)
+check_redir() { # $1 unit  $2 protocol(tcp|udp)  $3 target_port  $4 public_port
+  local unit="$1" proto="$2" target_port="$3" pub_port="${4:-443}"
+  systemctl is-active --quiet "$unit" 2>/dev/null || return 1
+  ss -H -l"${proto:0:1}"n "sport = :$target_port" 2>/dev/null | grep -q . || return 1
+  if command -v iptables >/dev/null 2>&1 && [ "$(id -u 2>/dev/null || echo 1)" -eq 0 ]; then
+    iptables -t nat -S PREROUTING 2>/dev/null | grep -E -- "-p $proto .*--dport $pub_port.*--to-ports $target_port" >/dev/null 2>&1 || return 1
+  fi
+  return 0
+}
+
+failure_hint_redir() { # $1 unit  $2 proto  $3 target_port  $4 public_port
+  local unit="$1" proto="$2" target_port="$3" pub_port="${4:-443}"
+  local msg=''
+  if ! systemctl is-active --quiet "$unit" 2>/dev/null; then
+    msg="daemon $unit is inactive: systemctl restart $unit"
+  elif ! ss -H -l"${proto:0:1}"n "sport = :$target_port" 2>/dev/null | grep -q .; then
+    msg="backend daemon $unit not listening on $proto/$target_port"
+  elif command -v iptables >/dev/null 2>&1 && [ "$(id -u 2>/dev/null || echo 1)" -eq 0 ]; then
+    if ! iptables -t nat -S PREROUTING 2>/dev/null | grep -E -- "-p $proto .*--dport $pub_port.*--to-ports $target_port" >/dev/null 2>&1; then
+      msg="iptables PREROUTING redirect for $proto/$pub_port -> $target_port missing: run 'mubx udp443 hy2'"
+    fi
+  fi
+  printf '%s' "${msg:-target unit inactive}"
+}
+
+row_redir() { # $1 label  $2 unit  $3 proto  $4 target_port  $5 public_port
+  local label="$1" unit="$2" proto="$3" target_port="$4" pub_port="${5:-443}" right
+  if check_redir "$unit" "$proto" "$target_port" "$pub_port"; then
+    right="$(mubx_pill UP "ONLINE")"
+  else
+    right="$(mubx_pill DOWN "OFFLINE")"
+    _hints+=("$(failure_hint_redir "$unit" "$proto" "$target_port" "$pub_port")")
+  fi
+  mubx_card "  $label" "$right"
+}
 
 mubx_clear
 
@@ -135,9 +171,9 @@ if [ -x /usr/local/bin/mubx-udp443 ] || [ -x "$(dirname "${BASH_SOURCE[0]}")/mub
   u443_cmd="$(command -v mubx-udp443 2>/dev/null || echo "$(dirname "${BASH_SOURCE[0]}")/mubx-udp443")"
   u443_out="$("$u443_cmd" status 2>/dev/null || true)"
   if echo "$u443_out" | grep -q "Hysteria 2"; then
-    row "UDP 443 -> Hysteria 2" hysteria udp 443
+    row_redir "UDP 443 -> Hysteria 2" hysteria udp 4433 443
   elif echo "$u443_out" | grep -q "TUIC"; then
-    row "UDP 443 -> TUIC v5" singbox udp 443
+    row_redir "UDP 443 -> TUIC v5" singbox udp 8444 443
   fi
 fi
 row "Fail2ban Defense"               fail2ban "" ""

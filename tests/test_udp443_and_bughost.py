@@ -221,5 +221,39 @@ class TestMubxMasterCli(unittest.TestCase):
         self.assertIn("Usage: mubx", res.stderr)
 
 
+class TestSvcStatusRedirect(unittest.TestCase):
+    def test_svc_status_syntax(self):
+        res = subprocess.run(["bash", "-n", "bin/svc-status"], cwd=REPO_ROOT, capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"svc-status syntax error: {res.stderr}")
+
+    def test_svc_status_redir_functions(self):
+        script = """
+        # Mock commands
+        systemctl() { return 0; }
+        ss() {
+            if [[ "$*" =~ sport.*:4433 ]]; then
+                echo "udp 0 0 0.0.0.0:4433"
+                return 0
+            fi
+            return 1
+        }
+        iptables() {
+            if [[ "$*" =~ "-t nat -S PREROUTING" ]]; then
+                echo "-A PREROUTING -p udp -m udp --dport 443 -j REDIRECT --to-ports 4433"
+                return 0
+            fi
+            return 1
+        }
+        id() { echo 0; }
+
+        eval "$(sed -n '/^check_redir()/,/^mubx_clear/p' bin/svc-status | grep -v 'mubx_clear')"
+        check_redir hysteria udp 4433 443 || exit 1
+        echo "CHECK_OK"
+        """
+        res = subprocess.run(["bash", "-c", script], cwd=REPO_ROOT, capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"check_redir test failed: {res.stderr}")
+        self.assertIn("CHECK_OK", res.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

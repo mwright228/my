@@ -294,10 +294,13 @@ elif [ -x "$ROOT/bin/mubx-tune" ]; then
   "$ROOT/bin/mubx-tune" >/dev/null 2>&1 || true
 fi
 
-# Ensure UDP 443 redirect is initialized (default Hysteria 2 / 4433)
-if [ -x /usr/local/bin/mubx-udp443 ]; then
-  if [ ! -f /etc/mubx/udp443.conf ]; then
-    /usr/local/bin/mubx-udp443 hy2 >/dev/null 2>&1 || true
+# Ensure UDP 443 redirect is initialized and active (default Hysteria 2 / 4433)
+u443_bin="$(command -v mubx-udp443 2>/dev/null || echo "$ROOT/bin/mubx-udp443")"
+if [ -x "$u443_bin" ]; then
+  active_target="$(sed -n 's/^TARGET=//p' /etc/mubx/udp443.conf 2>/dev/null || echo "hy2")"
+  [ -z "$active_target" ] && active_target="hy2"
+  if [ "$active_target" = "hy2" ] || [ "$active_target" = "tuic" ]; then
+    "$u443_bin" "$active_target" >/dev/null 2>&1 || true
   fi
 fi
 
