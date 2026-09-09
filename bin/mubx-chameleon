@@ -767,6 +767,46 @@ async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, count
             pass
 
 
+async def pipe_ssh_client_to_target(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, counter_key: str = "", ssh_started: bool = False):
+    """Pipes bytes from client to an SSH target (Dropbear / OpenSSH), safely
+    discarding any carrier split decoy HTTP lines (GET/POST/HEAD/Host:) that
+    the mobile injector sent before the client's actual SSH identification string
+    (SSH-2.0-...). Prevents Dropbear/OpenSSH from closing the connection with
+    'Did not receive identification string'."""
+    buf = bytearray()
+    try:
+        while not ssh_started and not reader.at_eof():
+            chunk = await reader.read(BUFFER_SIZE)
+            if not chunk:
+                break
+            buf.extend(chunk)
+            ssh_idx = buf.find(b"SSH-")
+            if ssh_idx != -1:
+                ssh_started = True
+                to_send = bytes(buf[ssh_idx:])
+                writer.write(to_send)
+                await writer.drain()
+                if counter_key:
+                    STATS[counter_key] += len(to_send)
+                buf.clear()
+                break
+            else:
+                # Keep tail in case "SSH-" is split across chunk boundaries
+                if len(buf) > 8192:
+                    buf = buf[-16:]
+
+        if ssh_started:
+            await pipe(reader, writer, counter_key)
+    except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
+        pass
+    finally:
+        try:
+            writer.close()
+            await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
+        except (Exception, asyncio.CancelledError):
+            pass
+
+
 async def raw_passthrough(client_reader, client_writer, buffer: bytes, host: str, port: int):
     """Straight TCP passthrough for protocols we don't (and shouldn't) try
     to parse as HTTP — raw TLS ClientHello, raw SSH banners."""
@@ -1391,14 +1431,34 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
             await send_response_and_close(client_writer, b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
             return
 
+    is_ssh_target = (target_port in (22, 2222, 109, 53)) or proto == "ssh" or target_port == DEFAULT_PORT
+    ssh_already_started = False
+
     try:
         if is_connect or is_ws_direct:
             ack = build_ack(requested_profile, is_ws_upgrade)
             client_writer.write(ack)
             await client_writer.drain()
             if leftover:
-                target_writer.write(leftover)
-                await target_writer.drain()
+                if is_ssh_target:
+                    # Carrier split payloads (e.g. [split]GET http://bug...) leave
+                    # HTTP request lines in the buffer. Dropbear/OpenSSH strictly
+                    # expects an SSH identification string (SSH-2.0-...) as its
+                    # very first bytes. If HTTP request lines are forwarded to Dropbear,
+                    # Dropbear immediately aborts with "Did not receive identification string".
+                    # Only forward leftover bytes if they contain the real SSH banner.
+                    ssh_idx = leftover.find(b"SSH-")
+                    if ssh_idx != -1:
+                        to_send = leftover[ssh_idx:]
+                        target_writer.write(to_send)
+                        await target_writer.drain()
+                        STATS["bytes_out"] += len(to_send)
+                        ssh_already_started = True
+                    else:
+                        log.debug("Filtered %d bytes of carrier HTTP split decoy from SSH target", len(leftover))
+                else:
+                    target_writer.write(leftover)
+                    await target_writer.drain()
         else:
             # Plain proxied HTTP to an external target: rewrite absolute-URI
             target_writer.write(rewrite_absolute_uri(bytes(buffer)))
@@ -1411,7 +1471,10 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
 
     pipe_start_ts = time.time()
     bytes_out_before = STATS["bytes_out"]
-    pipe_client = asyncio.create_task(pipe(client_reader, target_writer, "bytes_out"))
+    if is_ssh_target:
+        pipe_client = asyncio.create_task(pipe_ssh_client_to_target(client_reader, target_writer, "bytes_out", ssh_started=ssh_already_started))
+    else:
+        pipe_client = asyncio.create_task(pipe(client_reader, target_writer, "bytes_out"))
     pipe_target = asyncio.create_task(pipe(target_reader, client_writer, "bytes_in"))
     done, pending = await asyncio.wait([pipe_client, pipe_target], return_when=asyncio.FIRST_COMPLETED)
     for task in pending:

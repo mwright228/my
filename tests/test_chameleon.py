@@ -912,6 +912,72 @@ class TestSecurityHardening(unittest.IsolatedAsyncioTestCase):
         fake_writer.close.assert_called()
         _active_tarpits_per_ip.pop(test_ip, None)
 
+    async def test_ssh_carrier_split_decoy_filtered(self):
+        """Verifies that when an injector sends a carrier split decoy (e.g. GET http://bug...)
+        after CONNECT to an SSH port, the HTTP decoy is swallowed and Dropbear only receives
+        the legitimate SSH identification banner (SSH-2.0-...)."""
+        received_by_dropbear = bytearray()
+        async def mock_dropbear(r, w):
+            # Dropbear sends its banner
+            w.write(b"SSH-2.0-dropbear_2020.81\r\n")
+            await w.drain()
+            d = await r.read(1024)
+            received_by_dropbear.extend(d)
+            w.close()
+
+        server = await asyncio.start_server(mock_dropbear, "127.0.0.1", 0)
+        ssh_port = server.sockets[0].getsockname()[1]
+        globals_dict = chameleon["handle_client"].__globals__
+        orig_default_port = globals_dict["DEFAULT_PORT"]
+        globals_dict["DEFAULT_PORT"] = ssh_port
+        chameleon["LOCAL_TUNNEL_PORTS"].add(ssh_port)
+        chameleon["ALLOWED_LOCAL_PORTS"].add(ssh_port)
+
+        try:
+            reader = asyncio.StreamReader()
+            writer_transport = asyncio.StreamWriter(
+                transport=mock.MagicMock(),
+                protocol=asyncio.StreamReaderProtocol(reader),
+                reader=reader,
+                loop=asyncio.get_running_loop()
+            )
+            client_written = bytearray()
+            writer_transport.write = lambda d: client_written.extend(d)
+            writer_transport.wait_closed = mock.AsyncMock()
+            writer_transport.get_extra_info = lambda info: ("127.0.0.1", 54321) if info == "peername" else None
+
+            # Feed CONNECT payload with carrier split HTTP GET decoy in leftover
+            split_payload = (
+                f"CONNECT 127.0.0.1:{ssh_port} HTTP/1.1\r\n"
+                f"Host: filter.ncnd.jazz.com.pk/nc\r\n"
+                f"Connection: Keep-Alive\r\n\r\n"
+                f"GET http://filter.ncnd.jazz.com.pk/nc HTTP/1.1\r\n"
+                f"Host: filter.ncnd.jazz.com.pk/nc\r\n\r\n"
+            ).encode()
+            reader.feed_data(split_payload)
+
+            # Schedule client sending real SSH banner shortly after
+            async def feed_ssh_client():
+                await asyncio.sleep(0.05)
+                reader.feed_data(b"SSH-2.0-JSCH-0.1.55\r\n")
+                reader.feed_eof()
+
+            asyncio.create_task(feed_ssh_client())
+
+            await handle_client(reader, writer_transport)
+
+            # Dropbear MUST receive SSH-2.0-JSCH... and MUST NOT receive GET http://...
+            self.assertTrue(received_by_dropbear.startswith(b"SSH-2.0-JSCH"),
+                            f"Dropbear must receive SSH identification banner first, got: {bytes(received_by_dropbear)}")
+            self.assertNotIn(b"GET http://", bytes(received_by_dropbear),
+                             "HTTP carrier split decoy must not be forwarded to Dropbear")
+        finally:
+            server.close()
+            await server.wait_closed()
+            globals_dict["DEFAULT_PORT"] = orig_default_port
+            chameleon["LOCAL_TUNNEL_PORTS"].discard(ssh_port)
+            chameleon["ALLOWED_LOCAL_PORTS"].discard(ssh_port)
+
 
 if __name__ == "__main__":
     unittest.main()
