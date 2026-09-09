@@ -12,6 +12,7 @@ import runpy
 import socket
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -46,6 +47,11 @@ record_relay_violation = chameleon.get("record_relay_violation")
 clear_jailed_ips = chameleon.get("clear_jailed_ips")
 tarpit_client = chameleon.get("tarpit_client")
 handle_udpgw_client = chameleon.get("handle_udpgw_client")
+is_safe_udpgw_ip = chameleon.get("is_safe_udpgw_ip")
+ALLOWED_LOCAL_PORTS = chameleon.get("ALLOWED_LOCAL_PORTS")
+FORBIDDEN_LOCAL_PORTS = chameleon.get("FORBIDDEN_LOCAL_PORTS")
+_active_tarpits_per_ip = chameleon.get("_active_tarpits_per_ip")
+MAX_TARPIT_PER_IP = chameleon.get("MAX_TARPIT_PER_IP")
 
 
 class TestChameleonParsing(unittest.TestCase):
@@ -845,6 +851,9 @@ class TestUDPGWBridge(unittest.IsolatedAsyncioTestCase):
         # Feed frame into reader
         reader.feed_data(frame)
 
+        # Allow loopback destination for this local unit test
+        os.environ["CHAMELEON_UDPGW_ALLOW_LOOPBACK"] = "1"
+
         try:
             udpgw_task = asyncio.create_task(handle_udpgw_client(reader, writer_transport))
             await asyncio.sleep(0.15)
@@ -861,7 +870,47 @@ class TestUDPGWBridge(unittest.IsolatedAsyncioTestCase):
             except asyncio.CancelledError:
                 pass
         finally:
+            os.environ.pop("CHAMELEON_UDPGW_ALLOW_LOOPBACK", None)
             udp_transport.close()
+
+    def test_udpgw_ssrf_safety(self):
+        """Verifies SSRF prevention blocks cloud metadata, loopback, and multicast."""
+        os.environ.pop("CHAMELEON_UDPGW_ALLOW_LOOPBACK", None)
+        self.assertFalse(is_safe_udpgw_ip("127.0.0.1"))
+        self.assertFalse(is_safe_udpgw_ip("169.254.169.254"))  # AWS / GCP / Cloud metadata
+        self.assertFalse(is_safe_udpgw_ip("224.0.0.1"))        # Multicast
+        self.assertFalse(is_safe_udpgw_ip("0.0.0.0"))          # Unspecified
+        self.assertFalse(is_safe_udpgw_ip("invalid_ip"))       # Malformed
+        self.assertTrue(is_safe_udpgw_ip("8.8.8.8"))           # Valid public IP
+        self.assertTrue(is_safe_udpgw_ip("1.1.1.1"))           # Valid public IP
+
+
+class TestSecurityHardening(unittest.IsolatedAsyncioTestCase):
+    """Tests for multi-tenant and VPS security hardening."""
+
+    def test_ports_policy(self):
+        """Verifies forbidden internal ports and UDPGW exclusion from unauthenticated proxying."""
+        self.assertIn(18088, FORBIDDEN_LOCAL_PORTS)
+        self.assertNotIn(7300, ALLOWED_LOCAL_PORTS)
+        self.assertIn(2222, ALLOWED_LOCAL_PORTS)
+        self.assertIn(8448, ALLOWED_LOCAL_PORTS)
+
+    async def test_tarpit_throttling_per_ip(self):
+        """Verifies excess connections from a single IP bypass sleep and close immediately."""
+        fake_writer = mock.MagicMock()
+        fake_writer.wait_closed = mock.AsyncMock()
+
+        test_ip = "198.51.100.99"
+        _active_tarpits_per_ip[test_ip] = MAX_TARPIT_PER_IP
+
+        t0 = time.time()
+        await tarpit_client(fake_writer, test_ip, "test_overflow")
+        elapsed = time.time() - t0
+
+        # Should return almost instantaneously (< 0.1s) without triggering CHAMELEON_TARPIT_DELAY (10s)
+        self.assertLess(elapsed, 0.5)
+        fake_writer.close.assert_called()
+        _active_tarpits_per_ip.pop(test_ip, None)
 
 
 if __name__ == "__main__":

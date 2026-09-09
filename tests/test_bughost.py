@@ -22,6 +22,7 @@ probe_bughost = bughost_module["probe_bughost"]
 evaluate_fleet = bughost_module["evaluate_fleet"]
 save_evaluation_results = bughost_module["save_evaluation_results"]
 DEFAULT_CANDIDATES = bughost_module["DEFAULT_CANDIDATES"]
+is_valid_hostname = bughost_module["is_valid_hostname"]
 
 
 class TestBugHostLoadingAndSaving(unittest.TestCase):
@@ -53,6 +54,22 @@ class TestBugHostLoadingAndSaving(unittest.TestCase):
             f.write("invalid json {{{")
         loaded = load_candidates(path=self.candidates_file)
         self.assertEqual(loaded, list(DEFAULT_CANDIDATES))
+
+    def test_hostname_validation_and_crlf_defense(self):
+        self.assertTrue(is_valid_hostname("free.facebook.com"))
+        self.assertTrue(is_valid_hostname("zoom.us"))
+        self.assertFalse(is_valid_hostname("bad\r\nhost.com"))
+        self.assertFalse(is_valid_hostname("bad host.com"))
+        self.assertFalse(is_valid_hostname("bad/path.com"))
+        self.assertFalse(is_valid_hostname("bad:443"))
+        self.assertFalse(is_valid_hostname(""))
+        self.assertFalse(is_valid_hostname("a" * 255))
+
+        # Ensure load_candidates filters out malicious entries
+        with open(self.candidates_file, "w", encoding="utf-8") as f:
+            json.dump(["valid.com", "inject\r\nsmuggle.com", "evil/path"], f)
+        loaded = load_candidates(path=self.candidates_file)
+        self.assertEqual(loaded, ["valid.com"])
 
 
 class TestBugHostProbingAndScoring(unittest.IsolatedAsyncioTestCase):

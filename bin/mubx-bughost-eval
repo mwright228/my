@@ -50,6 +50,17 @@ C_RED = "\033[31m"
 C_DIM = "\033[2m"
 C_PURPLE = "\033[35m"
 
+RE_VALID_HOSTNAME = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9\-\.]{0,253}[a-zA-Z0-9])?$")
+
+
+def is_valid_hostname(host: str) -> bool:
+    """Validates domain name to prevent CRLF injection and HTTP request smuggling."""
+    if not host or len(host) > 253:
+        return False
+    if "\r" in host or "\n" in host or " " in host or ":" in host or "/" in host or "\\" in host:
+        return False
+    return bool(RE_VALID_HOSTNAME.match(host))
+
 
 def load_candidates(path: Optional[str] = None) -> List[str]:
     """Loads candidates from file, falling back to built-in fleet defaults."""
@@ -59,12 +70,12 @@ def load_candidates(path: Optional[str] = None) -> List[str]:
             with open(target_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, list):
-                return [str(c).strip().lower() for c in data if c and str(c).strip()]
+                return [str(c).strip().lower() for c in data if c and is_valid_hostname(str(c).strip().lower())]
             if isinstance(data, dict) and "candidates" in data:
-                return [str(c).strip().lower() for c in data["candidates"] if c and str(c).strip()]
+                return [str(c).strip().lower() for c in data["candidates"] if c and is_valid_hostname(str(c).strip().lower())]
         except Exception:
             pass
-    return list(DEFAULT_CANDIDATES)
+    return [c for c in DEFAULT_CANDIDATES if is_valid_hostname(c)]
 
 
 def save_candidates(candidates: List[str], path: Optional[str] = None) -> None:
@@ -72,7 +83,7 @@ def save_candidates(candidates: List[str], path: Optional[str] = None) -> None:
     target_path = path or os.environ.get("MUBX_BUGHOSTS_FILE", CANDIDATES_FILE)
     os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
     with open(target_path, "w", encoding="utf-8") as f:
-        json.dump(sorted(list(set(candidates))), f, indent=2)
+        json.dump(sorted(list(set([c for c in candidates if is_valid_hostname(c)]))), f, indent=2)
 
 
 async def probe_bughost(host: str, chameleon_port: Optional[int] = None, timeout: float = 4.0) -> Dict[str, Any]:
@@ -89,6 +100,10 @@ async def probe_bughost(host: str, chameleon_port: Optional[int] = None, timeout
         "verdict": "TIMEOUT",
         "score": 0.0,
     }
+    if not is_valid_hostname(host):
+        result["verdict"] = "INVALID_HOST"
+        return result
+
     t0 = time.time()
     try:
         reader, writer = await asyncio.wait_for(
@@ -256,6 +271,9 @@ async def main_async(args: argparse.Namespace) -> int:
 
     if args.add:
         domain = args.add.strip().lower()
+        if not is_valid_hostname(domain):
+            print(f"\033[31m[!] Invalid domain format. Must be a valid hostname (no spaces, CRLF, or slashes).\033[0m", file=sys.stderr)
+            return 1
         candidates = load_candidates()
         if domain not in candidates:
             candidates.append(domain)

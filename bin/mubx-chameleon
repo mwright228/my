@@ -36,6 +36,7 @@ proxy, replaces legacy Squid), extended with:
 import asyncio
 import base64
 import collections
+import ipaddress
 import json
 import logging
 import os
@@ -80,16 +81,21 @@ DEFAULT_PORT = 2222
 # aren't otherwise identified as a specific local service.
 TLS_FALLBACK_PORT = int(os.environ.get("CHAMELEON_TLS_FALLBACK_PORT", "20443"))
 
-# Permitted internal local targets
+# Permitted internal local targets (services requiring their own cryptographic auth)
 ALLOWED_LOCAL_PORTS: Set[int] = {
-    22, 53, 80, 109, 443, 1194, 2222, 5667, 7100, 7200, 7300, 7400, 7500, 7600, 7700,
+    22, 53, 80, 109, 443, 1194, 2222, 5667,
     8388, 8389, 8443, 8444, 8448, 17000, 18080, 18500, 20443
 }
 
 # Dedicated local tunnel service ports (always route to loopback)
 LOCAL_TUNNEL_PORTS: Set[int] = {
-    22, 53, 109, 1194, 2222, 5667, 7100, 7200, 7300, 7400, 7500, 7600, 7700,
+    22, 53, 109, 1194, 2222, 5667,
     8388, 8389, 8444, 8448, 17000, 18080, 18500, 20443
+}
+
+# Explicitly forbidden local ports (e.g. Chameleon control & telemetry port 18088)
+FORBIDDEN_LOCAL_PORTS: Set[int] = {
+    18088,
 }
 
 BUFFER_SIZE = 65536  # 64KB high-throughput buffer matching kernel TCP tuning
@@ -105,10 +111,13 @@ MAX_CONNECTIONS_PER_IP = int(os.environ.get("CHAMELEON_MAX_PER_IP", "200"))
 CHAMELEON_TARPIT_THRESHOLD = int(os.environ.get("CHAMELEON_TARPIT_THRESHOLD", "5"))
 CHAMELEON_JAIL_DURATION = float(os.environ.get("CHAMELEON_JAIL_DURATION", "300.0"))
 CHAMELEON_TARPIT_DELAY = float(os.environ.get("CHAMELEON_TARPIT_DELAY", "10.0"))
+MAX_TARPIT_PER_IP = int(os.environ.get("CHAMELEON_MAX_TARPIT_PER_IP", "3"))
+_active_tarpits_per_ip: Dict[str, int] = collections.defaultdict(int)
 
 # BadVPN UDPGW configuration
 ENABLE_UDPGW = os.environ.get("CHAMELEON_ENABLE_UDPGW", "1") == "1"
 UDPGW_PORT = int(os.environ.get("CHAMELEON_UDPGW_PORT", "7300"))
+ALLOW_UDPGW_LOOPBACK = os.environ.get("CHAMELEON_UDPGW_ALLOW_LOOPBACK", "0") == "1"
 
 # Response profile table
 RESPONSE_PROFILES_FILE = os.environ.get(
@@ -835,9 +844,21 @@ def clear_jailed_ips():
 
 
 async def tarpit_client(writer: asyncio.StreamWriter, peer_ip: str, reason: str = ""):
-    """Asynchronously tarpits a malicious scanner or jailed bot to waste its concurrency pool."""
+    """Asynchronously tarpits a malicious scanner or jailed bot to waste its concurrency pool.
+    Enforces per-IP tarpit concurrency limit to prevent tarpit socket exhaustion."""
+    if _active_tarpits_per_ip[peer_ip] >= MAX_TARPIT_PER_IP:
+        # Excess connection from already-tarpitted IP: close immediately to protect server FDs
+        try:
+            writer.close()
+            await asyncio.wait_for(writer.wait_closed(), timeout=0.5)
+        except (Exception, asyncio.CancelledError):
+            pass
+        return
+
     STATS["tarpitted_connections"] += 1
-    log.info("Tarpitting scanner from %s (%s) for %.1fs", peer_ip, reason, CHAMELEON_TARPIT_DELAY)
+    _active_tarpits_per_ip[peer_ip] += 1
+    log.info("Tarpitting scanner from %s (%s) for %.1fs (active tarpits for IP: %d)",
+             peer_ip, reason, CHAMELEON_TARPIT_DELAY, _active_tarpits_per_ip[peer_ip])
     try:
         writer.write(b"HTTP/1.1 407 Proxy Authentication Required\r\n")
         await writer.drain()
@@ -847,6 +868,9 @@ async def tarpit_client(writer: asyncio.StreamWriter, peer_ip: str, reason: str 
     except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, OSError, asyncio.CancelledError):
         pass
     finally:
+        _active_tarpits_per_ip[peer_ip] = max(0, _active_tarpits_per_ip[peer_ip] - 1)
+        if _active_tarpits_per_ip[peer_ip] == 0:
+            _active_tarpits_per_ip.pop(peer_ip, None)
         try:
             writer.close()
             await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
@@ -877,6 +901,22 @@ class UDPGWClientProtocol(asyncio.DatagramProtocol):
 
     def error_received(self, exc):
         pass
+
+
+def is_safe_udpgw_ip(ip_str: str) -> bool:
+    """Validates that destination IP for UDPGW is not loopback, multicast,
+    link-local, or cloud-provider metadata (preventing SSRF and amplification)."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        if ip.is_loopback:
+            return bool(ALLOW_UDPGW_LOOPBACK or os.environ.get("CHAMELEON_UDPGW_ALLOW_LOOPBACK", "0") == "1")
+        if ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            return False
+        if ip_str in ("0.0.0.0", "::", "255.255.255.255", "169.254.169.254"):
+            return False
+        return True
+    except ValueError:
+        return False
 
 
 async def handle_udpgw_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -926,6 +966,10 @@ async def handle_udpgw_client(reader: asyncio.StreamReader, writer: asyncio.Stre
                 payload = data[21:]
 
             if not (1 <= dest_port <= 65535):
+                continue
+
+            if not is_safe_udpgw_ip(dest_ip):
+                log.debug("UDPGW dropped packet to unsafe/reserved destination: %s:%d", dest_ip, dest_port)
                 continue
 
             endpoint = active_endpoints.get(con_id)
@@ -1234,7 +1278,7 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
     if is_local_target(target_host, target_port):
         target_host = "127.0.0.1"
         STATS["routes_local"] += 1
-        if target_port not in ALLOWED_LOCAL_PORTS:
+        if target_port in FORBIDDEN_LOCAL_PORTS or target_port not in ALLOWED_LOCAL_PORTS:
             STATS["blocked_forbidden_port"] += 1
             log.warning("Blocked local port access: %s:%d from %s", target_host, target_port, client_addr)
             await send_response_and_close(client_writer, b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
