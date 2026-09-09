@@ -9,6 +9,7 @@ import base64
 import json
 import os
 import runpy
+import socket
 import sys
 import tempfile
 import unittest
@@ -40,6 +41,11 @@ set_carrier_profile = chameleon.get("set_carrier_profile")
 extract_carrier_hint = chameleon.get("extract_carrier_hint")
 process_carrier_hint = chameleon.get("process_carrier_hint")
 record_abrupt_disconnect = chameleon.get("record_abrupt_disconnect")
+is_ip_jailed = chameleon.get("is_ip_jailed")
+record_relay_violation = chameleon.get("record_relay_violation")
+clear_jailed_ips = chameleon.get("clear_jailed_ips")
+tarpit_client = chameleon.get("tarpit_client")
+handle_udpgw_client = chameleon.get("handle_udpgw_client")
 
 
 class TestChameleonParsing(unittest.TestCase):
@@ -732,6 +738,130 @@ class TestReportEndpoint(unittest.IsolatedAsyncioTestCase):
             self.assertIn(b"\"status\": \"ok\"", resp)
         finally:
             _handle_client_inner.__globals__["_AUTH_TOKENS"] = orig_tokens
+
+
+class TestTarpitAndAutoJail(unittest.IsolatedAsyncioTestCase):
+    """Tests for scanner tarpitting and automatic IP jailing."""
+
+    def setUp(self):
+        clear_jailed_ips()
+
+    def tearDown(self):
+        clear_jailed_ips()
+
+    def test_relay_violations_trigger_autojail(self):
+        test_ip = "198.51.100.77"
+        self.assertFalse(is_ip_jailed(test_ip))
+        # Send 4 violations - below default threshold of 5
+        for _ in range(4):
+            newly_jailed = record_relay_violation(test_ip)
+            self.assertFalse(newly_jailed)
+        self.assertFalse(is_ip_jailed(test_ip))
+
+        # 5th violation crosses threshold
+        newly_jailed = record_relay_violation(test_ip)
+        self.assertTrue(newly_jailed)
+        self.assertTrue(is_ip_jailed(test_ip))
+
+        # Loopback IPs never get jailed
+        for _ in range(10):
+            self.assertFalse(record_relay_violation("127.0.0.1"))
+        self.assertFalse(is_ip_jailed("127.0.0.1"))
+
+    async def test_jailed_ip_tarpitted_on_connect(self):
+        test_ip = "198.51.100.88"
+        _globals = chameleon["handle_client"].__globals__
+        orig_delay = _globals["CHAMELEON_TARPIT_DELAY"]
+        _globals["CHAMELEON_TARPIT_DELAY"] = 0.05  # fast for testing
+
+        try:
+            # Mark as jailed
+            for _ in range(5):
+                record_relay_violation(test_ip)
+            self.assertTrue(is_ip_jailed(test_ip))
+
+            reader = asyncio.StreamReader()
+            writer_transport = asyncio.StreamWriter(
+                transport=mock.MagicMock(),
+                protocol=asyncio.StreamReaderProtocol(reader),
+                reader=reader,
+                loop=asyncio.get_running_loop()
+            )
+            written_data = bytearray()
+            writer_transport.write = lambda d: written_data.extend(d)
+            writer_transport.get_extra_info = lambda info: (test_ip, 45678) if info == "peername" else None
+
+            tarpits_before = _globals["STATS"]["tarpitted_connections"]
+            await handle_client(reader, writer_transport)
+            self.assertGreater(_globals["STATS"]["tarpitted_connections"], tarpits_before)
+            self.assertIn(b"407 Proxy Authentication Required", written_data)
+        finally:
+            _globals["CHAMELEON_TARPIT_DELAY"] = orig_delay
+
+
+class TestUDPGWBridge(unittest.IsolatedAsyncioTestCase):
+    """Tests for BadVPN UDPGW binary framing and forwarding."""
+
+    async def test_udpgw_ipv4_forwarding(self):
+        # Start a local UDP echo server
+        received_udp = bytearray()
+        loop = asyncio.get_running_loop()
+
+        class EchoServerProtocol(asyncio.DatagramProtocol):
+            def __init__(self):
+                self.transport = None
+            def connection_made(self, transport):
+                self.transport = transport
+            def datagram_received(self, data, addr):
+                received_udp.extend(data)
+                # Echo packet back with prefix
+                self.transport.sendto(b"ECHO:" + data, addr)
+
+        udp_transport, _ = await loop.create_datagram_endpoint(
+            EchoServerProtocol, local_addr=("127.0.0.1", 0)
+        )
+        udp_port = udp_transport.get_extra_info("sockname")[1]
+
+        reader = asyncio.StreamReader()
+        writer_transport = asyncio.StreamWriter(
+            transport=mock.MagicMock(),
+            protocol=asyncio.StreamReaderProtocol(reader),
+            reader=reader,
+            loop=loop
+        )
+        written_tcp = bytearray()
+        writer_transport.write = lambda d: written_tcp.extend(d)
+        writer_transport.get_extra_info = lambda info: ("127.0.0.1", 55555) if info == "peername" else None
+
+        # Craft UDPGW frame:
+        # flags(1B=0x00 IPv4) + con_id(2B) + ip(4B) + port(2B) + payload
+        con_id = b"\x00\x2a"
+        dest_ip_bytes = socket.inet_aton("127.0.0.1")
+        dest_port_bytes = udp_port.to_bytes(2, "big")
+        payload = b"GAME_TEST_PACKET_123"
+        pkt_body = b"\x00" + con_id + dest_ip_bytes + dest_port_bytes + payload
+        frame = len(pkt_body).to_bytes(2, "big") + pkt_body
+
+        # Feed frame into reader
+        reader.feed_data(frame)
+
+        try:
+            udpgw_task = asyncio.create_task(handle_udpgw_client(reader, writer_transport))
+            await asyncio.sleep(0.15)
+            self.assertEqual(bytes(received_udp), payload)
+
+            # Check that client TCP writer received UDPGW framed reply:
+            # [2B len][1B flags][2B con_id][ECHO:GAME_TEST_PACKET_123]
+            self.assertIn(b"ECHO:GAME_TEST_PACKET_123", written_tcp)
+            self.assertIn(con_id, written_tcp)
+            reader.feed_eof()
+            udpgw_task.cancel()
+            try:
+                await udpgw_task
+            except asyncio.CancelledError:
+                pass
+        finally:
+            udp_transport.close()
 
 
 if __name__ == "__main__":

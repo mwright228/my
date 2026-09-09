@@ -101,6 +101,15 @@ USERS_FILE = os.environ.get("MUBX_USERS_FILE", "/etc/mubx/users.json")
 MAX_CONCURRENT_CONNECTIONS = int(os.environ.get("CHAMELEON_MAX_CONNECTIONS", "2000"))
 MAX_CONNECTIONS_PER_IP = int(os.environ.get("CHAMELEON_MAX_PER_IP", "200"))
 
+# Tarpit and dynamic auto-jail configuration
+CHAMELEON_TARPIT_THRESHOLD = int(os.environ.get("CHAMELEON_TARPIT_THRESHOLD", "5"))
+CHAMELEON_JAIL_DURATION = float(os.environ.get("CHAMELEON_JAIL_DURATION", "300.0"))
+CHAMELEON_TARPIT_DELAY = float(os.environ.get("CHAMELEON_TARPIT_DELAY", "10.0"))
+
+# BadVPN UDPGW configuration
+ENABLE_UDPGW = os.environ.get("CHAMELEON_ENABLE_UDPGW", "1") == "1"
+UDPGW_PORT = int(os.environ.get("CHAMELEON_UDPGW_PORT", "7300"))
+
 # Response profile table
 RESPONSE_PROFILES_FILE = os.environ.get(
     "CHAMELEON_RESPONSES_FILE", "/etc/mubx/chameleon-responses.json"
@@ -198,6 +207,8 @@ _abrupt_disconnects: collections.deque = collections.deque()
 _active_connections = 0
 _connections_per_ip: Dict[str, int] = {}
 _last_limit_warning: Dict[str, float] = {}
+_violation_tracker: Dict[str, collections.deque] = collections.defaultdict(collections.deque)
+_jailed_ips: Dict[str, float] = {}
 
 STATS: Dict[str, Any] = {
     "start_time": time.time(),
@@ -207,6 +218,11 @@ STATS: Dict[str, Any] = {
     "routes_external": 0,
     "blocked_unauthorized": 0,
     "blocked_forbidden_port": 0,
+    "tarpitted_connections": 0,
+    "ips_jailed_total": 0,
+    "udpgw_connections": 0,
+    "udpgw_bytes_in": 0,
+    "udpgw_bytes_out": 0,
     "upstream_failures": 0,
     "bytes_in": 0,
     "bytes_out": 0,
@@ -221,6 +237,11 @@ def get_stats() -> Dict[str, Any]:
     s = dict(STATS)
     s["uptime_seconds"] = int(now - s["start_time"])
     s["connections_active"] = _active_connections
+    s["carrier_profile"] = get_carrier_profile() or "default"
+    active_jails = [ip for ip, exp in _jailed_ips.items() if exp > now]
+    s["jailed_ips_active"] = len(active_jails)
+    s["jailed_ips_list"] = active_jails[:50]
+    s["top_active_ips"] = sorted(_connections_per_ip.items(), key=lambda kv: -kv[1])[:10]
     return s
 
 
@@ -773,6 +794,175 @@ async def send_response_and_close(writer: asyncio.StreamWriter, response: bytes)
             pass
 
 
+def is_ip_jailed(peer_ip: str) -> bool:
+    """Checks if an IP is currently jailed and cleans expired entries."""
+    if peer_ip in ("127.0.0.1", "::1", "localhost"):
+        return False
+    now = time.time()
+    exp = _jailed_ips.get(peer_ip)
+    if exp is not None:
+        if now < exp:
+            return True
+        else:
+            _jailed_ips.pop(peer_ip, None)
+    return False
+
+
+def record_relay_violation(peer_ip: str) -> bool:
+    """Records an unauthenticated relay violation. Returns True if IP crossed threshold into jail."""
+    if peer_ip in ("127.0.0.1", "::1", "localhost"):
+        return False
+    now = time.time()
+    history = _violation_tracker[peer_ip]
+    history.append(now)
+    while history and (now - history[0]) > 30.0:
+        history.popleft()
+
+    if len(history) >= CHAMELEON_TARPIT_THRESHOLD and not is_ip_jailed(peer_ip):
+        _jailed_ips[peer_ip] = now + CHAMELEON_JAIL_DURATION
+        STATS["ips_jailed_total"] += 1
+        log.warning("Auto-jailed scanner IP %s for %.0fs (%d violations in 30s)",
+                    peer_ip, CHAMELEON_JAIL_DURATION, len(history))
+        return True
+    return False
+
+
+def clear_jailed_ips():
+    """Manually flushes all active IP jails and violation history."""
+    _jailed_ips.clear()
+    _violation_tracker.clear()
+    log.info("Cleared all active IP jails and violation tracking.")
+
+
+async def tarpit_client(writer: asyncio.StreamWriter, peer_ip: str, reason: str = ""):
+    """Asynchronously tarpits a malicious scanner or jailed bot to waste its concurrency pool."""
+    STATS["tarpitted_connections"] += 1
+    log.info("Tarpitting scanner from %s (%s) for %.1fs", peer_ip, reason, CHAMELEON_TARPIT_DELAY)
+    try:
+        writer.write(b"HTTP/1.1 407 Proxy Authentication Required\r\n")
+        await writer.drain()
+        await asyncio.sleep(CHAMELEON_TARPIT_DELAY)
+        writer.write(b"Proxy-Authenticate: Basic realm=\"MUB-X\"\r\nContent-Length: 0\r\n\r\n")
+        await writer.drain()
+    except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, OSError, asyncio.CancelledError):
+        pass
+    finally:
+        try:
+            writer.close()
+            await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
+        except (Exception, asyncio.CancelledError):
+            pass
+
+
+# --------------------------------------------------------------------------
+# BadVPN UDPGW (UDP-over-TCP) Protocol Engine for Online Gaming
+# --------------------------------------------------------------------------
+
+class UDPGWClientProtocol(asyncio.DatagramProtocol):
+    def __init__(self, con_id: bytes, flags: int, tcp_writer: asyncio.StreamWriter):
+        self.con_id = con_id
+        self.flags = flags
+        self.tcp_writer = tcp_writer
+
+    def datagram_received(self, data: bytes, addr):
+        # Frame response back to TCP client:
+        # [2 bytes total len (BE)][1 byte flags][2 bytes con_id][payload]
+        resp_payload = bytes([self.flags]) + self.con_id + data
+        frame = len(resp_payload).to_bytes(2, "big") + resp_payload
+        try:
+            self.tcp_writer.write(frame)
+            STATS["udpgw_bytes_in"] += len(data)
+        except Exception:
+            pass
+
+    def error_received(self, exc):
+        pass
+
+
+async def handle_udpgw_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    """BadVPN UDPGW binary protocol engine over TCP for mobile gaming."""
+    STATS["udpgw_connections"] += 1
+    peer = writer.get_extra_info("peername")
+    log.info("UDPGW client connected: %s", peer)
+    active_endpoints: Dict[bytes, Tuple[asyncio.DatagramTransport, float]] = {}
+    loop = asyncio.get_running_loop()
+
+    try:
+        while True:
+            # Read 2-byte packet length prefix
+            try:
+                raw_len = await asyncio.wait_for(reader.readexactly(2), timeout=120.0)
+            except (asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionResetError, BrokenPipeError):
+                break
+            pkt_len = int.from_bytes(raw_len, "big")
+            if pkt_len < 3 or pkt_len > 65535:
+                break
+            try:
+                data = await asyncio.wait_for(reader.readexactly(pkt_len), timeout=10.0)
+            except (asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionResetError, BrokenPipeError):
+                break
+
+            flags = data[0]
+            con_id = data[1:3]
+            is_ipv6 = bool(flags & 0x01)
+
+            if not is_ipv6:
+                if len(data) < 9:
+                    continue
+                try:
+                    dest_ip = socket.inet_ntoa(data[3:7])
+                except Exception:
+                    continue
+                dest_port = int.from_bytes(data[7:9], "big")
+                payload = data[9:]
+            else:
+                if len(data) < 21:
+                    continue
+                try:
+                    dest_ip = socket.inet_ntop(socket.AF_INET6, data[3:19])
+                except Exception:
+                    continue
+                dest_port = int.from_bytes(data[19:21], "big")
+                payload = data[21:]
+
+            if not (1 <= dest_port <= 65535):
+                continue
+
+            endpoint = active_endpoints.get(con_id)
+            if endpoint is None:
+                try:
+                    transport, protocol = await loop.create_datagram_endpoint(
+                        lambda: UDPGWClientProtocol(con_id, flags, writer),
+                        remote_addr=(dest_ip, dest_port)
+                    )
+                    active_endpoints[con_id] = (transport, time.time())
+                    endpoint = (transport, time.time())
+                except Exception as e:
+                    log.debug("UDPGW failed opening socket to %s:%d: %s", dest_ip, dest_port, e)
+                    continue
+
+            transport, _ = endpoint
+            try:
+                transport.sendto(payload)
+                STATS["udpgw_bytes_out"] += len(payload)
+            except Exception as e:
+                log.debug("UDPGW send error: %s", e)
+    except Exception as e:
+        log.debug("UDPGW client %s disconnected: %s", peer, e)
+    finally:
+        for trans, _ in active_endpoints.values():
+            try:
+                trans.close()
+            except Exception:
+                pass
+        active_endpoints.clear()
+        try:
+            writer.close()
+            await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
+        except Exception:
+            pass
+
+
 # --------------------------------------------------------------------------
 # Main per-connection handler
 # --------------------------------------------------------------------------
@@ -782,6 +972,13 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
 
     peer = client_writer.get_extra_info("peername")
     peer_ip = peer[0] if peer else "?"
+
+    if is_ip_jailed(peer_ip):
+        try:
+            await tarpit_client(client_writer, peer_ip, "jailed")
+        except Exception:
+            pass
+        return
 
     if _active_connections >= MAX_CONCURRENT_CONNECTIONS:
         try:
@@ -862,6 +1059,45 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
             b"Content-Type: application/json\r\n"
             b"Content-Length: " + str(len(st)).encode() + b"\r\n"
             b"Connection: close\r\n\r\n" + st
+        )
+        await send_response_and_close(client_writer, resp)
+        return
+
+    # Fast-path unjail endpoint — loopback only
+    if buffer.startswith(b"GET /unjail"):
+        if peer_ip not in ("127.0.0.1", "::1", "0:0:0:0:0:0:0:1"):
+            await send_response_and_close(client_writer, b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+            return
+        clear_jailed_ips()
+        res_data = json.dumps({"status": "ok", "message": "all jailed IPs flushed"}).encode("utf-8")
+        resp = (
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Content-Length: " + str(len(res_data)).encode() + b"\r\n"
+            b"Connection: close\r\n\r\n" + res_data
+        )
+        await send_response_and_close(client_writer, resp)
+        return
+
+    # Fast-path profile switch endpoint — loopback only
+    if buffer.startswith(b"GET /profile"):
+        if peer_ip not in ("127.0.0.1", "::1", "0:0:0:0:0:0:0:1"):
+            await send_response_and_close(client_writer, b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+            return
+        req_line = bytes(buffer).split(b"\r\n", 1)[0].decode("ascii", errors="ignore")
+        parts = req_line.split()
+        path = parts[1] if len(parts) > 1 else "/profile"
+        parsed = urllib.parse.urlparse(path)
+        qs = urllib.parse.parse_qs(parsed.query)
+        new_prof = qs.get("name", [None])[0]
+        if new_prof and new_prof in DEFAULT_PROFILES:
+            set_carrier_profile(new_prof)
+        res_data = json.dumps({"status": "ok", "carrier_profile": get_carrier_profile() or "default"}).encode("utf-8")
+        resp = (
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Content-Length: " + str(len(res_data)).encode() + b"\r\n"
+            b"Connection: close\r\n\r\n" + res_data
         )
         await send_response_and_close(client_writer, resp)
         return
@@ -1007,6 +1243,11 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
         # External destination — gate behind auth
         if not is_authorized_external(bytes(buffer)):
             STATS["blocked_unauthorized"] += 1
+            jailed = record_relay_violation(peer_ip)
+            if jailed or is_ip_jailed(peer_ip):
+                log.info("Blocked and tarpitting open-relay attempt to %s:%d from %s", target_host, target_port, client_addr)
+                await tarpit_client(client_writer, peer_ip, "open_relay_repeat")
+                return
             log.info("Blocked unauthenticated open-relay attempt to %s:%d from %s", target_host, target_port, client_addr)
             await send_response_and_close(
                 client_writer,
@@ -1155,6 +1396,15 @@ async def main():
             log.info("MUB-X Chameleon listening on %s:%d", listen_ip, port)
         except Exception as e:
             log.error("Failed to bind on port %d: %s", port, e)
+
+    # Start embedded BadVPN UDPGW bridge on loopback (gaming UDP over TCP)
+    if ENABLE_UDPGW:
+        try:
+            udpgw_server = await asyncio.start_server(handle_udpgw_client, "127.0.0.1", UDPGW_PORT)
+            servers.append(udpgw_server)
+            log.info("MUB-X Embedded UDPGW bridge active on 127.0.0.1:%d", UDPGW_PORT)
+        except OSError as e:
+            log.info("UDPGW port %d in use (external BadVPN daemon active): %s", UDPGW_PORT, e)
 
     if not servers:
         sys.exit(1)

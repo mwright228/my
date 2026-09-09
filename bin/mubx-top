@@ -1,0 +1,411 @@
+#!/usr/bin/env python3
+"""
+MUB-X Real-Time Interactive Telemetry Dashboard (bin/mubx-top).
+
+Monitors Chameleon proxy engine, Anti-DPI middlebox evasion profiles,
+Tarpit honeypots, Jailed scanner IPs, BadVPN UDPGW mobile gaming bridge,
+and Autonomous Bug-Host Fleet rankings in real time.
+
+Usage:
+  mubx-top               # Interactive curses dashboard
+  mubx-top --once        # Print single snapshot and exit
+  mubx-top -d 2          # Refresh interval in seconds (default: 1.0)
+"""
+
+import argparse
+import curses
+import json
+import os
+import sys
+import time
+import urllib.parse
+import urllib.request
+from typing import Any, Dict, List, Optional, Tuple
+
+STATS_URL = os.environ.get("CHAMELEON_STATS_URL", "http://127.0.0.1:18088/stats")
+CONTROL_BASE = os.environ.get("CHAMELEON_CONTROL_URL", "http://127.0.0.1:18088")
+BUGHOST_STATUS_FILE = os.environ.get("MUBX_BUGHOST_STATUS", "/run/mubx/bughost_status.json")
+ACTIVE_BUGHOST_FILE = os.environ.get("MUBX_ACTIVE_BUGHOST", "/run/mubx/active_bughost")
+
+CARRIER_PROFILES = [
+    "default",
+    "204_nocontent",
+    "206_partial",
+    "302_spoof",
+    "chunked_evasion",
+    "ws",
+]
+
+
+def format_bytes(n: int) -> str:
+    """Formats bytes to human readable string (KB, MB, GB)."""
+    if n < 1024:
+        return f"{n} B"
+    elif n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    elif n < 1024 * 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    else:
+        return f"{n / (1024 * 1024 * 1024):.2f} GB"
+
+
+def format_uptime(seconds: int) -> str:
+    """Formats seconds to days, hours, minutes."""
+    days, remainder = divmod(seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if days > 0:
+        return f"{days}d {hours}h {minutes}m"
+    elif hours > 0:
+        return f"{hours}h {minutes}m {secs}s"
+    elif minutes > 0:
+        return f"{minutes}m {secs}s"
+    else:
+        return f"{secs}s"
+
+
+def fetch_chameleon_stats(stats_url: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Queries loopback Chameleon stats endpoint."""
+    url = stats_url or os.environ.get("CHAMELEON_STATS_URL", STATS_URL)
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "MUBX-Top/2.0"},
+        )
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            if resp.status == 200:
+                return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        pass
+    return None
+
+
+def send_control_action(endpoint: str, base_url: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Dispatches a control command to Chameleon loopback interface."""
+    base = base_url or os.environ.get("CHAMELEON_CONTROL_URL", CONTROL_BASE)
+    url = f"{base.rstrip('/')}/{endpoint.lstrip('/')}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "MUBX-Top/2.0"})
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            if resp.status == 200:
+                return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        pass
+    return None
+
+
+def fetch_bughost_status(status_file: Optional[str] = None, active_file: Optional[str] = None) -> Dict[str, Any]:
+    """Reads bughost status JSON or active bug host fallback."""
+    stat_path = status_file or os.environ.get("MUBX_BUGHOST_STATUS", BUGHOST_STATUS_FILE)
+    act_path = active_file or os.environ.get("MUBX_ACTIVE_BUGHOST", ACTIVE_BUGHOST_FILE)
+    data: Dict[str, Any] = {
+        "winning_bughost": "None",
+        "winning_score": 0.0,
+        "candidates": [],
+        "updated_at": 0.0,
+    }
+    if os.path.isfile(stat_path):
+        try:
+            with open(stat_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    data.update(loaded)
+        except Exception:
+            pass
+    elif os.path.isfile(act_path):
+        try:
+            with open(act_path, "r", encoding="utf-8") as f:
+                line = f.read().strip()
+                if line:
+                    data["winning_bughost"] = line
+                    data["winning_score"] = 100.0
+        except Exception:
+            pass
+    return data
+
+
+def get_system_metrics() -> Dict[str, Any]:
+    """Retrieves system load averages and memory telemetry."""
+    metrics: Dict[str, Any] = {
+        "load": "0.00 0.00 0.00",
+        "mem": "0/0 MB",
+    }
+    try:
+        load1, load5, load15 = os.getloadavg()
+        metrics["load"] = f"{load1:.2f} {load5:.2f} {load15:.2f}"
+    except Exception:
+        pass
+
+    # Read memory if on Linux
+    if os.path.isfile("/proc/meminfo"):
+        try:
+            total_kb, avail_kb = 0, 0
+            with open("/proc/meminfo", "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        total_kb = int(line.split()[1])
+                    elif line.startswith("MemAvailable:"):
+                        avail_kb = int(line.split()[1])
+            if total_kb > 0:
+                used_mb = (total_kb - avail_kb) // 1024
+                tot_mb = total_kb // 1024
+                pct = int((used_mb / tot_mb) * 100) if tot_mb else 0
+                metrics["mem"] = f"{used_mb}/{tot_mb} MB ({pct}%)"
+        except Exception:
+            pass
+    return metrics
+
+
+def print_snapshot() -> None:
+    """Prints a non-interactive ANSI terminal snapshot."""
+    stats = fetch_chameleon_stats()
+    bughost = fetch_bughost_status()
+    sys_m = get_system_metrics()
+
+    print("\033[1m\033[36m╭─ MUB-X TELEMETRY TOP MONITOR ───────────────────────────── TELEMETRY ─╮\033[0m")
+    load = sys_m["load"]
+    mem = sys_m["mem"]
+    print(f"│  System Load   {load:<24} RAM Usage  {mem:<17} │")
+
+    if stats:
+        uptime = format_uptime(stats.get("uptime_seconds", 0))
+        prof = stats.get("carrier_profile", "default")
+        print(f"│  Engine Uptime {uptime:<24} Profile    [{prof}]" + " " * max(0, 16 - len(prof)) + "│")
+        print("\033[36m├─ CHAMELEON & ANTI-DPI METRICS ────────────────────────────────────────┤\033[0m")
+        conn_tot = stats.get("connections_accepted", 0)
+        conn_act = stats.get("connections_active", 0)
+        bin_str = format_bytes(stats.get("bytes_in", 0))
+        bout_str = format_bytes(stats.get("bytes_out", 0))
+        print(f"│  Connections   Total: {conn_tot:<8} Active: {conn_act:<6}  Bandwidth  In: {bin_str:<7} Out: {bout_str} │")
+
+        rst_anom = stats.get("middlebox_anomalies_detected", 0)
+        hints = stats.get("client_hints_received", 0)
+        print(f"│  Middlebox RST {rst_anom:<8} In-Band Hints: {hints:<5}  Relay Ext  {stats.get('routes_external', 0):<19} │")
+
+        print("\033[36m├─ SECURITY, TARPIT & AUTO-JAIL ────────────────────────────────────────┤\033[0m")
+        tarpit = stats.get("tarpitted_connections", 0)
+        jailed_act = stats.get("jailed_ips_active", 0)
+        jailed_tot = stats.get("ips_jailed_total", 0)
+        print(f"│  Tarpitted     {tarpit:<8} Active Jails:  {jailed_act:<5}  Lifetime   {jailed_tot} IPs jailed       │")
+        if stats.get("jailed_ips_list"):
+            jailed_preview = ", ".join(stats["jailed_ips_list"][:4])
+            print(f"│  Jailed IPs    {jailed_preview:<55} │")
+
+        print("\033[36m├─ BADVPN UDPGW ENGINE (PORT 7300) ─────────────────────────────────────┤\033[0m")
+        udpgw_c = stats.get("udpgw_connections", 0)
+        u_in = format_bytes(stats.get("udpgw_bytes_in", 0))
+        u_out = format_bytes(stats.get("udpgw_bytes_out", 0))
+        print(f"│  UDPGW Active  {udpgw_c:<8} UDP In: {u_in:<10}  UDP Out:   {u_out:<18} │")
+    else:
+        print("│  \033[31m[!] Chameleon engine offline or stats endpoint unreachable (18088)\033[0m    │")
+
+    print("\033[36m├─ AUTONOMOUS BUG HOST FLEET ───────────────────────────────────────────┤\033[0m")
+    winner = bughost.get("winning_bughost", "None")
+    w_score = bughost.get("winning_score", 0.0)
+    print(f"│  Active Bug Host: \033[32m{winner:<20}\033[0m Score: {w_score:<6.1f} Candidates: {len(bughost.get('candidates', [])):<9} │")
+
+    print("\033[1m\033[36m╰───────────────────────────────────────────────────────────────────────╯\033[0m")
+
+
+def draw_top(stdscr, delay: float = 1.0) -> None:
+    """Main interactive curses loop."""
+    curses.curs_set(0)
+    stdscr.nodelay(True)
+    stdscr.timeout(int(delay * 1000))
+
+    has_colors = curses.has_colors()
+    if has_colors:
+        curses.start_color()
+        curses.use_default_colors()
+        curses.init_pair(1, curses.COLOR_CYAN, -1)     # Headers / borders
+        curses.init_pair(2, curses.COLOR_GREEN, -1)    # Healthy / success
+        curses.init_pair(3, curses.COLOR_YELLOW, -1)   # Warning / profiles
+        curses.init_pair(4, curses.COLOR_RED, -1)      # Alerts / jails
+        curses.init_pair(5, curses.COLOR_MAGENTA, -1)  # Accents
+
+    status_msg = "Ready. Press [Q]uit, [R]efresh, [P]rofile cycle, [J]ail flush."
+    status_time = time.time()
+    curr_prof_idx = 0
+
+    while True:
+        # User input handling
+        try:
+            ch = stdscr.getch()
+        except Exception:
+            ch = -1
+
+        if ch in (ord("q"), ord("Q")):
+            break
+        elif ch in (ord("r"), ord("R")):
+            status_msg = "Refreshing metrics..."
+            status_time = time.time()
+        elif ch in (ord("p"), ord("P")):
+            curr_prof_idx = (curr_prof_idx + 1) % len(CARRIER_PROFILES)
+            target_prof = CARRIER_PROFILES[curr_prof_idx]
+            res = send_control_action(f"/profile?name={target_prof}")
+            if res and res.get("status") == "ok":
+                status_msg = f"Profile switched to [{target_prof}]"
+            else:
+                status_msg = f"Failed to switch profile to [{target_prof}]"
+            status_time = time.time()
+        elif ch in (ord("j"), ord("J")):
+            res = send_control_action("/unjail")
+            if res and res.get("status") == "ok":
+                status_msg = "All jailed scanner IPs successfully flushed!"
+            else:
+                status_msg = "Failed to flush jailed IPs (chameleon loopback down)"
+            status_time = time.time()
+
+        # Query metrics
+        stats = fetch_chameleon_stats()
+        bughost = fetch_bughost_status()
+        sys_m = get_system_metrics()
+
+        stdscr.erase()
+        max_y, max_x = stdscr.getmaxyx()
+        if max_y < 18 or max_x < 60:
+            stdscr.addstr(0, 0, "Terminal too small. Resize to at least 80x24.")
+            stdscr.refresh()
+            time.sleep(delay)
+            continue
+
+        c_cyan = curses.color_pair(1) | curses.A_BOLD if has_colors else curses.A_BOLD
+        c_green = curses.color_pair(2) | curses.A_BOLD if has_colors else curses.A_BOLD
+        c_yellow = curses.color_pair(3) | curses.A_BOLD if has_colors else curses.A_BOLD
+        c_red = curses.color_pair(4) | curses.A_BOLD if has_colors else curses.A_BOLD
+        c_dim = curses.A_DIM
+
+        # Row 0: Top Header
+        header_title = " MUB-X TELEMETRY TOP MONITOR (LIVE) "
+        border_len = max(0, max_x - len(header_title) - 4)
+        stdscr.addstr(0, 0, "╭─" + header_title + "─" * border_len + "─╮", c_cyan)
+
+        # Row 1: System info
+        row = 1
+        load = sys_m["load"]
+        mem = sys_m["mem"]
+        now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+        sys_line = f"│  Time: {now_str}   Load: {load}   RAM: {mem}"
+        stdscr.addstr(row, 0, sys_line)
+        stdscr.addstr(row, max_x - 1, "│")
+        row += 1
+
+        # Section: Chameleon
+        stdscr.addstr(row, 0, "├─ CHAMELEON & ANTI-DPI ENGINE " + "─" * max(0, max_x - 34) + "┤", c_cyan)
+        row += 1
+
+        if stats:
+            uptime = format_uptime(stats.get("uptime_seconds", 0))
+            prof = stats.get("carrier_profile", "default")
+            conn_tot = stats.get("connections_accepted", 0)
+            conn_act = stats.get("connections_active", 0)
+            bin_str = format_bytes(stats.get("bytes_in", 0))
+            bout_str = format_bytes(stats.get("bytes_out", 0))
+
+            stdscr.addstr(row, 0, f"│  Uptime: {uptime}   Profile: ")
+            stdscr.addstr(f"[{prof}]", c_yellow)
+            stdscr.addstr(f"   Active Conns: {conn_act}   Total Conns: {conn_tot}")
+            stdscr.addstr(row, max_x - 1, "│")
+            row += 1
+
+            rst_anom = stats.get("middlebox_anomalies_detected", 0)
+            hints = stats.get("client_hints_received", 0)
+            stdscr.addstr(row, 0, f"│  Traffic: In: {bin_str} / Out: {bout_str}   Middlebox RSTs: {rst_anom}   Hints: {hints}")
+            stdscr.addstr(row, max_x - 1, "│")
+            row += 1
+
+            # Section: Tarpit & Jails
+            stdscr.addstr(row, 0, "├─ SECURITY, TARPIT & SCANNER JAILING " + "─" * max(0, max_x - 41) + "┤", c_cyan)
+            row += 1
+
+            tarpit = stats.get("tarpitted_connections", 0)
+            jailed_act = stats.get("jailed_ips_active", 0)
+            jailed_tot = stats.get("ips_jailed_total", 0)
+
+            stdscr.addstr(row, 0, f"│  Tarpitted Sockets: {tarpit}   Active Jails: ")
+            stdscr.addstr(f"{jailed_act}", c_red if jailed_act > 0 else c_green)
+            stdscr.addstr(f"   Total Lifetime Jails: {jailed_tot}")
+            stdscr.addstr(row, max_x - 1, "│")
+            row += 1
+
+            if stats.get("jailed_ips_list"):
+                jailed_preview = ", ".join(stats["jailed_ips_list"][:5])
+                stdscr.addstr(row, 0, f"│  Jailed: {jailed_preview[:max_x - 15]}")
+                stdscr.addstr(row, max_x - 1, "│")
+                row += 1
+
+            # Section: UDPGW
+            stdscr.addstr(row, 0, "├─ BADVPN UDPGW ENGINE (PORT 7300) " + "─" * max(0, max_x - 37) + "┤", c_cyan)
+            row += 1
+
+            udpgw_c = stats.get("udpgw_connections", 0)
+            u_in = format_bytes(stats.get("udpgw_bytes_in", 0))
+            u_out = format_bytes(stats.get("udpgw_bytes_out", 0))
+            stdscr.addstr(row, 0, f"│  UDPGW Status: ")
+            stdscr.addstr("ONLINE", c_green)
+            stdscr.addstr(f"   Gaming/VoIP Sessions: {udpgw_c}   In: {u_in}   Out: {u_out}")
+            stdscr.addstr(row, max_x - 1, "│")
+            row += 1
+
+        else:
+            stdscr.addstr(row, 0, "│  Chameleon engine offline (127.0.0.1:18088 unreachable)")
+            stdscr.addstr(row, max_x - 1, "│")
+            row += 1
+
+        # Section: Bug Host
+        stdscr.addstr(row, 0, "├─ AUTONOMOUS BUG HOST FLEET " + "─" * max(0, max_x - 31) + "┤", c_cyan)
+        row += 1
+
+        winner = bughost.get("winning_bughost", "None")
+        w_score = bughost.get("winning_score", 0.0)
+        c_count = len(bughost.get("candidates", []))
+        stdscr.addstr(row, 0, f"│  Active Bug Host: ")
+        stdscr.addstr(f"{winner}", c_green)
+        stdscr.addstr(f"   Score: {w_score:.1f}/100   Fleet Size: {c_count}")
+        stdscr.addstr(row, max_x - 1, "│")
+        row += 1
+
+        # Display Top 3 candidates if available
+        cands = bughost.get("candidates", [])
+        if cands and row + 3 < max_y - 2:
+            for idx, c in enumerate(cands[:3], 1):
+                h = c.get("host", "?")
+                sc = c.get("score", 0.0)
+                verd = c.get("verdict", "?")
+                rtt = c.get("rtt_ms", 0.0)
+                stdscr.addstr(row, 0, f"│    #{idx} {h:<22} {verd:<10} RTT: {rtt:<5.1f}ms  Score: {sc:<5.1f}")
+                stdscr.addstr(row, max_x - 1, "│")
+                row += 1
+
+        # Bottom Border
+        stdscr.addstr(row, 0, "╰" + "─" * (max_x - 2) + "╯", c_cyan)
+        row += 1
+
+        # Status Line
+        if row < max_y:
+            stdscr.addstr(row, 0, status_msg[:max_x - 1], c_yellow)
+            row += 1
+        if row < max_y:
+            stdscr.addstr(row, 0, "[Q]uit  [R]efresh  [P]rofile Cycle  [J]ail Flush"[:max_x - 1], c_dim)
+
+        stdscr.refresh()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="MUB-X Real-Time Interactive Telemetry Dashboard")
+    parser.add_argument("--once", "-1", action="store_true", help="Print single snapshot and exit")
+    parser.add_argument("--delay", "-d", type=float, default=1.0, help="Refresh delay in seconds (default: 1.0)")
+    args = parser.parse_args()
+
+    if args.once or not sys.stdout.isatty():
+        print_snapshot()
+        sys.exit(0)
+
+    try:
+        curses.wrapper(lambda stdscr: draw_top(stdscr, delay=args.delay))
+    except KeyboardInterrupt:
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

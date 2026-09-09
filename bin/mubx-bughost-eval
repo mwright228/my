@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""
+MUB-X Autonomous Bug Host Fleet Swarm & Health Evaluator (bin/mubx-bughost-eval).
+
+Evaluates zero-rated CDN/SNI bug-host candidates against middlebox filters,
+computes real-time health and survival scores, and automatically writes the winning
+bug-host to /run/mubx/active_bughost for seamless use across Chameleon and link-gen.
+
+Usage:
+  mubx-bughost-eval --check          # Interactive terminal diagnostic table
+  mubx-bughost-eval --auto           # Run once silently, update state files
+  mubx-bughost-eval --daemon         # Run continuously in background (default 300s)
+  mubx-bughost-eval --list           # Show candidate pool
+  mubx-bughost-eval --add <domain>   # Add domain to candidate pool
+"""
+
+import argparse
+import asyncio
+import json
+import os
+import re
+import socket
+import sys
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+CANDIDATES_FILE = os.environ.get("MUBX_BUGHOSTS_FILE", "/etc/mubx/bughosts.json")
+ACTIVE_BUGHOST_FILE = os.environ.get("MUBX_ACTIVE_BUGHOST", "/run/mubx/active_bughost")
+STATUS_FILE = os.environ.get("MUBX_BUGHOST_STATUS", "/run/mubx/bughost_status.json")
+CHAMELEON_PORT = int(os.environ.get("CHAMELEON_PORT", "8080"))
+
+DEFAULT_CANDIDATES = [
+    "v.whatsapp.net",
+    "free.facebook.com",
+    "zoom.us",
+    "quizizz.com",
+    "classdojo.com",
+    "teams.microsoft.com",
+    "cdn.discordapp.com",
+    "speedtest.net",
+]
+
+# ANSI styling
+C_RESET = "\033[0m"
+C_BOLD = "\033[1m"
+C_CYAN = "\033[36m"
+C_GREEN = "\033[32m"
+C_YELLOW = "\033[33m"
+C_RED = "\033[31m"
+C_DIM = "\033[2m"
+C_PURPLE = "\033[35m"
+
+
+def load_candidates(path: Optional[str] = None) -> List[str]:
+    """Loads candidates from file, falling back to built-in fleet defaults."""
+    target_path = path or os.environ.get("MUBX_BUGHOSTS_FILE", CANDIDATES_FILE)
+    if os.path.isfile(target_path):
+        try:
+            with open(target_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return [str(c).strip().lower() for c in data if c and str(c).strip()]
+            if isinstance(data, dict) and "candidates" in data:
+                return [str(c).strip().lower() for c in data["candidates"] if c and str(c).strip()]
+        except Exception:
+            pass
+    return list(DEFAULT_CANDIDATES)
+
+
+def save_candidates(candidates: List[str], path: Optional[str] = None) -> None:
+    """Saves candidate pool to CANDIDATES_FILE."""
+    target_path = path or os.environ.get("MUBX_BUGHOSTS_FILE", CANDIDATES_FILE)
+    os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
+    with open(target_path, "w", encoding="utf-8") as f:
+        json.dump(sorted(list(set(candidates))), f, indent=2)
+
+
+async def probe_bughost(host: str, chameleon_port: Optional[int] = None, timeout: float = 4.0) -> Dict[str, Any]:
+    """Probes a bug host through Chameleon on loopback or direct TCP.
+
+    Sends an HTTP CONNECT probe, checks return status line, and records RTT.
+    """
+    port = chameleon_port if chameleon_port is not None else int(os.environ.get("CHAMELEON_PORT", str(CHAMELEON_PORT)))
+    result: Dict[str, Any] = {
+        "host": host,
+        "status_code": 0,
+        "status_line": "",
+        "rtt_ms": 0.0,
+        "verdict": "TIMEOUT",
+        "score": 0.0,
+    }
+    t0 = time.time()
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection("127.0.0.1", port),
+            timeout=timeout,
+        )
+
+        probe_req = (
+            f"CONNECT {host}:443 HTTP/1.1\r\n"
+            f"Host: {host}:443\r\n"
+            f"User-Agent: MUBX-BugHost-Scanner/2.0\r\n\r\n"
+        ).encode("ascii")
+
+        writer.write(probe_req)
+        await writer.drain()
+
+        raw_resp = await asyncio.wait_for(reader.readline(), timeout=timeout)
+        t_done = time.time()
+        result["rtt_ms"] = round((t_done - t0) * 1000, 1)
+
+        resp_line = raw_resp.decode("ascii", errors="ignore").strip()
+        result["status_line"] = resp_line
+
+        writer.close()
+        try:
+            await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
+        except Exception:
+            pass
+
+        # Parse HTTP status
+        m = re.search(r"HTTP/\d\.\d\s+(\d{3})", resp_line)
+        if m:
+            code = int(m.group(1))
+            result["status_code"] = code
+            if code in (200, 204, 101):
+                result["verdict"] = "HEALTHY"
+                base_score = 100.0 if code in (200, 101) else 95.0
+            elif code in (301, 302, 307):
+                result["verdict"] = "REDIRECT"
+                base_score = 65.0
+            elif code in (403, 410):
+                result["verdict"] = "BLOCKED"
+                base_score = 10.0
+            elif code == 407:
+                result["verdict"] = "PROXY_AUTH"
+                base_score = 40.0
+            else:
+                result["verdict"] = f"HTTP_{code}"
+                base_score = 30.0
+            lat_penalty = min(30.0, result["rtt_ms"] / 20.0)
+            result["score"] = round(max(0.0, base_score - lat_penalty), 1)
+        else:
+            result["verdict"] = "MALFORMED"
+            result["score"] = 5.0
+
+    except (asyncio.TimeoutError, TimeoutError):
+        result["verdict"] = "TIMEOUT"
+        result["score"] = 0.0
+    except ConnectionRefusedError:
+        result["verdict"] = "REFUSED"
+        result["score"] = 0.0
+    except Exception as e:
+        result["verdict"] = "ERROR"
+        result["score"] = 0.0
+
+    return result
+
+
+async def evaluate_fleet(
+    candidates: Optional[List[str]] = None,
+    chameleon_port: Optional[int] = None,
+    probe_fn: Any = None,
+) -> List[Dict[str, Any]]:
+    """Evaluates all candidate bug hosts concurrently and ranks by score."""
+    targets = candidates if candidates is not None else load_candidates()
+    fn = probe_fn if probe_fn is not None else probe_bughost
+    if probe_fn is not None:
+        tasks = [fn(host) for host in targets]
+    else:
+        tasks = [probe_bughost(host, chameleon_port=chameleon_port) for host in targets]
+    results = await asyncio.gather(*tasks)
+    return sorted(results, key=lambda r: (-r["score"], r["rtt_ms"]))
+
+
+def save_evaluation_results(
+    ranked_results: List[Dict[str, Any]],
+    active_file: Optional[str] = None,
+    status_file: Optional[str] = None,
+) -> Optional[str]:
+    """Persists active bug-host and detailed JSON report."""
+    if not ranked_results:
+        return None
+    winning = ranked_results[0]
+    winning_host = winning["host"]
+
+    act_path = active_file or os.environ.get("MUBX_ACTIVE_BUGHOST", ACTIVE_BUGHOST_FILE)
+    stat_path = status_file or os.environ.get("MUBX_BUGHOST_STATUS", STATUS_FILE)
+
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(act_path)), exist_ok=True)
+        with open(act_path + ".tmp", "w", encoding="utf-8") as f:
+            f.write(winning_host + "\n")
+        os.replace(act_path + ".tmp", act_path)
+    except Exception:
+        pass
+
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(stat_path)), exist_ok=True)
+        report = {
+            "updated_at": time.time(),
+            "updated_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "winning_bughost": winning_host,
+            "winning_score": winning["score"],
+            "candidates_count": len(ranked_results),
+            "candidates": ranked_results,
+        }
+        with open(stat_path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+        os.replace(stat_path + ".tmp", stat_path)
+    except Exception:
+        pass
+
+    return winning_host
+
+
+def print_diagnostic_table(results: List[Dict[str, Any]]) -> None:
+    """Prints a modern, terminal table with colored health verdicts."""
+    print(f"\n{C_BOLD}{C_CYAN}╭── MUB-X AUTONOMOUS BUG HOST FLEET EVALUATION ───────────────────╮{C_RESET}")
+    print(f"  {C_BOLD}{'RANK':<5} {'BUG HOST':<28} {'STATUS':<10} {'RTT (ms)':<10} {'SCORE':<8} {'VERDICT'}{C_RESET}")
+    print(f"  {C_DIM}{'─'*70}{C_RESET}")
+
+    for idx, r in enumerate(results, 1):
+        score = r["score"]
+        verdict = r["verdict"]
+        if verdict == "HEALTHY":
+            v_color = C_GREEN
+        elif verdict in ("REDIRECT", "PROXY_AUTH"):
+            v_color = C_YELLOW
+        else:
+            v_color = C_RED
+
+        status_str = str(r["status_code"]) if r["status_code"] else "-"
+        rtt_str = f"{r['rtt_ms']:.1f}" if r["rtt_ms"] else "-"
+        prefix = f"{C_BOLD}🏆{C_RESET} " if idx == 1 else f"  {idx:<2}"
+
+        print(
+            f"  {prefix} {r['host']:<28} {status_str:<10} {rtt_str:<10} "
+            f"{score:<8.1f} {v_color}{verdict:<12}{C_RESET}"
+        )
+
+    print(f"{C_BOLD}{C_CYAN}╰─────────────────────────────────────────────────────────────────╯{C_RESET}")
+    if results:
+        winner = results[0]
+        print(f"  {C_BOLD}Active Carrier Bug Host:{C_RESET} {C_GREEN}{winner['host']}{C_RESET} (Score: {winner['score']}/100)\n")
+
+
+async def main_async(args: argparse.Namespace) -> int:
+    if args.list:
+        candidates = load_candidates()
+        print(f"\n{C_BOLD}Current Bug Host Candidates ({len(candidates)}):{C_RESET}")
+        for c in candidates:
+            print(f"  - {c}")
+        print()
+        return 0
+
+    if args.add:
+        domain = args.add.strip().lower()
+        candidates = load_candidates()
+        if domain not in candidates:
+            candidates.append(domain)
+            save_candidates(candidates)
+            print(f"{C_GREEN}[+] Added '{domain}' to candidate pool.{C_RESET}")
+        else:
+            print(f"[!] '{domain}' already present in candidate pool.")
+        return 0
+
+    if args.daemon:
+        interval = int(os.environ.get("BUGHOST_EVAL_INTERVAL", "300"))
+        print(f"Starting MUB-X Bug Host Evaluator daemon (interval: {interval}s)...")
+        while True:
+            try:
+                results = await evaluate_fleet()
+                winner = save_evaluation_results(results)
+                if winner:
+                    print(f"[{time.strftime('%X')}] Evaluated {len(results)} hosts. Active: {winner}")
+            except Exception as e:
+                print(f"[!] Error in evaluation loop: {e}", file=sys.stderr)
+            await asyncio.sleep(interval)
+        return 0
+
+    results = await evaluate_fleet()
+    winner = save_evaluation_results(results)
+
+    if not args.auto:
+        print_diagnostic_table(results)
+
+    return 0 if winner else 1
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="MUB-X Autonomous Bug Host Fleet Evaluator")
+    parser.add_argument("--check", "-c", action="store_true", help="Run interactive terminal diagnostic")
+    parser.add_argument("--auto", "-a", action="store_true", help="Run once silently and update state")
+    parser.add_argument("--daemon", "-d", action="store_true", help="Run as background monitoring daemon")
+    parser.add_argument("--list", "-l", action="store_true", help="List candidate domains")
+    parser.add_argument("--add", type=str, help="Add new domain to candidate pool")
+    args = parser.parse_args()
+
+    try:
+        ret = asyncio.run(main_async(args))
+        sys.exit(ret)
+    except KeyboardInterrupt:
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
