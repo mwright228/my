@@ -757,6 +757,21 @@ async def raw_passthrough(client_reader, client_writer, buffer: bytes, host: str
             pass
 
 
+async def send_response_and_close(writer: asyncio.StreamWriter, response: bytes):
+    """Safely writes a response and closes writer, suppressing client disconnect errors."""
+    try:
+        writer.write(response)
+        await writer.drain()
+    except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, OSError):
+        pass
+    finally:
+        try:
+            writer.close()
+            await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
+        except (Exception, asyncio.CancelledError):
+            pass
+
+
 # --------------------------------------------------------------------------
 # Main per-connection handler
 # --------------------------------------------------------------------------
@@ -768,18 +783,37 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
     peer_ip = peer[0] if peer else "?"
 
     if _active_connections >= MAX_CONCURRENT_CONNECTIONS:
-        client_writer.close()
+        try:
+            client_writer.close()
+            await asyncio.wait_for(client_writer.wait_closed(), timeout=1.0)
+        except (Exception, asyncio.CancelledError):
+            pass
         return
     if _connections_per_ip.get(peer_ip, 0) >= MAX_CONNECTIONS_PER_IP:
         log.warning("Per-IP connection limit hit for %s", peer_ip)
-        client_writer.close()
+        try:
+            client_writer.close()
+            await asyncio.wait_for(client_writer.wait_closed(), timeout=1.0)
+        except (Exception, asyncio.CancelledError):
+            pass
         return
 
     _active_connections += 1
     _connections_per_ip[peer_ip] = _connections_per_ip.get(peer_ip, 0) + 1
     try:
         await _handle_client_inner(client_reader, client_writer, peer)
+    except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, asyncio.IncompleteReadError, TimeoutError, OSError) as e:
+        log.debug("Client connection terminated (%s): %s", peer, e)
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        log.error("Unhandled error in client connection %s: %s", peer, e, exc_info=True)
     finally:
+        try:
+            client_writer.close()
+            await asyncio.wait_for(client_writer.wait_closed(), timeout=1.0)
+        except (Exception, asyncio.CancelledError):
+            pass
         _active_connections = max(0, _active_connections - 1)
         new_count = max(0, _connections_per_ip.get(peer_ip, 1) - 1)
         if new_count == 0:
@@ -814,9 +848,7 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
     # don't accidentally leak operational metrics to the open internet.
     if buffer.startswith(b"GET /stats ") or buffer.startswith(b"GET /metrics "):
         if peer_ip not in ("127.0.0.1", "::1", "0:0:0:0:0:0:0:1"):
-            client_writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
-            await client_writer.drain()
-            client_writer.close()
+            await send_response_and_close(client_writer, b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
             return
         st = json.dumps(get_stats(), indent=2).encode("utf-8")
         resp = (
@@ -825,9 +857,7 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
             b"Content-Length: " + str(len(st)).encode() + b"\r\n"
             b"Connection: close\r\n\r\n" + st
         )
-        client_writer.write(resp)
-        await client_writer.drain()
-        client_writer.close()
+        await send_response_and_close(client_writer, resp)
         return
 
     # Fast-path client field-report endpoint — allows mobile clients / apps behind carrier DPI
@@ -872,9 +902,7 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
 
         if not is_authorized:
             resp = b"HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: 26\r\n\r\n{\"error\":\"invalid_token\"}\n"
-            client_writer.write(resp)
-            await client_writer.drain()
-            client_writer.close()
+            await send_response_and_close(client_writer, resp)
             return
 
         active_p = process_carrier_hint(hint, peer_ip) if hint else get_carrier_profile()
@@ -889,9 +917,7 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
             b"Content-Length: " + str(len(res_payload)).encode() + b"\r\n"
             b"Connection: close\r\n\r\n" + res_payload
         )
-        client_writer.write(resp)
-        await client_writer.drain()
-        client_writer.close()
+        await send_response_and_close(client_writer, resp)
         return
 
     proto = sniff_protocol(bytes(buffer))
@@ -969,18 +995,17 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
         if target_port not in ALLOWED_LOCAL_PORTS:
             STATS["blocked_forbidden_port"] += 1
             log.warning("Blocked local port access: %s:%d from %s", target_host, target_port, client_addr)
-            client_writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
-            await client_writer.drain()
-            client_writer.close()
+            await send_response_and_close(client_writer, b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
             return
     else:
         # External destination — gate behind auth
         if not is_authorized_external(bytes(buffer)):
             STATS["blocked_unauthorized"] += 1
             log.warning("Blocked unauthenticated open-relay attempt to %s:%d from %s", target_host, target_port, client_addr)
-            client_writer.write(b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"MUB-X\"\r\nContent-Length: 0\r\n\r\n")
-            await client_writer.drain()
-            client_writer.close()
+            await send_response_and_close(
+                client_writer,
+                b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"MUB-X\"\r\nContent-Length: 0\r\n\r\n"
+            )
             return
         STATS["routes_external"] += 1
 
@@ -1008,12 +1033,7 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
     except Exception as e:
         STATS["upstream_failures"] += 1
         log.warning("Failed connecting to %s:%d: %s", target_host, target_port, e)
-        try:
-            client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
-            await client_writer.drain()
-            client_writer.close()
-        except Exception:
-            pass
+        await send_response_and_close(client_writer, b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
         return
 
     try:

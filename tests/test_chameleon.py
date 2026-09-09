@@ -301,6 +301,31 @@ class TestAsyncClientFlows(unittest.IsolatedAsyncioTestCase):
             chameleon["LOCAL_TUNNEL_PORTS"].discard(target_port)
             chameleon["ALLOWED_LOCAL_PORTS"].discard(target_port)
 
+    async def test_client_abrupt_disconnect_handled_gracefully(self):
+        """Simulates remote client closing connection abruptly (ConnectionResetError during drain)."""
+        reader = asyncio.StreamReader()
+        writer_transport = asyncio.StreamWriter(
+            transport=mock.MagicMock(),
+            protocol=asyncio.StreamReaderProtocol(reader),
+            reader=reader,
+            loop=asyncio.get_running_loop()
+        )
+        writer_transport.get_extra_info = lambda info: ("45.92.29.68", 41714) if info == "peername" else None
+        
+        async def mock_drain():
+            raise ConnectionResetError(104, "Connection reset by peer")
+        
+        writer_transport.drain = mock_drain
+
+        # Send unauthenticated relay attempt which normally triggers 407 + drain
+        reader.feed_data(b"CONNECT 114.66.18.180:10015 HTTP/1.1\r\nHost: 114.66.18.180:10015\r\n\r\n")
+        reader.feed_eof()
+
+        # Must not raise ConnectionResetError or unhandled exception
+        await handle_client(reader, writer_transport)
+        # Verify active connection counter is safely 0
+        self.assertEqual(chameleon["_active_connections"], 0)
+
 
 class TestResponseProfiles(unittest.TestCase):
     """Tests for Chameleon response profile engine."""
