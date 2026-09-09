@@ -110,9 +110,18 @@ fi
 
 # Zero-downtime certificate renewal via webroot (Nginx proxies /.well-known/acme-challenge/)
 install -d -m 0755 /var/www/html
+cert_file="/etc/letsencrypt/live/${DOMAIN:-}/fullchain.pem"
+cert_serial_before="$(openssl x509 -in "$cert_file" -noout -serial 2>/dev/null || echo "none")"
 renew_hook='systemctl reload nginx 2>/dev/null || true; for s in hysteria zivpn singbox; do systemctl is-active --quiet "$s" 2>/dev/null && systemctl restart "$s"; done; exit 0'
 certbot renew --quiet --webroot -w /var/www/html --deploy-hook "$renew_hook" 2>/dev/null || \
   certbot renew --quiet --deploy-hook "$renew_hook" 2>/dev/null || true
+cert_serial_after="$(openssl x509 -in "$cert_file" -noout -serial 2>/dev/null || echo "none")"
+if [ "$cert_serial_before" != "none" ] && [ "$cert_serial_after" != "none" ] && [ "$cert_serial_before" != "$cert_serial_after" ]; then
+  systemctl reload nginx 2>/dev/null || true
+  for s in hysteria zivpn singbox; do
+    systemctl is-active --quiet "$s" 2>/dev/null && systemctl restart "$s" 2>/dev/null || true
+  done
+fi
 
 # Refresh the per-user subscription files weekly (keeps links in sync with
 # the store even if an add/remove missed its hook).
@@ -136,32 +145,34 @@ mubx_users_bin="/usr/local/bin/mubx-users"
 
 if [ -x "$mubx_users_bin" ] && [ -f "$user_store" ]; then
   now_ts="$(date +%s)"
-  jq -r '.[] | select((.status // "active") != "frozen") | [.name, ((.quota_gb // 0)|tostring), (.expiry // "")] | @tsv' "$user_store" 2>/dev/null |
-    while IFS=$'\t' read -r q_user q_gb q_exp; do
-      [ -n "$q_user" ] || continue
-      # 1. Expiry check
-      if [ -n "$q_exp" ] && [ "$q_exp" != "never" ] && [ "$q_user" != "admin" ]; then
-        exp_ts="$(date -d "$q_exp 23:59:59" +%s 2>/dev/null || date -jf '%Y-%m-%d %H:%M:%S' "$q_exp 23:59:59" +%s 2>/dev/null || date -d "$q_exp" +%s 2>/dev/null || echo 0)"
-        if [ "$exp_ts" -gt 0 ] && [ "$now_ts" -ge "$exp_ts" ]; then
-          "$mubx_users_bin" freeze "$q_user" >/dev/null 2>&1 || true
-          continue
-        fi
+  # Fetch all user traffic stats once from Xray API in a single query (O(1) instead of O(N))
+  raw_stats="$(xray api statsquery --server=127.0.0.1:10085 --pattern="user>>>" 2>/dev/null || true)"
+  
+  while IFS=$'\t' read -r q_user q_gb q_exp; do
+    [ -n "$q_user" ] || continue
+    # 1. Expiry check
+    if [ -n "$q_exp" ] && [ "$q_exp" != "never" ] && [ "$q_user" != "admin" ]; then
+      exp_ts="$(date -d "$q_exp 23:59:59" +%s 2>/dev/null || date -jf '%Y-%m-%d %H:%M:%S' "$q_exp 23:59:59" +%s 2>/dev/null || date -d "$q_exp" +%s 2>/dev/null || echo 0)"
+      if [ "$exp_ts" -gt 0 ] && [ "$now_ts" -ge "$exp_ts" ]; then
+        "$mubx_users_bin" freeze "$q_user" >/dev/null 2>&1 || true
+        continue
       fi
-      # 2. Quota check
-      if [ "${q_gb:-0}" -gt 0 ]; then
-        pat_up="user>>>${q_user}@${DOMAIN:-mubx}>>>traffic>>>uplink"
-        pat_down="user>>>${q_user}@${DOMAIN:-mubx}>>>traffic>>>downlink"
-        u_bytes="$(xray api statsquery --server=127.0.0.1:10085 --pattern="$pat_up" 2>/dev/null | jq -r '.. | objects | select(.name? == $p) | .value' --arg p "$pat_up" 2>/dev/null || echo 0)"
-        d_bytes="$(xray api statsquery --server=127.0.0.1:10085 --pattern="$pat_down" 2>/dev/null | jq -r '.. | objects | select(.name? == $p) | .value' --arg p "$pat_down" 2>/dev/null || echo 0)"
-        [ -n "$u_bytes" ] && [ "$u_bytes" != "null" ] || u_bytes=0
-        [ -n "$d_bytes" ] && [ "$d_bytes" != "null" ] || d_bytes=0
-        total_bytes=$(( u_bytes + d_bytes ))
-        limit_bytes=$(( q_gb * 1073741824 ))
-        if [ "$total_bytes" -ge "$limit_bytes" ]; then
-          "$mubx_users_bin" freeze "$q_user" >/dev/null 2>&1 || true
-        fi
+    fi
+    # 2. Quota check
+    if [ "${q_gb:-0}" -gt 0 ]; then
+      pat_up="user>>>${q_user}@${DOMAIN:-mubx}>>>traffic>>>uplink"
+      pat_down="user>>>${q_user}@${DOMAIN:-mubx}>>>traffic>>>downlink"
+      u_bytes="$(printf '%s\n' "$raw_stats" | jq -r '.stat[]? | select(.name == $p) | .value' --arg p "$pat_up" 2>/dev/null | head -n 1 || echo 0)"
+      d_bytes="$(printf '%s\n' "$raw_stats" | jq -r '.stat[]? | select(.name == $p) | .value' --arg p "$pat_down" 2>/dev/null | head -n 1 || echo 0)"
+      [ -n "$u_bytes" ] && [ "$u_bytes" != "null" ] || u_bytes=0
+      [ -n "$d_bytes" ] && [ "$d_bytes" != "null" ] || d_bytes=0
+      total_bytes=$(( u_bytes + d_bytes ))
+      limit_bytes=$(( q_gb * 1073741824 ))
+      if [ "$total_bytes" -ge "$limit_bytes" ]; then
+        "$mubx_users_bin" freeze "$q_user" >/dev/null 2>&1 || true
       fi
-    done
+    fi
+  done < <(jq -r '.[] | select((.status // "active") != "frozen") | [.name, ((.quota_gb // 0)|tostring), (.expiry // "")] | @tsv' "$user_store" 2>/dev/null || true)
 fi
 
 # Self-heal: revive anything that should be running but is not.

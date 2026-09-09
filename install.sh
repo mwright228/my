@@ -22,8 +22,8 @@ download_verified() {
 # when its daemon is still running from that path, leaving a truncated file.
 stage_bin() {
   local src="$1" dst="$2"
-  install -m 0755 "$src" "$dst.tmp.$$"
-  mv -f "$dst.tmp.$$" "$dst"
+  install -m 0755 "$src" "$dst.tmp.$$" || return 1
+  mv -f "$dst.tmp.$$" "$dst" || { rm -f "$dst.tmp.$$"; return 1; }
 }
 load_secrets() {
   local key value
@@ -40,7 +40,9 @@ load_secrets() {
         # ShadowTLS spellings, and retired Squid keys: ignore silently
         ;;
       '') ;;
-      *) die "Unexpected key in /etc/telecom-engine.env: $key" ;;
+      *)
+        # Forward-compatible: ignore unknown/future keys rather than bricking upgrade
+        ;;
     esac
   done < /etc/telecom-engine.env
   for key in DOMAIN UUID HY2_PASS ZIVPN_PASS SSH_WS_PATH SHADOWTLS_PASS; do
@@ -135,6 +137,9 @@ restore_install_state() {
         printf '[!] Failed to restore firewall rules\n' >&2
         status=1
       fi
+      if [ -f /etc/mubx/ip6tables.previous ] && command -v ip6tables-restore >/dev/null 2>&1; then
+        ip6tables-restore < /etc/mubx/ip6tables.previous 2>/dev/null || true
+      fi
       if ! sysctl -w net.ipv4.ip_forward="$(cat /etc/mubx/ip_forward.previous)"; then
         printf '[!] Failed to restore IPv4 forwarding\n' >&2
         status=1
@@ -199,6 +204,9 @@ if iptables-save > "$firewall_snapshot_tmp" &&
   cat /proc/sys/net/ipv4/ip_forward > "$firewall_snapshot_tmp.ip_forward"; then
   mv -f "$firewall_snapshot_tmp" /etc/mubx/iptables.previous
   mv -f "$firewall_snapshot_tmp.ip_forward" /etc/mubx/ip_forward.previous
+  if command -v ip6tables-save >/dev/null 2>&1; then
+    ip6tables-save > /etc/mubx/ip6tables.previous 2>/dev/null || true
+  fi
   firewall_snapshot_tmp=
   firewall_captured=1
 else
@@ -311,6 +319,7 @@ done
 backup_file /usr/local/lib/mubx/common.sh
 backup_file /usr/local/lib/mubx/render.sh
 backup_file /usr/local/lib/mubx/subscribe.sh
+backup_file /usr/local/lib/mubx/proto-def.jq
 backup_file /usr/local/lib/mubx/reality-build.sh
 backup_file /usr/local/bin/reality-fronts
 for file in systemd/*.service systemd/*.timer; do
@@ -318,6 +327,7 @@ for file in systemd/*.service systemd/*.timer; do
 done
 backup_file /usr/local/etc/xray/domain
 backup_file /etc/mubx/domain
+backup_file /etc/mubx/chameleon-responses.json
 backup_file /usr/local/etc/xray/config.json
 backup_file /usr/local/share/xray/geoip.dat
 backup_file /usr/local/share/xray/geosite.dat
@@ -328,6 +338,7 @@ install -m 0755 bin/* /usr/local/bin/
 install -D -m 0644 lib/common.sh /usr/local/lib/mubx/common.sh
 install -D -m 0644 lib/render.sh /usr/local/lib/mubx/render.sh
 install -D -m 0644 lib/subscribe.sh /usr/local/lib/mubx/subscribe.sh
+install -D -m 0644 lib/proto-def.jq /usr/local/lib/mubx/proto-def.jq
 install -m 0644 configs/dropbear /etc/default/dropbear
 install -m 0644 configs/nginx.conf /etc/nginx/nginx.conf
 install -m 0644 systemd/*.service /etc/systemd/system/
@@ -335,6 +346,7 @@ install -m 0644 systemd/*.timer /etc/systemd/system/
 printf '%s\n' "$DOMAIN" > /usr/local/etc/xray/domain
 install -d -m 0755 /etc/mubx
 printf '%s\n' "$DOMAIN" > /etc/mubx/domain
+[ -f /etc/mubx/chameleon-responses.json ] || install -m 0644 configs/chameleon-responses.json /etc/mubx/chameleon-responses.json
 
 case "$(dpkg --print-architecture)" in
   amd64)

@@ -47,7 +47,7 @@
             "type": "tuic",
             "tag": "tuic-in",
             "listen": "::",
-            "listen_port": 8443,
+            "listen_port": 8444,
             "users": [
                 {
                     "name": "admin",

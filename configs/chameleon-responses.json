@@ -1,0 +1,57 @@
+{
+  "_comment": "Drop this at /etc/mubx/chameleon-responses.json. Each entry is a named response profile. 'default' and 'ws' are used automatically; others are selected by the client sending an 'X-MUBX-Profile: <name>' header in its payload template. Edit/add entries here -- no code changes needed.",
+
+  "default": {
+    "status": "HTTP/1.1 200 Connection established",
+    "headers": {}
+  },
+  "ws": {
+    "status": "HTTP/1.1 101 Switching Protocols",
+    "headers": { "Upgrade": "websocket", "Connection": "Upgrade" }
+  },
+  "legacy10": {
+    "status": "HTTP/1.0 200 Connection established",
+    "headers": {}
+  },
+  "ok200": {
+    "status": "HTTP/1.1 200 OK",
+    "headers": { "Content-Length": "0" }
+  },
+  "redirect": {
+    "status": "HTTP/1.1 302 Found",
+    "headers": { "Location": "http://example.com/", "Content-Length": "0" }
+  },
+  "302_spoof": {
+    "status": "HTTP/1.1 302 Found",
+    "headers": {
+      "Location": "http://example.com/",
+      "Connection": "Keep-Alive",
+      "Content-Length": "0"
+    }
+  },
+  "204_nocontent": {
+    "status": "HTTP/1.1 204 No Content",
+    "headers": {
+      "Connection": "Keep-Alive"
+    }
+  },
+  "206_partial": {
+    "status": "HTTP/1.1 206 Partial Content",
+    "headers": {
+      "Content-Range": "bytes 0-0/1",
+      "Content-Length": "1",
+      "Connection": "Keep-Alive"
+    }
+  },
+  "chunked_evasion": {
+    "status": "HTTP/1.1 200 Connection established",
+    "headers": {
+      "Transfer-Encoding": "chunked",
+      "Connection": "Keep-Alive"
+    }
+  },
+  "custom_carrier_a": {
+    "status": "HTTP/1.1 007 Custom",
+    "headers": { "X-Note": "example of a fully custom carrier-expected status line" }
+  }
+}

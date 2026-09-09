@@ -161,7 +161,7 @@ show_p "vless_ws_tls"           "VLESS WS & UPG"     "443 TLS / 80 Plain"
 show_p "vless_grpc_tls"         "VLESS gRPC"         "443 (HTTP/2 Ingress)"
 show_p "vmess_ws_tls"           "VMess WS"           "443 TLS / 80 Plain"
 show_p "trojan_ws_tls"          "Trojan WS"          "443 TLS / 80 Plain"
-show_p "tuic"                   "TUIC v5 Native QUIC" "8443 (UDP QUIC 0-RTT)"
+show_p "tuic"                   "TUIC v5 Native QUIC" "8444 (UDP QUIC 0-RTT)"
 mubx_box_bot
 
 if [ -t 0 ]; then

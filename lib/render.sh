@@ -61,8 +61,15 @@ mubx_primary_uuid() {
 
 # --- Protocol Selection & Filtering Engine ---------------------------------
 
-# Universal jq helper definition for protocol filtering
-JQ_PROTO_DEF='
+# Universal jq helper definition for protocol filtering, loaded from proto-def.jq
+_proto_jq_file="${_MUBX_LIB_DIR:-/usr/local/lib/mubx}/proto-def.jq"
+if [ ! -f "$_proto_jq_file" ]; then
+  _proto_jq_file="$(dirname "${BASH_SOURCE[0]}")/proto-def.jq"
+fi
+if [ -f "$_proto_jq_file" ]; then
+  JQ_PROTO_DEF="$(< "$_proto_jq_file")"
+else
+  JQ_PROTO_DEF='
 def user_has_proto($p):
   if (.protocols == null or .protocols == [] or (.protocols | index("all") != null)) then true
   elif (.protocols | index($p) != null) then true
@@ -90,6 +97,8 @@ def user_has_proto($p):
   else false
   end;
 '
+fi
+
 
 # Normalizes raw user protocol input (numbers, commas, names) into a JSON array string.
 mubx_proto_normalize() { # $1 raw input string -> stdout JSON array
@@ -220,7 +229,7 @@ mubx_proto_picker() { # stdout: normalized JSON array
     mubx_put "$(printf '  %s[50]%s Shadowsocks WS (TLS)    %s[51]%s Shadowsocks WS (Plain)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
     mubx_put "$(printf '  %s[52]%s Shadowsocks TCP Raw     %s[53]%s Shadowsocks 2022 WS' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
     mubx_put "$(printf '  %s[60]%s ShadowTLS v3 Decoy      %s[61]%s Hysteria 2 (UDP 4433)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
-    mubx_put "$(printf '  %s[62]%s ZivPN UDP (5667)        %s[63]%s TUIC v5 QUIC (UDP 8443)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[62]%s ZivPN UDP (5667)        %s[63]%s TUIC v5 QUIC (UDP 8444)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
     mubx_box_bot
     printf '\n'
     printf '  %sSelect protocol [1-8, or numbers] (Default = 1 SSH): %s' "$C_PURPLE" "$C_RESET"
@@ -260,11 +269,7 @@ mubx_users_apply() { # $1 rendered config file
             end
           ) as \$req_proto |
           [ \$users[] | select(user_has_proto(\$req_proto)) ] as \$matching_users |
-          (
-            if (\$matching_users | length) > 0 then \$matching_users
-            else [ {name: \"admin\", uuid: (\$users[0].uuid // \"00000000-0000-0000-0000-000000000000\")} ]
-            end
-          ) as \$active_clients |
+          \$matching_users as \$active_clients |
           if .protocol == \"trojan\" then
             .settings.clients = [ \$active_clients[] | {password: .uuid, email: (.name + \"@\" + \$dom)} ]
           elif .protocol == \"vmess\" then
@@ -491,7 +496,7 @@ mubx_ss_443_apply() { # $1 rendered config file  $2 ss-443 inbound template
       ]
     " "$MUBX_USERS_FILE" 2>/dev/null || echo '[]')"
     if [ "$clients" != '[]' ] && [ -n "$clients" ]; then
-      obj="$(jq --argjson c "$clients" '.settings.clients = $c | .settings.users = $c' <<< "$obj")"
+      obj="$(jq --argjson c "$clients" '.settings.clients = $c' <<< "$obj")"
     fi
   fi
   jq --argjson o "$obj" '.inbounds += [$o]' "$cfg" > "$cfg.mubx" || return 1
@@ -575,5 +580,6 @@ mubx_nginx_render() { # $1 template  $2 out
 mubx_haproxy_render() { # $1 template  $2 out
   local tmpl="$1" out="$2"
   sed -e "s|__DOMAIN__|${DOMAIN:-}|g" \
+      -e "s|__SHADOWTLS_SNI__|${SHADOWTLS_SNI:-www.microsoft.com}|g" \
     "$tmpl" > "$out"
 }

@@ -58,9 +58,9 @@ if lat="$(tcp_latency_ms "$HOST" 443)"; then
 fi
 
 # --- UDP transports: local listener health only ---
-if listener_up udp 8443; then
+if listener_up udp 8444; then
   score[tuic]=52000
-  detail[tuic]="listener up (TUIC v5 QUIC 8443)"
+  detail[tuic]="listener up (TUIC v5 QUIC 8444)"
 fi
 if listener_up udp 51820; then
   score[wireguard]=50000

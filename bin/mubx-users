@@ -390,14 +390,28 @@ cmd_usage() { # $1 name (optional)
   status="$(jq -r --arg n "$name" '.[] | select(.name == $n) | (.status // "active")' "$STORE" 2>/dev/null || echo "active")"
   quota_gb="$(jq -r --arg n "$name" '.[] | select(.name == $n) | (.quota_gb // 0)' "$STORE" 2>/dev/null || echo 0)"
 
-  pattern="user>>>${name}@${DOMAIN:-mubx}>>>traffic>>>uplink"
-  out="$(xray api statsquery --server=127.0.0.1:10085 --pattern="$pattern" 2>/dev/null || true)"
-  up_val="$(printf '%s\n' "$out" | jq -r '.. | objects | select(.name? == $pat) | .value' --arg pat "$pattern" 2>/dev/null | head -n 1 || echo 0)"
+  query_stat() {
+    local pat="$1" res="" attempts=0
+    while [ "$attempts" -lt 3 ]; do
+      res="$(xray api statsquery --server=127.0.0.1:10085 --pattern="$pat" 2>/dev/null || true)"
+      if [ -n "$res" ]; then
+        local val
+        val="$(printf '%s\n' "$res" | jq -r '.stat[]? | select(.name == $p) | .value' --arg p "$pat" 2>/dev/null | head -n 1 || echo 0)"
+        if [ -n "$val" ] && [ "$val" != "null" ]; then
+          echo "$val"
+          return
+        fi
+      fi
+      attempts=$(( attempts + 1 ))
+      [ "$attempts" -lt 3 ] && sleep 0.2
+    done
+    echo 0
+  }
+
+  up_val="$(query_stat "user>>>${name}@${DOMAIN:-mubx}>>>traffic>>>uplink")"
   [ -n "$up_val" ] && [ "$up_val" != "null" ] || up_val=0
-  
-  pattern="user>>>${name}@${DOMAIN:-mubx}>>>traffic>>>downlink"
-  out="$(xray api statsquery --server=127.0.0.1:10085 --pattern="$pattern" 2>/dev/null || true)"
-  down_val="$(printf '%s\n' "$out" | jq -r '.. | objects | select(.name? == $pat) | .value' --arg pat "$pattern" 2>/dev/null | head -n 1 || echo 0)"
+
+  down_val="$(query_stat "user>>>${name}@${DOMAIN:-mubx}>>>traffic>>>downlink")"
   [ -n "$down_val" ] && [ "$down_val" != "null" ] || down_val=0
   
   total_val=$(( up_val + down_val ))
@@ -453,6 +467,7 @@ interactive() {
       a|add)
         printf '  Username: '
         read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
         printf '  Expiry days (blank = never): '
         read -r days
         printf '  Data quota in GB (0 = unlimited): '
@@ -466,21 +481,25 @@ interactive() {
       p|proto|protocols)
         printf '  Username or # to configure protocols: '
         read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
         mubx_with_users_lock cmd_proto "$(resolve_name "$name")" || true
         ;;
       r|remove)
         printf '  Username or # to remove: '
         read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
         mubx_with_users_lock cmd_remove "$(resolve_name "$name")" || true
         ;;
       f|freeze)
         printf '  Username or # to freeze: '
         read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
         mubx_with_users_lock cmd_freeze "$(resolve_name "$name")" || true
         ;;
       u|unfreeze)
         printf '  Username or # to unfreeze: '
         read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
         mubx_with_users_lock cmd_unfreeze "$(resolve_name "$name")" || true
         ;;
       s|stats|usage)
@@ -495,6 +514,7 @@ interactive() {
       z|reset)
         printf '  Username or # to reset usage stats: '
         read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
         mubx_with_users_lock cmd_reset_quota "$(resolve_name "$name")" || true
         ;;
       q|quit|0) exit 0 ;;
@@ -515,7 +535,7 @@ case "$cmd" in
   freeze) mubx_with_users_lock cmd_freeze "${2:?usage: mubx-users freeze <name>}" ;;
   unfreeze) mubx_with_users_lock cmd_unfreeze "${2:?usage: mubx-users unfreeze <name>}" ;;
   reset-quota|reset) mubx_with_users_lock cmd_reset_quota "${2:?usage: mubx-users reset-quota <name>}" ;;
-  usage|stats) cmd_usage "${2:-}" ;;
+  usage|stats) mubx_with_users_lock cmd_usage "${2:-}" ;;
   interactive) interactive ;;
   *) echo "Unknown command: $cmd (use list/add/proto/remove/freeze/unfreeze/reset-quota/usage)" >&2; exit 1 ;;
 esac

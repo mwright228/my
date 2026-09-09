@@ -12,8 +12,16 @@ RestartSec=3s
 TimeoutStopSec=5s
 KillMode=mixed
 LimitNOFILE=1048576
-NoNewPrivileges=true
-PrivateTmp=true
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+ReadWritePaths=/run/mubx /tmp
 
 [Install]
 WantedBy=multi-user.target

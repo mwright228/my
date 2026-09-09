@@ -70,7 +70,7 @@ cleanup() {
 trap cleanup EXIT
 for path in /usr/local/etc/xray/domain /etc/mubx/domain /usr/local/etc/xray/config.json \
   /etc/telecom-engine.env /etc/nginx/nginx.conf /etc/hysteria/config.yaml \
-  /etc/sing-box/config.json \
+  /etc/sing-box/config.json /etc/haproxy/haproxy.cfg \
   /etc/wireguard/mubx-client.conf \
   /etc/zivpn/zivpn.crt /etc/zivpn/zivpn.key; do
   backup_file "$path"
@@ -118,6 +118,10 @@ fi
 if [ -f /etc/sing-box/config.json ]; then
   sed -i "s|/etc/letsencrypt/live/[^/]*/|/etc/letsencrypt/live/$d/|g" \
     /etc/sing-box/config.json
+fi
+if [ -f /etc/haproxy/haproxy.cfg ]; then
+  sed -i "s|/etc/letsencrypt/live/[^/]*/|/etc/letsencrypt/live/$d/|g" \
+    /etc/haproxy/haproxy.cfg
 fi
 if [ -d /etc/zivpn ]; then
   ln -sfn "/etc/letsencrypt/live/$d/fullchain.pem" /etc/zivpn/zivpn.crt

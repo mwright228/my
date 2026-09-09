@@ -173,13 +173,13 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
   fi
   # Chameleon Universal HTTP Proxy (Ports 8080, 3128, 8888)
   if mubx_user_has_proto "$user" "chameleon"; then
-    printf 'http://%s:8080#MUBX-Chameleon-8080\n' "$dom"
-    printf 'http://%s:3128#MUBX-Chameleon-3128\n' "$dom"
-    printf 'http://%s:8888#MUBX-Chameleon-8888\n' "$dom"
+    printf 'http://%s:%s@%s:8080#MUBX-Chameleon-8080\n' "$user" "$uuid" "$dom"
+    printf 'http://%s:%s@%s:3128#MUBX-Chameleon-3128\n' "$user" "$uuid" "$dom"
+    printf 'http://%s:%s@%s:8888#MUBX-Chameleon-8888\n' "$user" "$uuid" "$dom"
   fi
-  # TUIC v5 Native QUIC (UDP 8443)
+  # TUIC v5 Native QUIC (UDP 8444)
   if mubx_user_has_proto "$user" "tuic"; then
-    printf 'tuic://%s:%s@%s:8443?congestion_control=bbr&alpn=h3&sni=%s&allow_insecure=0#MUBX-TUIC-v5\n' \
+    printf 'tuic://%s:%s@%s:8444?congestion_control=bbr&alpn=h3&sni=%s&allow_insecure=0#MUBX-TUIC-v5\n' \
       "$uuid" "$uuid" "$dom" "$dom"
   fi
 }
@@ -225,7 +225,7 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
       }}] else [] end);
     (if (cur_user | user_has_proto(\"hysteria2\")) then [ hy2 ] else [] end)
     + (if (cur_user | user_has_proto(\"tuic\")) then [{
-        name: \"MUBX-TUIC-v5\", type: \"tuic\", server: \$dom, port: 8443,
+        name: \"MUBX-TUIC-v5\", type: \"tuic\", server: \$dom, port: 8444,
         uuid: \$uuid, password: \$uuid, version: 5, \"congestion-controller\": \"bbr\",
         udp: true, tls: true, sni: \$dom, alpn: [\"h3\"], \"skip-cert-verify\": false
       }] else [] end)
@@ -274,9 +274,9 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
         cipher: \"aes-256-gcm\", password: \$uuid, udp: true
       }] else [] end)) else [] end)
     + (if (cur_user | user_has_proto(\"chameleon\")) then [
-        {name: \"MUBX-Chameleon-8080\", type: \"http\", server: \$dom, port: 8080},
-        {name: \"MUBX-Chameleon-3128\", type: \"http\", server: \$dom, port: 3128},
-        {name: \"MUBX-Chameleon-8888\", type: \"http\", server: \$dom, port: 8888}
+        {name: \"MUBX-Chameleon-8080\", type: \"http\", server: \$dom, port: 8080, username: \$user, password: \$uuid},
+        {name: \"MUBX-Chameleon-3128\", type: \"http\", server: \$dom, port: 3128, username: \$user, password: \$uuid},
+        {name: \"MUBX-Chameleon-8888\", type: \"http\", server: \$dom, port: 8888, username: \$user, password: \$uuid}
       ] else [] end)
     | {
         port: 7890,
@@ -332,7 +332,7 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
         password: \$hy2pass, tls: {enabled: true, server_name: \$dom}} + hop(1)
       ] else [] end)
       + (if (cur_user | user_has_proto(\"tuic\")) then [{
-        type: \"tuic\", tag: \"MUBX-TUIC-v5\", server: \$dom, server_port: 8443, uuid: \$uuid,
+        type: \"tuic\", tag: \"MUBX-TUIC-v5\", server: \$dom, server_port: 8444, uuid: \$uuid,
         password: \$uuid, congestion_control: \"bbr\", version: 5,
         tls: {enabled: true, server_name: \$dom, alpn: [\"h3\"]}
       }] else [] end)
@@ -390,9 +390,9 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
           method: \"2022-blake3-aes-256-gcm\", password: \$adminkey, detour: \"MUBX-ShadowTLS-wrap\"
         }] else [] end)
       + (if (cur_user | user_has_proto(\"chameleon\")) then [
-          {type: \"http\", tag: \"MUBX-Chameleon-8080\", server: \$dom, server_port: 8080},
-          {type: \"http\", tag: \"MUBX-Chameleon-3128\", server: \$dom, server_port: 3128},
-          {type: \"http\", tag: \"MUBX-Chameleon-8888\", server: \$dom, server_port: 8888}
+          {type: \"http\", tag: \"MUBX-Chameleon-8080\", server: \$dom, server_port: 8080, username: \$user, password: \$uuid},
+          {type: \"http\", tag: \"MUBX-Chameleon-3128\", server: \$dom, server_port: 3128, username: \$user, password: \$uuid},
+          {type: \"http\", tag: \"MUBX-Chameleon-8888\", server: \$dom, server_port: 8888, username: \$user, password: \$uuid}
         ] else [] end)
     ) as \$outbounds |
     {

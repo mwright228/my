@@ -8,7 +8,88 @@ if [ -r /usr/local/lib/mubx/common.sh ]; then
 elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
   source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 fi
-load_mubx_env 2>/dev/null || true
+diagnose_chameleon() {
+  mubx_clear
+  mubx_box_top "CHAMELEON UNIVERSAL PROXY AUDIT" "PROBE"
+  mubx_kvrow "Timestamp" "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+  mubx_box_bot
+  printf '\n'
+
+  mubx_group_open "SERVICE STATE & TELEMETRY"
+  if systemctl is-active --quiet mubx-chameleon 2>/dev/null; then
+    mubx_card "  Daemon Status" "$(mubx_pill UP "ACTIVE")"
+  else
+    mubx_card "  Daemon Status" "$(mubx_pill DOWN "INACTIVE")"
+  fi
+
+  local stats_json="{}"
+  if [ -r /run/mubx/chameleon-stats.json ]; then
+    stats_json="$(cat /run/mubx/chameleon-stats.json 2>/dev/null || echo '{}')"
+  elif stats_resp="$(curl -s --max-time 1 http://127.0.0.1:18088/stats 2>/dev/null)"; then
+    stats_json="$stats_resp"
+  fi
+
+  if [ "$stats_json" != "{}" ]; then
+    local acc act r_loc r_ext blk
+    acc="$(printf '%s' "$stats_json" | jq -r '.connections_accepted // 0' 2>/dev/null || echo 0)"
+    act="$(printf '%s' "$stats_json" | jq -r '.connections_active // 0' 2>/dev/null || echo 0)"
+    r_loc="$(printf '%s' "$stats_json" | jq -r '.routes_local // 0' 2>/dev/null || echo 0)"
+    r_ext="$(printf '%s' "$stats_json" | jq -r '.routes_external // 0' 2>/dev/null || echo 0)"
+    blk="$(printf '%s' "$stats_json" | jq -r '.blocked_unauthorized // 0' 2>/dev/null || echo 0)"
+    mubx_kvrow "Accepted / Active" "$acc / $act"
+    mubx_kvrow "Local / Ext Routes" "$r_loc / $r_ext"
+    mubx_kvrow "Relay Blocks" "$blk"
+  fi
+  mubx_group_close
+
+  mubx_group_open "SYNTHETIC PROBES (PORTS 8080, 3128, 8888, 18088)"
+  python3 - <<'PY' | while IFS='|' read -r port s1_type s1_label s2_type s2_label s3_type s3_label; do
+import socket
+
+def probe(port, payload):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1.5)
+        s.connect(("127.0.0.1", port))
+        s.sendall(payload)
+        resp = s.recv(512)
+        s.close()
+        return resp.decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+for p in [8080, 3128, 8888, 18088]:
+    # Probe 1: Local bridge
+    resp1 = probe(p, b"CONNECT 127.0.0.1:2222 HTTP/1.1\r\nHost: 127.0.0.1:2222\r\n\r\n")
+    s1 = ("UP|BRIDGED 200") if "200 Connection established" in resp1 else ("DOWN|OFFLINE")
+
+    # Probe 2: Unauthenticated external relay (must be 407)
+    resp2 = probe(p, b"CONNECT 1.1.1.1:443 HTTP/1.1\r\nHost: 1.1.1.1:443\r\n\r\n")
+    if "407 Proxy Authentication Required" in resp2:
+        s2 = "OK|BLOCKED 407"
+    elif "200 Connection established" in resp2:
+        s2 = "WARN|OPEN RELAY!"
+    else:
+        s2 = "DOWN|OFFLINE"
+
+    # Probe 3: Carrier split payload
+    resp3 = probe(p, b"GET http://carrier.bug/ HTTP/1.1\r\nHost: carrier.bug\r\n\r\nCONNECT 127.0.0.1:2222 HTTP/1.1\r\n\r\n")
+    s3 = ("PASS|ACCEPTED 200") if "200 Connection established" in resp3 else ("DOWN|OFFLINE")
+
+    print(f"{p}|{s1}|{s2}|{s3}")
+PY
+    [ -n "$port" ] || continue
+    mubx_card "  Port $port: Local Dropbear (:2222)" "$(mubx_pill "$s1_type" "$s1_label")"
+    mubx_card "  Port $port: Open Relay Protection" "$(mubx_pill "$s2_type" "$s2_label")"
+    mubx_card "  Port $port: Carrier Split Payload" "$(mubx_pill "$s3_type" "$s3_label")"
+  done
+  mubx_group_close
+  exit 0
+}
+
+if [ "${1:-}" = "--chameleon" ] || [ "${1:-}" = "-c" ]; then
+  diagnose_chameleon
+fi
 
 TARGET="${1:-${DOMAIN:-1.1.1.1}}"
 ENDPOINTS=("1.1.1.1" "8.8.8.8" "9.9.9.9")
@@ -80,7 +161,7 @@ mubx_group_close
 
 # --- UDP Listeners ----------------------------------------------------------
 mubx_group_open "LOCAL UDP LISTENERS"
-for spec in "OpenVPN UDP (2200)|2200" "Hysteria 2 QUIC (4433)|4433" "TUIC v5 QUIC (8443)|8443" "WireGuard (51820)|51820" "ZivPN Tunnel (5667)|5667"; do
+for spec in "OpenVPN UDP (2200)|2200" "Hysteria 2 QUIC (4433)|4433" "TUIC v5 QUIC (8444)|8444" "WireGuard (51820)|51820" "ZivPN Tunnel (5667)|5667"; do
   name="${spec%%|*}"; port="${spec##*|}"
   if ss -H -uln "sport = :$port" 2>/dev/null | grep -q .; then
     mubx_card "  $name" "$(mubx_pill UP "ACTIVE")"

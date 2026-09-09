@@ -318,7 +318,7 @@ mubx_with_lock() { # $1 lock_file  $@ command
     done
     "$@"
     local rc=$?
-    rm -rf "$lockdir" 2>/dev/null || true
+    rmdir "$lockdir" 2>/dev/null || true
     return $rc
   fi
 }

@@ -107,11 +107,35 @@ on_exit() {
 }
 trap on_exit EXIT
 
+FORCE_UPDATE=0
+for arg in "$@"; do
+  case "$arg" in
+    --force|-f) FORCE_UPDATE=1 ;;
+    -h|--help)
+      echo "Usage: mubx-update [--force|-f]"
+      exit 0
+      ;;
+  esac
+done
+
 # 1) Pull the new tree. Nothing is touched until this succeeds, so a network
 #    failure is a clean no-op.
 printf '%s[*]%s Fetching latest updates from %s\n' "$C_MINT" "$C_RESET" "$REPO_URL"
 git -C "$ROOT" fetch origin main
 git -C "$ROOT" checkout -B main origin/main 2>/dev/null || true
+
+# Guard against accidental destruction of uncommitted local changes
+if ! git -C "$ROOT" diff --quiet 2>/dev/null || ! git -C "$ROOT" diff --cached --quiet 2>/dev/null; then
+  if [ "$FORCE_UPDATE" -eq 1 ]; then
+    printf '%s[!]%s Local modifications detected in %s; creating stash before reset.\n' "$C_CORAL" "$C_RESET" "$ROOT"
+    git -C "$ROOT" stash save "mubx-update-backup-$(date +%s)" >/dev/null 2>&1 || true
+  else
+    printf '%s[!]%s Uncommitted local changes detected in %s.\n' "$C_CORAL" "$C_RESET" "$ROOT" >&2
+    echo "    To overwrite local changes, re-run with: mubx-update --force" >&2
+    exit 1
+  fi
+fi
+
 git -C "$ROOT" reset --hard origin/main
 
 

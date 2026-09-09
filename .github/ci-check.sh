@@ -160,12 +160,12 @@ PY
 # to the nginx loopback terminator, and a raw/SS fallback to the 17000
 # inbound. The template is installed verbatim by the renderer.
 check_haproxy_split() { # $1 haproxy config
-  grep -q 'use_backend srv_nginx if { req.ssl_sni -i ' "$1" || {
-    echo "HAProxy domain -> nginx rule missing"
+  grep -q 'use_backend srv_singbox if { req.ssl_sni -i ' "$1" || {
+    echo "HAProxy ShadowTLS SNI -> singbox rule missing"
     fail=1
   }
-  grep -q 'use_backend srv_singbox if { req_ssl_hello_type 1 }' "$1" || {
-    echo "HAProxy TLS -> singbox rule missing"
+  grep -q 'use_backend srv_nginx if { req_ssl_hello_type 1 }' "$1" || {
+    echo "HAProxy TLS -> nginx rule missing"
     fail=1
   }
   grep -q 'server srv_singbox 127.0.0.1:8448' "$1" || {
@@ -438,10 +438,10 @@ tuics = [i for i in cfg["inbounds"] if i.get("tag") == "tuic-in"]
 assert len(tuics) == 1, "expected 1 tuic inbound"
 tu = tuics[0]
 assert tu["type"] == "tuic", tu["type"]
-assert tu["listen_port"] == 8443, tu["listen_port"]
+assert tu["listen_port"] == 8444, tu["listen_port"]
 assert tu["congestion_control"] == "bbr", tu["congestion_control"]
 assert len(tu.get("users", [])) >= 1, "tuic users missing"
-print("  sing-box render OK: shadowtls v3 loopback :8448 (SNI-routed from 443) -> ss2022 127.0.0.1:18500 (32B admin key) + tuic v5 :8443")
+print("  sing-box render OK: shadowtls v3 loopback :8448 (SNI-routed from 443) -> ss2022 127.0.0.1:18500 (32B admin key) + tuic v5 :8444")
 PY
     # The subscription for admin must contain the ShadowTLS and TUIC nodes.
     tok="$(sed 's|https://example.com/sub/||; s|/index.txt||' "$tmp4/url")"
@@ -532,6 +532,12 @@ assert (h, p, ic) == ("127.0.0.1", 2222, True), (h, p, ic)
 
 print("  Chameleon payload parser OK (split, front-inject, CONNECT, HTTP URL, IPv6, X-Target, local-normalizer, carrier-defaults)")
 PY
+
+say "Unit test suite (tests/)"
+if ! python3 -m unittest discover tests/ -v; then
+  echo "UNIT TESTS FAILED"
+  fail=1
+fi
 
 if [ "$fail" -eq 0 ]; then
   say "all checks passed"

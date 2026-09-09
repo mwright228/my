@@ -127,10 +127,10 @@ if u_has "hysteria2" || u_has "shadowtls" || u_has "zivpn" || u_has "tuic"; then
 
   # TUIC v5
   if u_has "tuic"; then
-    item "TUIC-v5" "TUIC v5 (QUIC 0-RTT / UDP 8443)"
-    block "tuic://${UUID}:${UUID}@${BUG}:8443?congestion_control=bbr&alpn=h3&sni=${BUG}&allow_insecure=0#MUBX-TUIC-v5"
-    manual "Address: ${BUG} | Port: 8443 | UUID: ${UUID} | Password: ${UUID} | Congestion: bbr | ALPN: h3 | SNI: ${BUG}"
-    note "Native QUIC 0-RTT handshake with BBR congestion control over UDP 8443"
+    item "TUIC-v5" "TUIC v5 (QUIC 0-RTT / UDP 8444)"
+    block "tuic://${UUID}:${UUID}@${BUG}:8444?congestion_control=bbr&alpn=h3&sni=${BUG}&allow_insecure=0#MUBX-TUIC-v5"
+    manual "Address: ${BUG} | Port: 8444 | UUID: ${UUID} | Password: ${UUID} | Congestion: bbr | ALPN: h3 | SNI: ${BUG}"
+    note "Native QUIC 0-RTT handshake with BBR congestion control over UDP 8444"
     note "Supported in sing-box, Clash.Meta / Mihomo, NekoBox, v2rayN"
   fi
 
@@ -317,8 +317,20 @@ if u_has "ssh" || u_has "squid" || u_has "chameleon"; then
   fi
 
   if u_has "ssh" || u_has "squid" || u_has "chameleon"; then
-    item "PAYLOAD" "HTTP Injector / Custom Split Payload"
+    item "PAYLOAD" "HTTP Injector / Custom Split Payload (Standard)"
     block "CONNECT [host_port] [protocol][crlf]Host: ${BUG}[crlf]X-Online-Host: ${BUG}[crlf]Connection: Keep-Alive[crlf][split]GET http://${BUG}/ [protocol][crlf]Host: ${BUG}[crlf][crlf]"
+
+    item "ANTI-302" "Anti-Redirect HEAD Evasion (Defeats Zero-Balance Captive Portals)"
+    block "HEAD http://${BUG}/ [protocol][crlf]Host: ${BUG}[crlf]Connection: Keep-Alive[crlf][split]CONNECT [host_port] [protocol][crlf]Host: ${BUG}[crlf]X-MUBX-Profile: 204_nocontent[crlf][crlf]"
+    note "Middleboxes ignore bodyless HEAD queries; 204 No Content suppresses redirect injection"
+
+    item "ANTI-410" "Reverse Delay-Split Payload (Defeats Revoked Bug-Host 410 Blocks)"
+    block "GET http://${BUG}/ [protocol][crlf]Host: ${BUG}[crlf][crlf][delay_split]CONNECT [host_port] [protocol][crlf]Host: ${BUG}[crlf]X-Online-Host: ${BUG}[crlf][crlf]"
+    note "Primes carrier DPI session table before sending CONNECT, bypassing 410 kill-rules"
+
+    item "DESYNC" "Header Colon Desync & 302-Spoof Profile"
+    block "CONNECT [host_port] [protocol][crlf]Host : ${BUG}[crlf]X-MUBX-Profile: 302_spoof[crlf]Connection: Keep-Alive[crlf][split]GET http://${BUG}/ [protocol][crlf]Host: ${BUG}[crlf][crlf]"
+    note "Spoofs 302 state to fool DPI gateways while maintaining transparent raw TCP tunnel"
   fi
   mubx_box_bot
 fi

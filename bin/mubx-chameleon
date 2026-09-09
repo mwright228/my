@@ -1,34 +1,54 @@
 #!/usr/bin/env python3
 """
-MUB-X Chameleon Universal Payload Engine (bin/mubx-chameleon).
+MUB-X Chameleon Universal Payload Engine (bin/mubx-chameleon) — v2.
 
-Telecom-grade HTTP CONNECT & Injection Proxy (replaces legacy Squid).
-Designed specifically for mobile carrier bug-host payloads (HTTP Injector,
-HTTP Custom, NetMod, KPN Tunnel):
-  - Zero-rejection state machine: never returns 400 Bad Request on split
+Telecom-grade HTTP CONNECT & Injection Proxy (Squid 3.3.8-class bug-host
+proxy, replaces legacy Squid), extended with:
+
+  - Protocol sniffing BEFORE any HTTP parsing: raw TLS ClientHello and raw
+    SSH banners are detected on the first bytes and piped straight through
+    to the correct local service with zero HTTP handling. This is what
+    makes SSL-proxy / SSH-proxy mode actually work through the same ports
+    as the HTTP injector logic, instead of everything non-HTTP silently
+    falling back to Dropbear SSH.
+  - A response PROFILE ENGINE: the acknowledgement sent back to the client
+    (status line + headers) is data, not code. New carrier tricks (302
+    redirects, custom status codes, alternate header sets) are added by
+    editing /etc/mubx/chameleon-responses.json — no Python changes needed.
+    Profile selection: explicit "X-MUBX-Profile" header from the client >
+    per-listen-port default > global default.
+  - Lightweight per-connection auth gate for any target that is NOT a
+    known local MUB-X service, so the proxy can't be used as a free
+    unmetered open relay. Disabled via CHAMELEON_REQUIRE_AUTH=0; enabled by
+    default (CHAMELEON_REQUIRE_AUTH=1) to prevent open relay abuse.
+  - Cached local-identifier / domain lookups (read once at startup / SIGHUP,
+    not once per connection).
+  - A global connection-concurrency cap + light per-IP throttling.
+  - Zero-rejection state machine retained: never returns 400 on split
     payloads ([split], [delay_split]), leading/trailing CRLFs, front/back
     inject headers (X-Online-Host, Host:), or custom methods.
-  - Pipelined payload preservation: forwards any buffered payload data
-    following the HTTP header directly to the target service without packet loss.
-  - Multi-port listener: binds 8080, 3128, 8888, and loopback 18088 (HAProxy
-    multiplexed from 443 / 8443 / 2053 / 2083 / 2087 / 2096).
-  - Smart Dispatcher: seamlessly bridges to local MUB-X services (Dropbear
-    SSH :2222/:109/:53, Sing-box ShadowTLS :8448, SS-2022 :18500,
-    wstunnel :18080, SS-443 :17000, ZivPN :5667, OpenVPN :1194) or
-    outbound internet targets (:80, :443) with zero-copy stream piping
-    and kernel TCP_NODELAY latency elimination.
+  - Pipelined payload preservation: any buffered bytes after the header
+    block are forwarded to the target with zero packet loss.
+  - Multi-port listener: binds 8080, 3128, 8888, and loopback 18088
+    (HAProxy multiplexed from 443 / 8443 / 2053 / 2083 / 2087 / 2096).
 """
 
 import asyncio
+import base64
+import json
 import logging
 import os
 import re
 import signal
 import socket
 import sys
-from typing import Optional, Set, Tuple
+import time
+from typing import Any, Dict, Optional, Set, Tuple
 
-# Configure logging
+# --------------------------------------------------------------------------
+# Configuration
+# --------------------------------------------------------------------------
+
 LOG_LEVEL = os.environ.get("CHAMELEON_LOG", "WARNING").upper()
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.WARNING),
@@ -37,7 +57,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("chameleon")
 
-# Ports to listen on
 BIND_ADDR = os.environ.get("CHAMELEON_BIND", "0.0.0.0")
 PORTS = [
     int(p.strip())
@@ -49,29 +68,136 @@ PORTS = [
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 2222
 
+# Local TLS terminator (nginx) — where raw TLS ClientHellos get sent that
+# aren't otherwise identified as a specific local service.
+TLS_FALLBACK_PORT = int(os.environ.get("CHAMELEON_TLS_FALLBACK_PORT", "20443"))
+
 # Permitted internal local targets
-ALLOWED_LOCAL_PORTS = {
+ALLOWED_LOCAL_PORTS: Set[int] = {
     22, 53, 80, 109, 443, 1194, 2222, 5667, 7100, 7200, 7300, 7400, 7500, 7600, 7700,
-    8388, 8389, 8443, 8448, 17000, 18080, 18500, 20443
+    8388, 8389, 8443, 8444, 8448, 17000, 18080, 18500, 20443
 }
 
 # Dedicated local tunnel service ports (always route to loopback)
-LOCAL_TUNNEL_PORTS = {
+LOCAL_TUNNEL_PORTS: Set[int] = {
     22, 53, 109, 1194, 2222, 5667, 7100, 7200, 7300, 7400, 7500, 7600, 7700,
-    8388, 8389, 8448, 17000, 18080, 18500, 20443
+    8388, 8389, 8444, 8448, 17000, 18080, 18500, 20443
 }
 
 BUFFER_SIZE = 65536  # 64KB high-throughput buffer matching kernel TCP tuning
+STATS_FILE_PATH = os.environ.get("CHAMELEON_STATS_FILE", "/run/mubx/chameleon-stats.json")
+
+# Auth / abuse controls
+REQUIRE_AUTH_FOR_EXTERNAL = os.environ.get("CHAMELEON_REQUIRE_AUTH", "1") == "1"
+USERS_FILE = os.environ.get("MUBX_USERS_FILE", "/etc/mubx/users.json")
+MAX_CONCURRENT_CONNECTIONS = int(os.environ.get("CHAMELEON_MAX_CONNECTIONS", "2000"))
+MAX_CONNECTIONS_PER_IP = int(os.environ.get("CHAMELEON_MAX_PER_IP", "200"))
+
+# Response profile table
+RESPONSE_PROFILES_FILE = os.environ.get(
+    "CHAMELEON_RESPONSES_FILE", "/etc/mubx/chameleon-responses.json"
+)
+CHAMELEON_RESPONSES_PATH = RESPONSE_PROFILES_FILE
+
+DEFAULT_PROFILES: Dict[str, dict] = {
+    "default": {"status": "HTTP/1.1 200 Connection established", "headers": {}},
+    "legacy10": {"status": "HTTP/1.0 200 Connection established", "headers": {}},
+    "ws": {
+        "status": "HTTP/1.1 101 Switching Protocols",
+        "headers": {"Upgrade": "websocket", "Connection": "Upgrade"},
+    },
+    "ok200": {"status": "HTTP/1.1 200 OK", "headers": {"Content-Length": "0"}},
+    "redirect": {
+        "status": "HTTP/1.1 302 Found",
+        "headers": {"Location": "http://example.com/", "Content-Length": "0"},
+    },
+    "302_spoof": {
+        "status": "HTTP/1.1 302 Found",
+        "headers": {
+            "Location": "http://example.com/",
+            "Connection": "Keep-Alive",
+            "Content-Length": "0",
+        },
+    },
+    "204_nocontent": {
+        "status": "HTTP/1.1 204 No Content",
+        "headers": {
+            "Connection": "Keep-Alive",
+        },
+    },
+    "206_partial": {
+        "status": "HTTP/1.1 206 Partial Content",
+        "headers": {
+            "Content-Range": "bytes 0-0/1",
+            "Content-Length": "1",
+            "Connection": "Keep-Alive",
+        },
+    },
+    "chunked_evasion": {
+        "status": "HTTP/1.1 200 Connection established",
+        "headers": {
+            "Transfer-Encoding": "chunked",
+            "Connection": "Keep-Alive",
+        },
+    },
+    "custom_carrier_a": {
+        "status": "HTTP/1.1 007 Custom",
+        "headers": {"X-Note": "example of a fully custom carrier-expected status line"},
+    },
+}
+# Per-listen-port default profile name (falls back to "default" if absent).
+PORT_PROFILE_DEFAULTS: Dict[int, str] = {}
 
 # Precompiled regexes for lenient payload extraction
 RE_CONNECT = re.compile(rb"(?i)\bCONNECT\s+(?:\[([a-fA-F0-9:]+)\]|([a-zA-Z0-9\.\-_]+))(?::(\d+))?")
 RE_TARGET_HDR = re.compile(rb"(?i)\r?\n(?:X-Target|X-Real-Host):\s*(?:\[([a-fA-F0-9:]+)\]|([a-zA-Z0-9\.\-_]+))(?::(\d+))?")
 RE_HTTP_URL = re.compile(rb"(?i)\b(?:GET|POST|HEAD|OPTIONS|PUT|DELETE|TRACE|PATCH)\s+https?://(?:\[([a-fA-F0-9:]+)\]|([a-zA-Z0-9\.\-_]+))(?::(\d+))?")
 RE_HOST_HDR = re.compile(rb"(?i)\r?\n(?:X-Online-Host|X-Forward-Host|Host):\s*(?:\[([a-fA-F0-9:]+)\]|([a-zA-Z0-9\.\-_]+))(?::(\d+))?")
+RE_PROFILE_HDR = re.compile(rb"(?i)\r?\nX-MUBX-Profile:\s*([a-zA-Z0-9_\-]+)")
+RE_PROXY_AUTH = re.compile(rb"(?i)\r?\nProxy-Authorization:\s*Basic\s+([a-zA-Z0-9+/=]+)")
+RE_HTTP_METHOD_LINE = re.compile(rb"(?i)^\s*(?:GET|POST|HEAD|OPTIONS|PUT|DELETE|TRACE|PATCH|CONNECT)\s+\S+\s+HTTP/\d")
+
+# --------------------------------------------------------------------------
+# Startup-time caches (loaded once, not per-connection)
+# --------------------------------------------------------------------------
+
+_LOCAL_IDENTIFIERS: Set[str] = set()
+_RESPONSE_PROFILES: Dict[str, dict] = dict(DEFAULT_PROFILES)
+_responses_cache: Dict[str, Any] = {"profiles": DEFAULT_PROFILES, "ts": 0.0, "file": ""}
+_AUTH_TOKENS: Set[str] = set()
+
+_active_connections = 0
+_connections_per_ip: Dict[str, int] = {}
+
+STATS: Dict[str, Any] = {
+    "start_time": time.time(),
+    "connections_accepted": 0,
+    "connections_active": 0,
+    "routes_local": 0,
+    "routes_external": 0,
+    "blocked_unauthorized": 0,
+    "blocked_forbidden_port": 0,
+    "upstream_failures": 0,
+    "bytes_in": 0,
+    "bytes_out": 0,
+}
 
 
-def load_local_identifiers() -> Set[str]:
-    """Loads server domain names and localhost variants."""
+def get_stats() -> Dict[str, Any]:
+    """Returns current runtime telemetry metrics snapshot."""
+    now = time.time()
+    s = dict(STATS)
+    s["uptime_seconds"] = int(now - s["start_time"])
+    s["connections_active"] = _active_connections
+    return s
+
+
+def load_local_identifiers(ttl: float = 60.0) -> Set[str]:
+    """Loads server domain names and localhost variants. Cached at startup / SIGHUP."""
+    global _LOCAL_IDENTIFIERS
+    if _LOCAL_IDENTIFIERS:
+        return _LOCAL_IDENTIFIERS
+
     ids = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
     for p in ("/etc/mubx/domain", "/etc/telecom-engine.domain", "/usr/local/etc/xray/domain", "/etc/mubx/ip"):
         if os.path.isfile(p):
@@ -105,69 +231,270 @@ def load_local_identifiers() -> Set[str]:
                 ids.add(ip.lower())
     except Exception:
         pass
+    _LOCAL_IDENTIFIERS = ids
     return ids
 
 
+def load_response_profiles() -> Dict[str, dict]:
+    """Loads the response profile table from disk, merged over the
+    built-in defaults so the file only needs to contain overrides/additions."""
+    global _RESPONSE_PROFILES, _responses_cache
+    resp_file = os.environ.get("CHAMELEON_RESPONSES_FILE", RESPONSE_PROFILES_FILE)
+    now = time.time()
+    if now - _responses_cache["ts"] < 10.0 and _responses_cache.get("file") == resp_file:
+        return _responses_cache["profiles"]
+
+    profiles = {k: dict(v) for k, v in DEFAULT_PROFILES.items()}
+    if os.path.isfile(resp_file):
+        try:
+            with open(resp_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                for name, spec in data.items():
+                    if name.startswith("_"):
+                        continue
+                    if isinstance(spec, dict) and "status" in spec:
+                        profiles[name.lower()] = {
+                            "status": str(spec["status"]),
+                            "headers": dict(spec.get("headers", {})),
+                        }
+        except Exception as e:
+            log.warning("Failed to load %s: %s (using built-in defaults)", resp_file, e)
+
+    _responses_cache["profiles"] = profiles
+    _responses_cache["file"] = resp_file
+    _responses_cache["ts"] = now
+    _RESPONSE_PROFILES = profiles
+    return profiles
+
+
+def render_response(profile: Dict[str, Any]) -> bytes:
+    """Renders HTTP status line and headers into wire bytes."""
+    status = profile.get("status", "HTTP/1.1 200 Connection established").strip()
+    headers = profile.get("headers", {})
+    lines = [status]
+    if isinstance(headers, dict):
+        for k, v in headers.items():
+            lines.append(f"{k}: {v}")
+    return ("\r\n".join(lines) + "\r\n\r\n").encode("utf-8")
+
+
+def load_auth_tokens() -> Set[str]:
+    """Pulls valid per-user tokens out of the shared users store so
+    external (non-local) CONNECT targets can be gated."""
+    tokens: Set[str] = set()
+    users_file = os.environ.get("MUBX_USERS_FILE", USERS_FILE)
+    if not os.path.isfile(users_file):
+        return tokens
+    try:
+        with open(users_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        users = data if isinstance(data, list) else data.get("users", [])
+        for u in users:
+            if isinstance(u, dict):
+                if u.get("status") == "frozen":
+                    continue
+                tok = u.get("uuid") or u.get("token") or u.get("id")
+                if tok:
+                    tokens.add(str(tok))
+    except Exception as e:
+        log.warning("Failed to load auth tokens from %s: %s", users_file, e)
+    return tokens
+
+
+def load_valid_users(force_refresh: bool = False) -> Dict[str, str]:
+    """Loads active username -> uuid mapping from store."""
+    users: Dict[str, str] = {}
+    users_file = os.environ.get("MUBX_USERS_FILE", USERS_FILE)
+    if not os.path.isfile(users_file):
+        return users
+    try:
+        with open(users_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        user_list = data if isinstance(data, list) else data.get("users", [])
+        for u in user_list:
+            if isinstance(u, dict) and u.get("status", "active") != "frozen":
+                name = u.get("name")
+                uuid = u.get("uuid") or u.get("token")
+                if name and uuid:
+                    users[name] = uuid
+    except Exception as e:
+        log.warning("Failed to load users from %s: %s", users_file, e)
+    return users
+
+
+def reload_caches():
+    global _LOCAL_IDENTIFIERS, _RESPONSE_PROFILES, _AUTH_TOKENS, _responses_cache
+    _LOCAL_IDENTIFIERS = set()
+    _LOCAL_IDENTIFIERS = load_local_identifiers()
+    _responses_cache["ts"] = 0.0
+    _RESPONSE_PROFILES = load_response_profiles()
+    _AUTH_TOKENS = load_auth_tokens()
+    log.info(
+        "Caches reloaded: %d local identifiers, %d response profiles, %d auth tokens",
+        len(_LOCAL_IDENTIFIERS), len(_RESPONSE_PROFILES), len(_AUTH_TOKENS),
+    )
+
+
+# --------------------------------------------------------------------------
+# Protocol sniffing — runs BEFORE any HTTP parsing
+# --------------------------------------------------------------------------
+
+def sniff_protocol(buf: bytes) -> str:
+    """Classifies the first bytes of a connection. Returns one of:
+    'tls', 'ssh', 'http', 'unknown'. This is the fix for the old behavior
+    where any non-HTTP-shaped payload (raw TLS ClientHello, ShadowTLS,
+    etc.) silently fell back to being routed at Dropbear SSH."""
+    if len(buf) >= 3 and buf[0] == 0x16 and buf[1] == 0x03:
+        # TLS handshake record: content-type=22 (Handshake), version 0x03xx
+        return "tls"
+    if buf.startswith(b"SSH-"):
+        return "ssh"
+    if RE_CONNECT.search(buf) or RE_HTTP_METHOD_LINE.search(buf) or b"\r\n\r\n" in buf or b"\n\n" in buf:
+        return "http"
+    return "unknown"
+
+
+# --------------------------------------------------------------------------
+# HTTP-shaped payload parsing (lenient zero-rejection state machine)
+# --------------------------------------------------------------------------
+
 def parse_target(buffer: bytes) -> Tuple[Optional[str], Optional[int], bool]:
-    """
-    Leniently inspects any HTTP injector payload to extract the intended
-    target host and port. Returns (host, port, is_connect).
-    """
-    # 1. Standard or mangled CONNECT request (highest priority)
+    """Leniently inspects any HTTP injector payload to extract the intended
+    target host and port. Returns (host, port, is_connect)."""
     m = RE_CONNECT.search(buffer)
     if m:
         raw_host = (m.group(1) or m.group(2)).decode("ascii", errors="ignore")
         port = int(m.group(3).decode("ascii")) if m.group(3) else 443
         return raw_host, port, True
 
-    # 2. Explicit target header (X-Target / X-Real-Host)
     m = RE_TARGET_HDR.search(buffer)
     if m:
         raw_host = (m.group(1) or m.group(2)).decode("ascii", errors="ignore")
         port = int(m.group(3).decode("ascii")) if m.group(3) else DEFAULT_PORT
         return raw_host, port, True
 
-    # 3. Plain HTTP request with absolute URI (e.g. GET http://domain:port/ ...)
     m = RE_HTTP_URL.search(buffer)
     if m:
         raw_host = (m.group(1) or m.group(2)).decode("ascii", errors="ignore")
         port = int(m.group(3).decode("ascii")) if m.group(3) else 80
         return raw_host, port, False
 
-    # 4. Host header with explicit port (e.g. Host: 127.0.0.1:2222 or Host: domain:2222)
     m = RE_HOST_HDR.search(buffer)
     if m and m.group(3):
         raw_host = (m.group(1) or m.group(2)).decode("ascii", errors="ignore")
         port = int(m.group(3).decode("ascii"))
         return raw_host, port, True
 
-    # 5. If Host is a known local identifier (server domain / IP / localhost)
+    local_ids = load_local_identifiers()
     if m:
         raw_host = (m.group(1) or m.group(2)).decode("ascii", errors="ignore").lower()
-        if raw_host in load_local_identifiers():
+        if raw_host in local_ids:
             return DEFAULT_HOST, DEFAULT_PORT, True
 
-    # 6. Any HTTP request without explicit destination defaults to Dropbear SSH
-    if re.search(rb"(?i)\b(?:GET|POST|HEAD|OPTIONS|PUT|DELETE|TRACE|PATCH)\s+/\S*\s+HTTP/", buffer):
+    if RE_HTTP_METHOD_LINE.search(buffer):
         return DEFAULT_HOST, DEFAULT_PORT, True
 
     return None, None, False
 
 
+def rewrite_absolute_uri(buffer: bytes) -> bytes:
+    """For plain (non-CONNECT) proxied HTTP requests with an absolute-URI
+    request line (GET http://host/path HTTP/1.1), rewrite to origin-form
+    (GET /path HTTP/1.1) so backends that aren't expecting proxy-form
+    request lines don't choke on them. Leaves everything else untouched."""
+    m = re.match(rb"(?i)^(\w+)\s+https?://[^/\s]+(/\S*)?\s+(HTTP/\d\.\d)", buffer)
+    if not m:
+        return bytes(buffer)
+    method, path, httpver = m.group(1), m.group(2) or b"/", m.group(3)
+    new_line = method + b" " + path + b" " + httpver
+    first_line_end = buffer.find(b"\n", 0)
+    if first_line_end == -1:
+        return bytes(buffer)
+    rest = buffer[first_line_end + 1:]
+    return new_line + b"\r\n" + rest
+
+
+def extract_profile_name(buffer: bytes) -> Optional[str]:
+    m = RE_PROFILE_HDR.search(buffer)
+    if m:
+        return m.group(1).decode("ascii", errors="ignore").lower()
+    return None
+
+
+def build_ack(profile_name: Optional[str], is_ws: bool) -> bytes:
+    """Builds the acknowledgement response from the profile table."""
+    profiles = load_response_profiles()
+    name = "ws" if (is_ws and profile_name is None) else (profile_name or "default")
+    profile = profiles.get(name.lower()) or profiles.get("default", DEFAULT_PROFILES["default"])
+    return render_response(profile)
+
+
+def parse_basic_auth(buffer: bytes) -> Optional[Tuple[str, str]]:
+    """Extracts username and password from Proxy-Authorization: Basic header."""
+    m = RE_PROXY_AUTH.search(buffer)
+    if not m:
+        return None
+    try:
+        decoded = base64.b64decode(m.group(1)).decode("utf-8", "replace")
+        if ":" in decoded:
+            u, p = decoded.split(":", 1)
+            return u.strip(), p.strip()
+    except Exception:
+        pass
+    return None
+
+
+# --------------------------------------------------------------------------
+# Routing helpers
+# --------------------------------------------------------------------------
+
 def is_local_target(host: str, port: int) -> bool:
-    """Checks if target host/port refers to a local MUB-X service on this machine."""
     h = host.strip().lower()
     if h in ("127.0.0.1", "localhost", "::1", "0.0.0.0") or h.startswith("127."):
         return True
     if port in LOCAL_TUNNEL_PORTS:
         return True
-    if h in load_local_identifiers():
+    local_ids = load_local_identifiers()
+    if h in local_ids:
         return True
     return False
 
 
+def is_authorized_external(buffer: bytes) -> bool:
+    """Gate for CONNECTs to destinations that are NOT a recognized local
+    MUB-X service. Supports both X-MUBX-Token and Proxy-Authorization: Basic."""
+    require_auth = os.environ.get("CHAMELEON_REQUIRE_AUTH", "1" if REQUIRE_AUTH_FOR_EXTERNAL else "0") == "1"
+    if not require_auth:
+        return True
+
+    # 1. X-MUBX-Token header
+    m = re.search(rb"(?i)\r?\nX-MUBX-Token:\s*([a-zA-Z0-9\-]+)", buffer)
+    tokens = load_auth_tokens()
+    if m:
+        token = m.group(1).decode("ascii", errors="ignore")
+        if token in tokens:
+            return True
+
+    # 2. Proxy-Authorization: Basic header
+    creds = parse_basic_auth(buffer)
+    if creds:
+        username, password = creds
+        if password in tokens:
+            return True
+        valid_users = load_valid_users()
+        if username in valid_users and valid_users[username] == password:
+            return True
+
+    return False
+
+
+def check_auth(buffer: bytes) -> bool:
+    """Alias for is_authorized_external for test compatibility."""
+    return is_authorized_external(buffer)
+
+
 def set_tcp_opts(writer: asyncio.StreamWriter):
-    """Enables TCP_NODELAY and SO_KEEPALIVE to eliminate latency and preserve NAT pinholes."""
     try:
         sock = writer.get_extra_info("socket")
         if sock:
@@ -183,8 +510,7 @@ def set_tcp_opts(writer: asyncio.StreamWriter):
         pass
 
 
-async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-    """Bidirectional asynchronous streaming with 64KB chunks."""
+async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, counter_key: str = ""):
     try:
         while not reader.at_eof():
             data = await reader.read(BUFFER_SIZE)
@@ -192,58 +518,156 @@ async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
                 break
             writer.write(data)
             await writer.drain()
+            if counter_key:
+                STATS[counter_key] += len(data)
     except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
         pass
     finally:
         try:
             writer.close()
             await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             pass
 
 
+async def raw_passthrough(client_reader, client_writer, buffer: bytes, host: str, port: int):
+    """Straight TCP passthrough for protocols we don't (and shouldn't) try
+    to parse as HTTP — raw TLS ClientHello, raw SSH banners."""
+    STATS["connections_accepted"] += 1
+    STATS["routes_local"] += 1
+    try:
+        target_reader, target_writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=6.0
+        )
+        set_tcp_opts(target_writer)
+    except Exception as e:
+        STATS["upstream_failures"] += 1
+        log.warning("raw_passthrough: failed connecting to %s:%d: %s", host, port, e)
+        client_writer.close()
+        return
+
+    try:
+        if buffer:
+            target_writer.write(buffer)
+            await target_writer.drain()
+    except Exception:
+        client_writer.close()
+        target_writer.close()
+        return
+
+    pipe_client = asyncio.create_task(pipe(client_reader, target_writer, "bytes_out"))
+    pipe_target = asyncio.create_task(pipe(target_reader, client_writer, "bytes_in"))
+    done, pending = await asyncio.wait([pipe_client, pipe_target], return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+        task.cancel()
+    for w in (client_writer, target_writer):
+        try:
+            w.close()
+            await asyncio.wait_for(w.wait_closed(), timeout=2.0)
+        except (Exception, asyncio.CancelledError):
+            pass
+
+
+# --------------------------------------------------------------------------
+# Main per-connection handler
+# --------------------------------------------------------------------------
+
 async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter):
-    """
-    Handles an incoming connection, buffering through potential [split] or
-    [delay_split] chunks until an actionable HTTP request is received.
-    Preserves and forwards all pipelined bytes with zero packet loss.
-    """
+    global _active_connections
+
+    peer = client_writer.get_extra_info("peername")
+    peer_ip = peer[0] if peer else "?"
+
+    if _active_connections >= MAX_CONCURRENT_CONNECTIONS:
+        client_writer.close()
+        return
+    if _connections_per_ip.get(peer_ip, 0) >= MAX_CONNECTIONS_PER_IP:
+        log.warning("Per-IP connection limit hit for %s", peer_ip)
+        client_writer.close()
+        return
+
+    _active_connections += 1
+    _connections_per_ip[peer_ip] = _connections_per_ip.get(peer_ip, 0) + 1
+    try:
+        await _handle_client_inner(client_reader, client_writer, peer)
+    finally:
+        _active_connections = max(0, _active_connections - 1)
+        _connections_per_ip[peer_ip] = max(0, _connections_per_ip.get(peer_ip, 1) - 1)
+
+
+async def _handle_client_inner(client_reader, client_writer, client_addr):
     set_tcp_opts(client_writer)
-    client_addr = client_writer.get_extra_info("peername")
     log.debug("Client connected: %s", client_addr)
+    STATS["connections_accepted"] += 1
 
-    buffer = bytearray()
-    target_host = None
-    target_port = None
+    # --- Step 1: grab the first chunk and sniff protocol before parsing ---
+    try:
+        first = await asyncio.wait_for(client_reader.read(4096), timeout=5.0)
+    except (asyncio.TimeoutError, ConnectionResetError):
+        client_writer.close()
+        return
+    if not first:
+        client_writer.close()
+        return
+
+    buffer = bytearray(first)
+
+    # Fast-path stats endpoint on loopback
+    if buffer.startswith(b"GET /stats ") or buffer.startswith(b"GET /metrics "):
+        st = json.dumps(get_stats(), indent=2).encode("utf-8")
+        resp = (
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Content-Length: " + str(len(st)).encode() + b"\r\n"
+            b"Connection: close\r\n\r\n" + st
+        )
+        client_writer.write(resp)
+        await client_writer.drain()
+        client_writer.close()
+        return
+
+    proto = sniff_protocol(bytes(buffer))
+
+    if proto == "tls":
+        # Raw TLS ClientHello: hand straight to local TLS terminator (nginx)
+        await raw_passthrough(client_reader, client_writer, bytes(buffer), "127.0.0.1", TLS_FALLBACK_PORT)
+        return
+
+    if proto == "ssh":
+        # Raw SSH banner with no HTTP wrapper at all.
+        await raw_passthrough(client_reader, client_writer, bytes(buffer), DEFAULT_HOST, DEFAULT_PORT)
+        return
+
+    # --- Step 2: HTTP-shaped (or genuinely unknown) — accumulate more ---
+    target_host = target_port = None
     is_connect = False
-
-    # Accumulate payload chunks (handles [split], [delay_split], leading CRLFs)
     try:
         while len(buffer) < 8192:
-            chunk = await asyncio.wait_for(client_reader.read(4096), timeout=5.0)
-            if not chunk:
-                break
-            buffer.extend(chunk)
-
-            # Check if we have enough to identify the target
-            th, tp, ic = parse_target(buffer)
+            th, tp, ic = parse_target(bytes(buffer))
             if th:
                 target_host, target_port, is_connect = th, tp, ic
-                # If we have complete HTTP headers
                 if b"\r\n\r\n" in buffer or b"\n\n" in buffer:
-                    # If this is not a CONNECT request and not a websocket upgrade,
-                    # peek briefly (up to 350ms) to see if a split CONNECT payload follows
                     if not is_connect and b"upgrade: websocket" not in bytes(buffer).lower():
                         try:
                             more = await asyncio.wait_for(client_reader.read(4096), timeout=0.35)
                             if more:
                                 buffer.extend(more)
-                                th2, tp2, ic2 = parse_target(buffer)
+                                th2, tp2, ic2 = parse_target(bytes(buffer))
                                 if th2 and ic2:
                                     target_host, target_port, is_connect = th2, tp2, ic2
                         except (asyncio.TimeoutError, ConnectionResetError):
                             pass
                     break
+            chunk = await asyncio.wait_for(client_reader.read(4096), timeout=5.0)
+            if not chunk:
+                break
+            buffer.extend(chunk)
+            proto2 = sniff_protocol(bytes(buffer))
+            if proto2 in ("tls", "ssh"):
+                target_host2 = "127.0.0.1"
+                target_port2 = TLS_FALLBACK_PORT if proto2 == "tls" else DEFAULT_PORT
+                await raw_passthrough(client_reader, client_writer, bytes(buffer), target_host2, target_port2)
+                return
     except (asyncio.TimeoutError, ConnectionResetError):
         pass
 
@@ -251,62 +675,66 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         client_writer.close()
         return
 
-    # Extract any pipelined data immediately following the actual tunnel request headers
+    # --- Step 3: find end of headers / pipelined leftover bytes ---
     header_end = -1
-    m_conn = RE_CONNECT.search(buffer)
-    if m_conn:
-        conn_pos = m_conn.start()
-        idx = buffer.find(b"\r\n\r\n", conn_pos)
-        if idx != -1:
-            header_end = idx + 4
-        else:
-            idx = buffer.find(b"\n\n", conn_pos)
-            if idx != -1:
-                header_end = idx + 2
+    m_conn = RE_CONNECT.search(bytes(buffer))
+    search_from = m_conn.start() if m_conn else 0
+    idx = buffer.find(b"\r\n\r\n", search_from)
+    if idx != -1:
+        header_end = idx + 4
     else:
-        idx = buffer.find(b"\r\n\r\n")
+        idx = buffer.find(b"\n\n", search_from)
         if idx != -1:
-            header_end = idx + 4
-        else:
-            idx = buffer.find(b"\n\n")
-            if idx != -1:
-                header_end = idx + 2
+            header_end = idx + 2
 
     leftover = bytes(buffer[header_end:]) if (header_end != -1 and header_end < len(buffer)) else b""
 
-    # Fallback to default Dropbear SSH if no host could be parsed
     if not target_host:
+        log.warning("Unclassifiable payload from %s (%d bytes) — defaulting to SSH tunnel", client_addr, len(buffer))
         target_host = DEFAULT_HOST
         target_port = DEFAULT_PORT
         is_connect = True
 
-    # Normalize local loopback destinations (bypasses cloud NAT hairpinning)
     if is_local_target(target_host, target_port):
         target_host = "127.0.0.1"
+        STATS["routes_local"] += 1
         if target_port not in ALLOWED_LOCAL_PORTS:
+            STATS["blocked_forbidden_port"] += 1
             log.warning("Blocked local port access: %s:%d from %s", target_host, target_port, client_addr)
             client_writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
             await client_writer.drain()
             client_writer.close()
             return
+    else:
+        # External destination — gate behind auth
+        if not is_authorized_external(bytes(buffer)):
+            STATS["blocked_unauthorized"] += 1
+            log.warning("Blocked unauthenticated open-relay attempt to %s:%d from %s", target_host, target_port, client_addr)
+            client_writer.write(b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"MUB-X\"\r\nContent-Length: 0\r\n\r\n")
+            await client_writer.drain()
+            client_writer.close()
+            return
+        STATS["routes_external"] += 1
 
-    # Check for direct SSH over HTTP (e.g. GET / with Upgrade: websocket)
     buf_lower = bytes(buffer).lower()
-    is_ws_direct = (not is_connect) and (b"upgrade: websocket" in buf_lower)
-    if is_ws_direct and target_host == "127.0.0.1" and target_port in (80, 443):
-        # Direct websocket injection to SSH
+    is_ws_upgrade = b"upgrade: websocket" in buf_lower
+    is_ws_direct = (not is_connect) and is_ws_upgrade
+
+    requested_profile = extract_profile_name(bytes(buffer))
+    if is_ws_direct and requested_profile == "ssh-over-ws" and target_host == "127.0.0.1" and target_port in (80, 443):
         target_port = DEFAULT_PORT
         is_connect = True
 
-    # Connect to target service
-    log.info("Connecting %s -> %s:%d (is_connect=%s, leftover=%d B)",
-             client_addr, target_host, target_port, is_connect, len(leftover))
+    log.info("Connecting %s -> %s:%d (is_connect=%s, leftover=%dB, profile=%s)",
+              client_addr, target_host, target_port, is_connect, len(leftover), requested_profile)
+
     try:
         target_reader, target_writer = await asyncio.wait_for(
             asyncio.open_connection(target_host, target_port), timeout=6.0
         )
         set_tcp_opts(target_writer)
     except Exception as e:
+        STATS["upstream_failures"] += 1
         log.warning("Failed connecting to %s:%d: %s", target_host, target_port, e)
         try:
             client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
@@ -316,26 +744,17 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
             pass
         return
 
-    # Acknowledge handshake with carrier-demanded status code
     try:
         if is_connect or is_ws_direct:
-            if b"upgrade: websocket" in buf_lower:
-                client_writer.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
-            elif b"200 ok" in buf_lower:
-                client_writer.write(b"HTTP/1.1 200 OK\r\n\r\n")
-            elif b"http/1.0" in buf_lower[:30]:
-                client_writer.write(b"HTTP/1.0 200 Connection established\r\n\r\n")
-            else:
-                client_writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            ack = build_ack(requested_profile, is_ws_upgrade)
+            client_writer.write(ack)
             await client_writer.drain()
-
-            # Forward any pipelined payload bytes (e.g. SSH identification string or TLS hello)
             if leftover:
                 target_writer.write(leftover)
                 await target_writer.drain()
         else:
-            # For plain GET/POST to external web targets, forward the HTTP request
-            target_writer.write(buffer)
+            # Plain proxied HTTP to an external target: rewrite absolute-URI
+            target_writer.write(rewrite_absolute_uri(bytes(buffer)))
             await target_writer.drain()
     except Exception as e:
         log.debug("Error sending handshake ack: %s", e)
@@ -343,9 +762,8 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         target_writer.close()
         return
 
-    # Start bidirectional zero-copy pipe and cleanly teardown on first close
-    pipe_client = asyncio.create_task(pipe(client_reader, target_writer))
-    pipe_target = asyncio.create_task(pipe(target_reader, client_writer))
+    pipe_client = asyncio.create_task(pipe(client_reader, target_writer, "bytes_out"))
+    pipe_target = asyncio.create_task(pipe(target_reader, client_writer, "bytes_in"))
     done, pending = await asyncio.wait([pipe_client, pipe_target], return_when=asyncio.FIRST_COMPLETED)
     for task in pending:
         task.cancel()
@@ -353,11 +771,35 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         try:
             writer.close()
             await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
+        except (Exception, asyncio.CancelledError):
+            pass
+
+
+# --------------------------------------------------------------------------
+# Entry point & Periodic Telemetry
+# --------------------------------------------------------------------------
+
+async def periodic_stats_flusher(interval: float = 15.0) -> None:
+    """Periodically writes metrics snapshot to STATS_FILE_PATH."""
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            try:
+                os.makedirs(os.path.dirname(STATS_FILE_PATH), exist_ok=True)
+                with open(STATS_FILE_PATH + ".tmp", "w", encoding="utf-8") as f:
+                    json.dump(get_stats(), f)
+                os.replace(STATS_FILE_PATH + ".tmp", STATS_FILE_PATH)
+            except Exception:
+                pass
+        except asyncio.CancelledError:
+            break
         except Exception:
             pass
 
 
 async def main():
+    reload_caches()
+
     servers = []
     for port in PORTS:
         try:
@@ -383,8 +825,16 @@ async def main():
         except NotImplementedError:
             pass
 
+    try:
+        loop.add_signal_handler(signal.SIGHUP, reload_caches)
+    except NotImplementedError:
+        pass
+
+    flusher_task = asyncio.create_task(periodic_stats_flusher())
+
     await stop_event.wait()
     log.info("Shutting down MUB-X Chameleon...")
+    flusher_task.cancel()
     for s in servers:
         s.close()
         await s.wait_closed()
