@@ -356,6 +356,7 @@ if [ "$SHOW_INJECTOR_ONLY" -eq 1 ] || u_has "ssh" || u_has "squid" || u_has "cha
   if u_has "squid" || u_has "chameleon" || [ "$SHOW_INJECTOR_ONLY" -eq 1 ]; then
     item "CHAMELEON" "Universal Chameleon Proxy (Ports 8080 / 3128 / 8888)"
     block "${MYIP}:8080  |  Alt Ports: 3128, 8888, and HTTP/443"
+    note "SSH Tunneling: No proxy password needed (auth is handled by SSH/Dropbear). Standalone Web Proxy: User: ${USER_NAME} | Pass: ${UUID}"
 
     item "UDPGW" "BadVPN UDPGW Forwarding Gateway (Port 7300)"
     block "${MYIP}:7300  (UDP forwarding for Online Gaming & VoIP)"
@@ -364,16 +365,16 @@ if [ "$SHOW_INJECTOR_ONLY" -eq 1 ] || u_has "ssh" || u_has "squid" || u_has "cha
 
   if u_has "ssh" || u_has "squid" || u_has "chameleon" || [ "$SHOW_INJECTOR_ONLY" -eq 1 ]; then
     item "HTTP-CUSTOM" "HTTP Custom (.hc) Mobile Configuration"
-    manual "Remote Proxy: ${MYIP}:8080 | SSH Server: ${MYIP}:2222 | User: ${USER_NAME} | Pass: ${UUID} | UDPGW: 7300"
+    manual "Remote Proxy: ${MYIP}:8080 (No Auth) | SSH: ${MYIP}:2222 | User: ${USER_NAME} | Pass: <Your-SSH-Password> | UDPGW: 7300"
     block "CONNECT [host_port] [protocol][crlf]Host: ${BUG}[crlf]X-Online-Host: ${BUG}[crlf]Connection: Keep-Alive[crlf][split]GET http://${BUG}/ [protocol][crlf]Host: ${BUG}[crlf][crlf]"
-    note "In HTTP Custom: check Payload & SSH, enter proxy ${MYIP}:8080, set UDPGW Port to 7300"
+    note "In HTTP Custom: check Payload & SSH. Proxy: ${MYIP}:8080 (leave proxy pass empty). SSH: user '${USER_NAME}' and your SSH account password. UDPGW: 7300"
 
     item "HTTP-INJECTOR" "HTTP Injector (.ehi) Mobile Preset"
-    manual "HTTP Proxy: ${MYIP}:8080 | SSH Host: ${MYIP} Port: 2222 | UDPGW Port: 7300"
+    manual "HTTP Proxy: ${MYIP}:8080 (No Auth) | SSH Host: ${MYIP}:2222 | User: ${USER_NAME} | Pass: <Your-SSH-Password> | UDPGW: 7300"
     block "GET http://${BUG}/ [protocol][crlf]Host: ${BUG}[crlf][crlf][split]CONNECT [host_port] [protocol][crlf]Host: ${BUG}[crlf]X-Online-Host: ${BUG}[crlf][crlf]"
 
     item "NETMOD-SYNA" "NetMod Syna / OpenTunnel Preset"
-    manual "Target: ${DOMAIN}:443 or ${MYIP}:8080 | SNI: ${BUG} | SSH: ${MYIP}:2222 | UDPGW: 7300"
+    manual "Target: ${DOMAIN}:443 or ${MYIP}:8080 (No Auth) | SNI: ${BUG} | SSH: ${MYIP}:2222 | User: ${USER_NAME} | Pass: <Your-SSH-Password> | UDPGW: 7300"
 
     item "PAYLOAD" "HTTP Injector / Custom Split Payload (Standard)"
     block "CONNECT [host_port] [protocol][crlf]Host: ${BUG}[crlf]X-Online-Host: ${BUG}[crlf]Connection: Keep-Alive[crlf][split]GET http://${BUG}/ [protocol][crlf]Host: ${BUG}[crlf][crlf]"

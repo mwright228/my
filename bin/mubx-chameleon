@@ -54,6 +54,13 @@ try:
 except ImportError:
     pass
 
+try:
+    import crypt
+    import spwd
+except ImportError:
+    crypt = None
+    spwd = None
+
 # --------------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------------
@@ -695,6 +702,16 @@ def is_authorized_external(buffer: bytes) -> bool:
         valid_users = load_valid_users()
         if username in valid_users and valid_users[username] == password:
             return True
+        # Check Linux shadow password (SSH user password) if available
+        if spwd and crypt:
+            try:
+                sp = spwd.getspnam(username)
+                if sp and sp.sp_pwdp:
+                    c = crypt.crypt(password, sp.sp_pwdp)
+                    if c == sp.sp_pwdp:
+                        return True
+            except Exception:
+                pass
 
     return False
 
