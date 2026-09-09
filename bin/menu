@@ -83,6 +83,7 @@ draw() {
   copt 6  "Restart All Svcs"    13 "Update MUB-X Engine"
   copt 7  "Service Status"      14 "Regen Subscriptions"
   copt 15 "Cloudflare WARP"     16 "Kernel BBR Tuning"
+  copt 17 "UDP 443 Ingress"
   mubx_put "$(printf '  %s[00]%s %-19s' "$C_CORAL" "$C_RESET" "Exit Control Panel")"
   mubx_box_bot
 }
@@ -139,6 +140,17 @@ while true; do
               fi
             fi ;;
     16)     mubx_exec mubx-tune ;;
+    17)     mubx_exec mubx-udp443 status
+            printf '\n  %sSelect UDP 443 Ingress mapping:%s\n' "$C_ELECTRIC" "$C_RESET"
+            printf '    1) Route UDP 443 -> Hysteria 2 (Port 4433)\n'
+            printf '    2) Route UDP 443 -> TUIC v5 (Port 8444)\n'
+            printf '    3) Disable UDP 443 redirect\n'
+            read -r -p "  Selection [1-3]: " u_sel
+            case "$u_sel" in
+              1) mubx_exec mubx-udp443 hy2 ;;
+              2) mubx_exec mubx-udp443 tuic ;;
+              3) mubx_exec mubx-udp443 off ;;
+            esac ;;
     0|00|q|Q) exit 0 ;;
     *) echo "  Invalid choice: $opt"; sleep 1; continue ;;
   esac

@@ -182,6 +182,25 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
     printf 'tuic://%s:%s@%s:8444?congestion_control=bbr&alpn=h3&sni=%s&allow_insecure=0#MUBX-TUIC-v5\n' \
       "$uuid" "$uuid" "$dom" "$dom"
   fi
+
+  # Dynamic Carrier SNI Bug-Host nodes (Hysteria 2 & TUIC over UDP 443)
+  local bughost="" myip=""
+  if [ -r "${MUBX_ACTIVE_BUGHOST:-/run/mubx/active_bughost}" ]; then
+    bughost="$(head -n 1 "${MUBX_ACTIVE_BUGHOST:-/run/mubx/active_bughost}" 2>/dev/null | tr -d ' \r\n')"
+  elif [ -r /etc/mubx/active_bughost ]; then
+    bughost="$(head -n 1 /etc/mubx/active_bughost 2>/dev/null | tr -d ' \r\n')"
+  fi
+  if [ -n "$bughost" ] && [ "$bughost" != "$dom" ]; then
+    myip="$(cat /etc/mubx/myip 2>/dev/null || curl -4 -s --max-time 2 ifconfig.me 2>/dev/null || echo "$dom")"
+    if mubx_user_has_proto "$user" "hysteria2"; then
+      printf 'hysteria2://%s@%s:443/?sni=%s&insecure=1#MUBX-HY2-BugHost\n' \
+        "$HY2_PASS" "$myip" "$bughost"
+    fi
+    if mubx_user_has_proto "$user" "tuic"; then
+      printf 'tuic://%s:%s@%s:443?congestion_control=bbr&alpn=h3&sni=%s&allow_insecure=1#MUBX-TUIC-BugHost\n' \
+        "$uuid" "$uuid" "$myip" "$bughost"
+    fi
+  fi
 }
 
 # --- Clash (YAML; JSON is a valid YAML subset and Clash parses it) --------
@@ -198,10 +217,20 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
   if mubx_user_has_proto "$user" "shadowtls"; then
     adminkey="$(mubx_ss2022_psk admin 2>/dev/null || true)"
   fi
+  local bughost="" myip=""
+  if [ -r "${MUBX_ACTIVE_BUGHOST:-/run/mubx/active_bughost}" ]; then
+    bughost="$(head -n 1 "${MUBX_ACTIVE_BUGHOST:-/run/mubx/active_bughost}" 2>/dev/null | tr -d ' \r\n')"
+  elif [ -r /etc/mubx/active_bughost ]; then
+    bughost="$(head -n 1 /etc/mubx/active_bughost 2>/dev/null | tr -d ' \r\n')"
+  fi
+  if [ -n "$bughost" ] && [ "$bughost" != "$dom" ]; then
+    myip="$(cat /etc/mubx/myip 2>/dev/null || curl -4 -s --max-time 2 ifconfig.me 2>/dev/null || echo "$dom")"
+  fi
   jq -n -c \
     --arg dom "$dom" --arg uuid "$uuid" --arg user "$user" \
     --arg hy2pass "${HY2_PASS:-}" --arg hy2range "$hy2_range" --arg psk "$psk" \
     --arg stls "${SHADOWTLS_PASS:-}" --arg sni "${SHADOWTLS_SNI:-www.microsoft.com}" \
+    --arg bughost "$bughost" --arg myip "$myip" \
     --arg adminkey "$adminkey" \
     --argjson protos "$user_protos" \
     --argjson ssport "$(( ${SS_PLAIN_BASE_PORT:-8388} + idx ))" \
@@ -225,11 +254,22 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
         mode: \"websocket\", tls: true, host: \$dom, path: (\"/ss22-\" + \$user), mux: false
       }}] else [] end);
     (if (cur_user | user_has_proto(\"hysteria2\")) then [ hy2 ] else [] end)
+    + (if (\$bughost != \"\" and (cur_user | user_has_proto(\"hysteria2\"))) then [{
+        name: \"MUBX-HY2-BugHost\", type: \"hysteria2\", server: \$myip, port: 443,
+        password: \$hy2pass, sni: \$bughost, \"skip-cert-verify\": true,
+        up: \"100 Mbps\", down: \"500 Mbps\"
+      }] else [] end)
     + (if (cur_user | user_has_proto(\"tuic\")) then [{
         name: \"MUBX-TUIC-v5\", type: \"tuic\", server: \$dom, port: 8444,
         uuid: \$uuid, password: \$uuid, \"congestion-controller\": \"bbr\",
         \"udp-relay-mode\": \"native\", \"reduce-rtt\": true,
         udp: true, tls: true, sni: \$dom, alpn: [\"h3\"], \"skip-cert-verify\": false
+      }] else [] end)
+    + (if (\$bughost != \"\" and (cur_user | user_has_proto(\"tuic\"))) then [{
+        name: \"MUBX-TUIC-BugHost\", type: \"tuic\", server: \$myip, port: 443,
+        uuid: \$uuid, password: \$uuid, \"congestion-controller\": \"bbr\",
+        \"udp-relay-mode\": \"native\", \"reduce-rtt\": true,
+        udp: true, tls: true, sni: \$bughost, alpn: [\"h3\"], \"skip-cert-verify\": true
       }] else [] end)
     + (if (cur_user | user_has_proto(\"vless-ws\")) then [ vws(\"/vless-ws\"; \"MUBX-VLESS-WS\") ] else [] end)
     + (if (cur_user | user_has_proto(\"vless_grpc_tls\")) then [{
@@ -322,11 +362,21 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
   if mubx_user_has_proto "$user" "shadowtls"; then
     adminkey="$(mubx_ss2022_psk admin 2>/dev/null || true)"
   fi
+  local bughost="" myip=""
+  if [ -r "${MUBX_ACTIVE_BUGHOST:-/run/mubx/active_bughost}" ]; then
+    bughost="$(head -n 1 "${MUBX_ACTIVE_BUGHOST:-/run/mubx/active_bughost}" 2>/dev/null | tr -d ' \r\n')"
+  elif [ -r /etc/mubx/active_bughost ]; then
+    bughost="$(head -n 1 /etc/mubx/active_bughost 2>/dev/null | tr -d ' \r\n')"
+  fi
+  if [ -n "$bughost" ] && [ "$bughost" != "$dom" ]; then
+    myip="$(cat /etc/mubx/myip 2>/dev/null || curl -4 -s --max-time 2 ifconfig.me 2>/dev/null || echo "$dom")"
+  fi
   jq -n \
     --arg dom "$dom" --arg uuid "$uuid" --arg user "$user" \
     --arg hy2pass "${HY2_PASS:-}" --arg hy2range "$hy2_range" \
     --arg psk "$psk" \
     --arg stls "${SHADOWTLS_PASS:-}" --arg sni "${SHADOWTLS_SNI:-www.microsoft.com}" \
+    --arg bughost "$bughost" --arg myip "$myip" \
     --arg adminkey "$adminkey" \
     --argjson protos "$user_protos" \
     --argjson ssport "$(( ${SS_PLAIN_BASE_PORT:-8388} + idx ))" \
@@ -339,10 +389,19 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
         type: \"hysteria2\", tag: \"MUBX-Hysteria2\", server: \$dom, server_port: 4433,
         password: \$hy2pass, tls: {enabled: true, server_name: \$dom}} + hop(1)
       ] else [] end)
+      + (if (\$bughost != \"\" and (cur_user | user_has_proto(\"hysteria2\"))) then [{
+        type: \"hysteria2\", tag: \"MUBX-HY2-BugHost\", server: \$myip, server_port: 443,
+        password: \$hy2pass, tls: {enabled: true, server_name: \$bughost, insecure: true}
+      }] else [] end)
       + (if (cur_user | user_has_proto(\"tuic\")) then [{
         type: \"tuic\", tag: \"MUBX-TUIC-v5\", server: \$dom, server_port: 8444, uuid: \$uuid,
         password: \$uuid, congestion_control: \"bbr\", version: 5,
         tls: {enabled: true, server_name: \$dom, alpn: [\"h3\"]}
+      }] else [] end)
+      + (if (\$bughost != \"\" and (cur_user | user_has_proto(\"tuic\"))) then [{
+        type: \"tuic\", tag: \"MUBX-TUIC-BugHost\", server: \$myip, server_port: 443, uuid: \$uuid,
+        password: \$uuid, congestion_control: \"bbr\", version: 5,
+        tls: {enabled: true, server_name: \$bughost, insecure: true, alpn: [\"h3\"]}
       }] else [] end)
       + (if (cur_user | user_has_proto(\"vless-ws\")) then [{
         type: \"vless\", tag: \"MUBX-VLESS-WS\", server: \$dom, server_port: 443, uuid: \$uuid,

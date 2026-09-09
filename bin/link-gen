@@ -163,22 +163,40 @@ if [ "$SHOW_INJECTOR_ONLY" -eq 0 ] && { u_has "hysteria2" || u_has "shadowtls" |
 
   # TUIC v5
   if u_has "tuic"; then
-    item "TUIC-v5" "TUIC v5 (QUIC 0-RTT / UDP 8444)"
-    block "tuic://${UUID}:${UUID}@${BUG}:8444?congestion_control=bbr&alpn=h3&sni=${BUG}&allow_insecure=0#MUBX-TUIC-v5"
-    manual "Address: ${BUG} | Port: 8444 | UUID: ${UUID} | Password: ${UUID} | Congestion: bbr | ALPN: h3 | SNI: ${BUG}"
+    item "TUIC-v5" "TUIC v5 Direct (QUIC 0-RTT / UDP 8444)"
+    block "tuic://${UUID}:${UUID}@${DOMAIN}:8444?congestion_control=bbr&alpn=h3&sni=${DOMAIN}&allow_insecure=0#MUBX-TUIC-v5"
+    manual "Address: ${DOMAIN} | Port: 8444 | UUID: ${UUID} | Password: ${UUID} | Congestion: bbr | ALPN: h3 | SNI: ${DOMAIN}"
     note "Native QUIC 0-RTT handshake with BBR congestion control over UDP 8444"
     note "Supported in sing-box, Clash.Meta / Mihomo, NekoBox, v2rayN"
+
+    if [ "$BUG" != "$DOMAIN" ]; then
+      item "TUIC-BUGHOST" "TUIC v5 Carrier SNI Bug-Host (UDP 443 / 8444)"
+      block "tuic://${UUID}:${UUID}@${MYIP}:443?congestion_control=bbr&alpn=h3&sni=${BUG}&allow_insecure=1#MUBX-TUIC-${BUG}"
+      manual "Address: ${MYIP} | Port: 443 (or 8444) | UUID: ${UUID} | Password: ${UUID} | Congestion: bbr | ALPN: h3 | SNI: ${BUG} | Insecure: 1"
+      note "Carrier Bug-Host: Connects to server IP (${MYIP}) with forged SNI '${BUG}'. Insecure=1 required due to cert SAN mismatch."
+      note "sing-box / Clash Meta: server: '${MYIP}', port: 443, tls.server_name: '${BUG}', tls.insecure: true, udp_relay_mode: native"
+    fi
   fi
 
   # Hysteria 2
   if u_has "hysteria2" && [ -n "$HY2_PASS" ]; then
     HY2_HOP_RANGE="$(sed -n 's/^HY2_HOPPING_RANGE=//p' /etc/mubx/hy2-hopping.conf 2>/dev/null | head -n1)"
-    item "HY2" "Hysteria 2 (QUIC / UDP 4433)"
+    item "HY2" "Hysteria 2 Direct (QUIC / UDP 4433)"
     if [ -n "$HY2_HOP_RANGE" ]; then
       block "hysteria2://${HY2_PASS}@${DOMAIN}:4433/?sni=${DOMAIN}&mport=4433%2C${HY2_HOP_RANGE}#MUBX-Hysteria2"
       note "Port hopping active: UDP ${HY2_HOP_RANGE} → 4433 (bypass ISP rate-limiting)"
     else
       block "hysteria2://${HY2_PASS}@${DOMAIN}:4433/?sni=${DOMAIN}#MUBX-Hysteria2"
+    fi
+    manual "Address: ${DOMAIN} | Port: 4433 | Password: ${HY2_PASS} | SNI: ${DOMAIN}"
+
+    if [ "$BUG" != "$DOMAIN" ]; then
+      item "HY2-BUGHOST" "Hysteria 2 Carrier SNI Bug-Host (UDP 443 Direct)"
+      block "hysteria2://${HY2_PASS}@${MYIP}:443/?sni=${BUG}&insecure=1#MUBX-HY2-${BUG}"
+      manual "Address: ${MYIP} | Port: 443 (or 4433) | Password: ${HY2_PASS} | SNI: ${BUG} | Insecure: true | Obfs: none"
+      note "Carrier Bug-Host: Routes directly to ${MYIP}:443. Forges SNI to '${BUG}' with insecure=1. Works with zero-rated carrier packages."
+      note "DPI Requirement: Salamander obfuscation MUST remain DISABLED so carrier DPI sees the SNI header in the cleartext QUIC Initial frame."
+      note "Client config.yaml: server: ${MYIP}:443, auth: ${HY2_PASS}, tls: { sni: ${BUG}, insecure: true }"
     fi
   fi
 

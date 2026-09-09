@@ -294,6 +294,13 @@ elif [ -x "$ROOT/bin/mubx-tune" ]; then
   "$ROOT/bin/mubx-tune" >/dev/null 2>&1 || true
 fi
 
+# Ensure UDP 443 redirect is initialized (default Hysteria 2 / 4433)
+if [ -x /usr/local/bin/mubx-udp443 ]; then
+  if [ ! -f /etc/mubx/udp443.conf ]; then
+    /usr/local/bin/mubx-udp443 hy2 >/dev/null 2>&1 || true
+  fi
+fi
+
 # 6) Swap in the new copy of the running script, then commit the result.
 stage_bin "$ROOT/bin/mubx-update"
 update_success=1

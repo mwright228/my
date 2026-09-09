@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# mubx-udp443 - Ingress Port 443 (UDP) Director for Hysteria 2 & TUIC v5
+#
+# Mobile carriers and zero-rated billing gateways inspect and whitelist
+# traffic on UDP port 443. This tool configures the iptables PREROUTING
+# redirect to steer incoming public UDP 443 traffic to either:
+#   - Hysteria 2 (UDP 4433) [Default]
+#   - TUIC v5    (UDP 8444)
+#   - Off        (No redirect)
+#
+# Usage:
+#   mubx-udp443 status
+#   mubx-udp443 hy2
+#   mubx-udp443 tuic
+#   mubx-udp443 off
+set -Eeuo pipefail
+
+if [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+else
+  C_RESET="" C_MINT="" C_ELECTRIC="" C_CORAL="" C_AMBER="" C_SLATE=""
+fi
+
+CONF_DIR="${MUBX_CONF_DIR:-/etc/mubx}"
+STATE_FILE="$CONF_DIR/udp443.conf"
+DRY_RUN="${MUBX_DRY_RUN:-0}"
+
+run_cmd() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[DRY-RUN] $*"
+    return 0
+  fi
+  "$@"
+}
+
+check_root() {
+  if [ "$DRY_RUN" -ne 1 ] && [ "$(id -u)" -ne 0 ]; then
+    echo -e "${C_CORAL:-}[!] Run mubx-udp443 as root.${C_RESET:-}" >&2
+    exit 1
+  fi
+}
+
+clear_existing_rules() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[DRY-RUN] clearing existing UDP 443 iptables nat PREROUTING rules"
+    return 0
+  fi
+  if command -v iptables >/dev/null 2>&1; then
+    while iptables -t nat -D PREROUTING -p udp --dport 443 -j REDIRECT --to-ports 4433 2>/dev/null; do :; done
+    while iptables -t nat -D PREROUTING -p udp --dport 443 -j REDIRECT --to-ports 8444 2>/dev/null; do :; done
+  fi
+}
+
+persist_rules() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    return 0
+  fi
+  mkdir -p "$CONF_DIR" 2>/dev/null || true
+  if command -v iptables-save >/dev/null 2>&1; then
+    if [ -d /etc/iptables ]; then
+      iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+    fi
+  fi
+}
+
+get_active_target() {
+  if [ -r "$STATE_FILE" ]; then
+    local target
+    target="$(sed -n 's/^TARGET=//p' "$STATE_FILE" | head -n1)"
+    if [ -n "$target" ]; then
+      echo "$target"
+      return 0
+    fi
+  fi
+  if [ "$DRY_RUN" -ne 1 ] && command -v iptables >/dev/null 2>&1; then
+    if iptables -t nat -S PREROUTING 2>/dev/null | grep -q -- '--to-ports 4433'; then
+      echo "hy2"
+      return 0
+    elif iptables -t nat -S PREROUTING 2>/dev/null | grep -q -- '--to-ports 8444'; then
+      echo "tuic"
+      return 0
+    fi
+  fi
+  echo "none"
+}
+
+cmd_status() {
+  local target
+  target="$(get_active_target)"
+  case "$target" in
+    hy2)
+      echo -e "${C_MINT:-}[✓] UDP 443 Ingress:${C_RESET:-} ${C_ELECTRIC:-}Hysteria 2${C_RESET:-} (redirected to UDP 4433) [ACTIVE]"
+      ;;
+    tuic)
+      echo -e "${C_MINT:-}[✓] UDP 443 Ingress:${C_RESET:-} ${C_ELECTRIC:-}TUIC v5${C_RESET:-} (redirected to UDP 8444) [ACTIVE]"
+      ;;
+    *)
+      echo -e "${C_SLATE:-}[-] UDP 443 Ingress:${C_RESET:-} Disabled / Direct port only"
+      ;;
+  esac
+}
+
+cmd_set_hy2() {
+  check_root
+  clear_existing_rules
+  run_cmd iptables -t nat -A PREROUTING -p udp --dport 443 -j REDIRECT --to-ports 4433
+  mkdir -p "$CONF_DIR" 2>/dev/null || true
+  cat <<EOF > "$STATE_FILE"
+TARGET=hy2
+PORT=4433
+UPDATED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+EOF
+  chmod 0644 "$STATE_FILE" 2>/dev/null || true
+  persist_rules
+  echo -e "${C_MINT:-}[✓] Successfully mapped UDP 443 -> Hysteria 2 (Port 4433).${C_RESET:-}"
+  echo -e "${C_SLATE:-}    Zero-rated SNI bug-host connections can now connect directly to :443 over UDP.${C_RESET:-}"
+}
+
+cmd_set_tuic() {
+  check_root
+  clear_existing_rules
+  run_cmd iptables -t nat -A PREROUTING -p udp --dport 443 -j REDIRECT --to-ports 8444
+  mkdir -p "$CONF_DIR" 2>/dev/null || true
+  cat <<EOF > "$STATE_FILE"
+TARGET=tuic
+PORT=8444
+UPDATED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+EOF
+  chmod 0644 "$STATE_FILE" 2>/dev/null || true
+  persist_rules
+  echo -e "${C_MINT:-}[✓] Successfully mapped UDP 443 -> TUIC v5 (Port 8444).${C_RESET:-}"
+  echo -e "${C_SLATE:-}    Zero-rated SNI bug-host connections can now connect directly to :443 over UDP.${C_RESET:-}"
+}
+
+cmd_set_off() {
+  check_root
+  clear_existing_rules
+  mkdir -p "$CONF_DIR" 2>/dev/null || true
+  cat <<EOF > "$STATE_FILE"
+TARGET=none
+PORT=
+UPDATED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+EOF
+  chmod 0644 "$STATE_FILE" 2>/dev/null || true
+  persist_rules
+  echo -e "${C_AMBER:-}[✓] UDP port 443 redirection removed.${C_RESET:-}"
+}
+
+ACTION="${1:-status}"
+case "$ACTION" in
+  status) cmd_status ;;
+  hy2|hysteria|hysteria2) cmd_set_hy2 ;;
+  tuic|tuic5|tuic-v5)     cmd_set_tuic ;;
+  off|disable|none)       cmd_set_off ;;
+  -h|--help|help)
+    echo "Usage: mubx-udp443 [status|hy2|tuic|off]"
+    echo "  status  - Display current UDP 443 mapping"
+    echo "  hy2     - Route incoming UDP 443 to Hysteria 2 (:4433)"
+    echo "  tuic    - Route incoming UDP 443 to TUIC v5 (:8444)"
+    echo "  off     - Remove UDP 443 PREROUTING redirect"
+    exit 0
+    ;;
+  *)
+    echo -e "${C_CORAL:-}[!] Unknown action: $ACTION${C_RESET:-}" >&2
+    echo "Usage: mubx-udp443 [status|hy2|tuic|off]" >&2
+    exit 1
+    ;;
+esac

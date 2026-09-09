@@ -131,6 +131,15 @@ row "HAProxy 443/8443 Demux"          haproxy tcp 443
 row "Nginx Web & TLS (20443)"        nginx   tcp 20443
 row "Nginx HTTP (80)"                nginx   tcp 80
 row "Chameleon (8080/3128/8888)" mubx-chameleon tcp 8080
+if [ -x /usr/local/bin/mubx-udp443 ] || [ -x "$(dirname "${BASH_SOURCE[0]}")/mubx-udp443" ]; then
+  u443_cmd="$(command -v mubx-udp443 2>/dev/null || echo "$(dirname "${BASH_SOURCE[0]}")/mubx-udp443")"
+  u443_out="$("$u443_cmd" status 2>/dev/null || true)"
+  if echo "$u443_out" | grep -q "Hysteria 2"; then
+    row "UDP 443 -> Hysteria 2" hysteria udp 443
+  elif echo "$u443_out" | grep -q "TUIC"; then
+    row "UDP 443 -> TUIC v5" singbox udp 443
+  fi
+fi
 row "Fail2ban Defense"               fail2ban "" ""
 group_close
 
