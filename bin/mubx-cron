@@ -195,3 +195,11 @@ fi
 maintenance_success=1
 rm -rf "$tmpdir"
 trap - EXIT
+
+# Refresh the carrier DPI fingerprint so chameleon picks up any carrier
+# policy changes without operator intervention.
+mubx_probe_bin="/usr/local/bin/mubx-probe"
+[ -x "$mubx_probe_bin" ] || mubx_probe_bin="$(dirname "${BASH_SOURCE[0]}")/mubx-probe"
+if [ -x "$mubx_probe_bin" ] && [ -n "${DOMAIN:-}" ]; then
+  "$mubx_probe_bin" --auto "$DOMAIN" >/dev/null 2>&1 || true
+fi

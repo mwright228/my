@@ -331,6 +331,10 @@ if u_has "ssh" || u_has "squid" || u_has "chameleon"; then
     item "DESYNC" "Header Colon Desync & 302-Spoof Profile"
     block "CONNECT [host_port] [protocol][crlf]Host : ${BUG}[crlf]X-MUBX-Profile: 302_spoof[crlf]Connection: Keep-Alive[crlf][split]GET http://${BUG}/ [protocol][crlf]Host: ${BUG}[crlf][crlf]"
     note "Spoofs 302 state to fool DPI gateways while maintaining transparent raw TCP tunnel"
+
+    item "AUTO-HINT" "In-Band Carrier DPI Feedback Header (Auto-Adapts Server Profile)"
+    block "CONNECT [host_port] [protocol][crlf]Host: ${BUG}[crlf]X-MUBX-Carrier-Hint: 302_seen[crlf]Connection: Keep-Alive[crlf][split]GET http://${BUG}/ [protocol][crlf]Host: ${BUG}[crlf][crlf]"
+    note "In-band telemetry: informs server of local cellular DPI block to trigger server auto-adaptation"
   fi
   mubx_box_bot
 fi

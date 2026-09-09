@@ -33,6 +33,13 @@ rewrite_absolute_uri = chameleon["rewrite_absolute_uri"]
 build_ack = chameleon["build_ack"]
 handle_client = chameleon["handle_client"]
 get_stats = chameleon["get_stats"]
+load_carrier_profile = chameleon["load_carrier_profile"]
+_sanitize_header_field = chameleon["_sanitize_header_field"]
+get_carrier_profile = chameleon.get("get_carrier_profile")
+set_carrier_profile = chameleon.get("set_carrier_profile")
+extract_carrier_hint = chameleon.get("extract_carrier_hint")
+process_carrier_hint = chameleon.get("process_carrier_hint")
+record_abrupt_disconnect = chameleon.get("record_abrupt_disconnect")
 
 
 class TestChameleonParsing(unittest.TestCase):
@@ -438,6 +445,221 @@ class TestProtocolSniffingAndRewriting(unittest.TestCase):
 
         ack_204 = build_ack("204_nocontent", is_ws=False)
         self.assertIn(b"HTTP/1.1 204 No Content", ack_204)
+
+
+class TestCarrierAutoAdapt(unittest.TestCase):
+    """Tests for the probe→chameleon auto-adapt feedback loop."""
+
+    def test_carrier_profile_auto_selected_when_no_explicit_header(self):
+        """When no X-MUBX-Profile header is present, _CARRIER_PROFILE should
+        be used so the probe result drives the evasion strategy automatically."""
+        original = get_carrier_profile() if get_carrier_profile else build_ack.__globals__.get("_CARRIER_PROFILE")
+        try:
+            # Simulate probe having written '204_nocontent'
+            if set_carrier_profile:
+                set_carrier_profile("204_nocontent")
+            build_ack.__globals__["_CARRIER_PROFILE"] = "204_nocontent"
+            ack = build_ack(None, is_ws=False)
+            self.assertIn(b"HTTP/1.1 204 No Content", ack,
+                          "build_ack should use _CARRIER_PROFILE when no explicit header")
+        finally:
+            if set_carrier_profile:
+                set_carrier_profile(original)
+            build_ack.__globals__["_CARRIER_PROFILE"] = original
+
+    def test_explicit_header_overrides_carrier_profile(self):
+        """An explicit X-MUBX-Profile from the client payload must always win
+        over the auto-selected carrier profile."""
+        original = get_carrier_profile() if get_carrier_profile else build_ack.__globals__.get("_CARRIER_PROFILE")
+        try:
+            if set_carrier_profile:
+                set_carrier_profile("204_nocontent")  # probe says anti-302
+            build_ack.__globals__["_CARRIER_PROFILE"] = "204_nocontent"
+            # Client explicitly requests 302_spoof
+            ack = build_ack("302_spoof", is_ws=False)
+            self.assertIn(b"HTTP/1.1 302 Found", ack,
+                          "Explicit profile header must override _CARRIER_PROFILE")
+        finally:
+            if set_carrier_profile:
+                set_carrier_profile(original)
+            build_ack.__globals__["_CARRIER_PROFILE"] = original
+
+    def test_load_carrier_profile_ignores_unknown_profile_name(self):
+        """load_carrier_profile must reject a profile name not in the profile
+        table so a malformed or tampered carrier-profile file can't inject
+        arbitrary strings into build_ack."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"profile": "totally_fake_profile", "ts": 9999999999}, f)
+            fname = f.name
+        try:
+            with mock.patch.dict(os.environ, {"CHAMELEON_CARRIER_PROFILE": fname}):
+                # Force the function to use our temp file path
+                result = load_carrier_profile()
+            self.assertIsNone(result,
+                              "Unknown profile names must be rejected by load_carrier_profile")
+        finally:
+            os.unlink(fname)
+
+    def test_render_response_strips_crlf_from_status_and_headers(self):
+        """CRLF characters embedded in status line or header values must be
+        stripped to prevent HTTP response splitting attacks."""
+        evil_profile = {
+            "status": "HTTP/1.1 200 OK\r\nX-Injected: evil",
+            "headers": {"X-Header": "value\r\nX-Extra: injected"},
+        }
+        rendered = render_response(evil_profile)
+        self.assertNotIn(b"X-Injected", rendered,
+                         "CRLF-injected header in status line must be stripped")
+        self.assertNotIn(b"X-Extra", rendered,
+                         "CRLF-injected header in header value must be stripped")
+        self.assertIn(b"HTTP/1.1 200 OK", rendered)
+
+
+class TestStatsEndpointSecurity(unittest.IsolatedAsyncioTestCase):
+    """Tests for the loopback-only restriction on /stats and /metrics."""
+
+    async def _call_stats(self, peer_ip: str, path: str = "GET /stats HTTP/1.1\r\n\r\n") -> bytes:
+        """Helper: feeds a stats request through _handle_client_inner with a
+        given peer IP and returns the complete response bytes."""
+        _handle_client_inner = chameleon["_handle_client_inner"]
+        data = path.encode() if isinstance(path, str) else path
+        reader = asyncio.StreamReader()
+        reader.feed_data(data)
+        reader.feed_eof()
+        out = bytearray()
+
+        class _FakeWriter:
+            def __init__(self):
+                self.closed = False
+            def get_extra_info(self, key, default=None):
+                return None
+            def write(self, d):
+                out.extend(d)
+            async def drain(self): pass
+            def close(self): self.closed = True
+            async def wait_closed(self): pass
+
+        writer = _FakeWriter()
+        await _handle_client_inner(reader, writer, (peer_ip, 12345))
+        return bytes(out)
+
+    async def test_stats_blocked_from_public_ip(self):
+        resp = await self._call_stats("1.2.3.4")
+        self.assertIn(b"403", resp,
+                      "/stats must return 403 to non-loopback IPs")
+        self.assertNotIn(b"connections_accepted", resp,
+                         "Metrics must not be revealed to public IPs")
+
+    async def test_stats_allowed_from_loopback(self):
+        resp = await self._call_stats("127.0.0.1")
+        self.assertIn(b"200", resp,
+                      "/stats must return 200 to loopback callers")
+        self.assertIn(b"connections_accepted", resp)
+
+    async def test_metrics_blocked_from_public_ip(self):
+        resp = await self._call_stats("203.0.113.99", "GET /metrics HTTP/1.1\r\n\r\n")
+        self.assertIn(b"403", resp)
+
+
+class TestInBandCarrierHintsAndAnomalies(unittest.TestCase):
+    """Tests for in-band client feedback headers and passive RST anomaly detection."""
+
+    def setUp(self):
+        self.original_profile = get_carrier_profile()
+        set_carrier_profile("default")
+        chameleon["_abrupt_disconnects"].clear()
+
+    def tearDown(self):
+        set_carrier_profile(self.original_profile)
+        chameleon["_abrupt_disconnects"].clear()
+
+    def test_extract_carrier_hint(self):
+        buf1 = b"CONNECT 127.0.0.1:2222 HTTP/1.1\r\nX-MUBX-Carrier-Hint: 302_seen\r\n\r\n"
+        self.assertEqual(extract_carrier_hint(buf1), "302_seen")
+
+        buf2 = b"CONNECT 127.0.0.1:2222 HTTP/1.1\r\nx-mubx-carrier-hint: 410_seen\r\n\r\n"
+        self.assertEqual(extract_carrier_hint(buf2), "410_seen")
+
+        buf3 = b"CONNECT 127.0.0.1:2222 HTTP/1.1\r\nHost: bug.com\r\n\r\n"
+        self.assertIsNone(extract_carrier_hint(buf3))
+
+    def test_process_carrier_hint_302(self):
+        res = process_carrier_hint("302_seen", "198.51.100.1")
+        self.assertEqual(res, "204_nocontent")
+        self.assertEqual(get_carrier_profile(), "204_nocontent")
+
+    def test_process_carrier_hint_reset(self):
+        res = process_carrier_hint("reset", "198.51.100.2")
+        self.assertEqual(res, "chunked_evasion")
+        self.assertEqual(get_carrier_profile(), "chunked_evasion")
+
+    def test_passive_abrupt_disconnect_anomaly_trigger(self):
+        # 1st disconnect: under threshold (threshold is 3)
+        triggered1 = record_abrupt_disconnect("198.51.100.10")
+        self.assertFalse(triggered1)
+        self.assertEqual(get_carrier_profile(), "default")
+
+        # 2nd disconnect: under threshold
+        triggered2 = record_abrupt_disconnect("198.51.100.11")
+        self.assertFalse(triggered2)
+
+        # 3rd disconnect: triggers anomaly detection & auto-adaptation
+        triggered3 = record_abrupt_disconnect("198.51.100.12")
+        self.assertTrue(triggered3)
+        self.assertEqual(get_carrier_profile(), "204_nocontent")
+        self.assertGreater(chameleon["STATS"]["middlebox_anomalies_detected"], 0)
+
+
+class TestReportEndpoint(unittest.IsolatedAsyncioTestCase):
+    """Tests for the client-side /report telemetry endpoint."""
+
+    async def _call_endpoint(self, peer_ip: str, req: str) -> bytes:
+        _handle_client_inner = chameleon["_handle_client_inner"]
+        data = req.encode() if isinstance(req, str) else req
+        reader = asyncio.StreamReader()
+        reader.feed_data(data)
+        reader.feed_eof()
+        out = bytearray()
+
+        class _FakeWriter:
+            def __init__(self):
+                self.closed = False
+            def get_extra_info(self, key, default=None):
+                return None
+            def write(self, d):
+                out.extend(d)
+            async def drain(self): pass
+            def close(self): self.closed = True
+            async def wait_closed(self): pass
+
+        writer = _FakeWriter()
+        await _handle_client_inner(reader, writer, (peer_ip, 12345))
+        return bytes(out)
+
+    async def test_report_unauthorized_rejected(self):
+        # Non-loopback caller without valid token gets 401
+        resp = await self._call_endpoint("203.0.113.5", "GET /report?hint=302_seen HTTP/1.1\r\n\r\n")
+        self.assertIn(b"401 Unauthorized", resp)
+
+    async def test_report_from_loopback_allowed(self):
+        resp = await self._call_endpoint("127.0.0.1", "GET /report?hint=302_seen HTTP/1.1\r\n\r\n")
+        self.assertIn(b"200 OK", resp)
+        self.assertIn(b"\"status\": \"ok\"", resp)
+
+    async def test_report_with_valid_token_allowed(self):
+        _handle_client_inner = chameleon["_handle_client_inner"]
+        orig_tokens = _handle_client_inner.__globals__.get("_AUTH_TOKENS", set())
+        test_tok = "test-token-telemetry-12345"
+        _handle_client_inner.__globals__["_AUTH_TOKENS"] = {test_tok}
+        try:
+            resp = await self._call_endpoint(
+                "203.0.113.10",
+                f"GET /report?hint=302_seen&token={test_tok} HTTP/1.1\r\n\r\n"
+            )
+            self.assertIn(b"200 OK", resp)
+            self.assertIn(b"\"status\": \"ok\"", resp)
+        finally:
+            _handle_client_inner.__globals__["_AUTH_TOKENS"] = orig_tokens
 
 
 if __name__ == "__main__":

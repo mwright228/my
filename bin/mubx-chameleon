@@ -35,6 +35,7 @@ proxy, replaces legacy Squid), extended with:
 
 import asyncio
 import base64
+import collections
 import json
 import logging
 import os
@@ -43,7 +44,14 @@ import signal
 import socket
 import sys
 import time
+import urllib.parse
 from typing import Any, Dict, Optional, Set, Tuple
+
+try:
+    import uvloop
+    uvloop.install()
+except ImportError:
+    pass
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -98,6 +106,13 @@ RESPONSE_PROFILES_FILE = os.environ.get(
     "CHAMELEON_RESPONSES_FILE", "/etc/mubx/chameleon-responses.json"
 )
 CHAMELEON_RESPONSES_PATH = RESPONSE_PROFILES_FILE
+
+# Auto-adapt: written by mubx-probe, read every 30 s by the watcher task.
+# When set, this profile is used for all connections that do NOT send an
+# explicit X-MUBX-Profile header, overriding the hard-coded "default".
+CARRIER_PROFILE_FILE = os.environ.get(
+    "CHAMELEON_CARRIER_PROFILE", "/run/mubx/carrier-profile"
+)
 
 DEFAULT_PROFILES: Dict[str, dict] = {
     "default": {"status": "HTTP/1.1 200 Connection established", "headers": {}},
@@ -154,8 +169,17 @@ RE_TARGET_HDR = re.compile(rb"(?i)\r?\n(?:X-Target|X-Real-Host):\s*(?:\[([a-fA-F
 RE_HTTP_URL = re.compile(rb"(?i)\b(?:GET|POST|HEAD|OPTIONS|PUT|DELETE|TRACE|PATCH)\s+https?://(?:\[([a-fA-F0-9:]+)\]|([a-zA-Z0-9\.\-_]+))(?::(\d+))?")
 RE_HOST_HDR = re.compile(rb"(?i)\r?\n(?:X-Online-Host|X-Forward-Host|Host):\s*(?:\[([a-fA-F0-9:]+)\]|([a-zA-Z0-9\.\-_]+))(?::(\d+))?")
 RE_PROFILE_HDR = re.compile(rb"(?i)\r?\nX-MUBX-Profile:\s*([a-zA-Z0-9_\-]+)")
+RE_CARRIER_HINT = re.compile(rb"(?i)\r?\nX-MUBX-Carrier-Hint:\s*([a-zA-Z0-9_\-]+)")
 RE_PROXY_AUTH = re.compile(rb"(?i)\r?\nProxy-Authorization:\s*Basic\s+([a-zA-Z0-9+/=]+)")
 RE_HTTP_METHOD_LINE = re.compile(rb"(?i)^\s*(?:GET|POST|HEAD|OPTIONS|PUT|DELETE|TRACE|PATCH|CONNECT)\s+\S+\s+HTTP/\d")
+
+
+def extract_carrier_hint(buffer: bytes) -> Optional[str]:
+    """Extracts X-MUBX-Carrier-Hint value from client payload."""
+    m = RE_CARRIER_HINT.search(buffer)
+    if m:
+        return m.group(1).decode("ascii", errors="ignore").lower()
+    return None
 
 # --------------------------------------------------------------------------
 # Startup-time caches (loaded once, not per-connection)
@@ -165,6 +189,11 @@ _LOCAL_IDENTIFIERS: Set[str] = set()
 _RESPONSE_PROFILES: Dict[str, dict] = dict(DEFAULT_PROFILES)
 _responses_cache: Dict[str, Any] = {"profiles": DEFAULT_PROFILES, "ts": 0.0, "file": ""}
 _AUTH_TOKENS: Set[str] = set()
+_CARRIER_PROFILE: Optional[str] = None   # auto-selected by mubx-probe, nil = use "default"
+
+_ANOMALY_WINDOW = float(os.environ.get("CHAMELEON_ANOMALY_WINDOW", "60.0"))
+_ANOMALY_THRESHOLD = int(os.environ.get("CHAMELEON_ANOMALY_THRESHOLD", "3"))
+_abrupt_disconnects: collections.deque = collections.deque()
 
 _active_connections = 0
 _connections_per_ip: Dict[str, int] = {}
@@ -180,6 +209,8 @@ STATS: Dict[str, Any] = {
     "upstream_failures": 0,
     "bytes_in": 0,
     "bytes_out": 0,
+    "middlebox_anomalies_detected": 0,
+    "client_hints_received": 0,
 }
 
 
@@ -269,14 +300,23 @@ def load_response_profiles() -> Dict[str, dict]:
 
 
 def _sanitize_header_field(value: str) -> str:
-    """Strip CR/LF from any header field value to prevent HTTP response splitting."""
-    return value.replace("\r", "").replace("\n", "")
+    """Sanitize a single HTTP header field (key or value) or a status line.
+
+    Truncates at the first CR or LF so any injected continuation headers
+    are silently dropped rather than being collapsed into the value text.
+    Trailing whitespace is also stripped.
+    """
+    # Find earliest line boundary and discard everything from there onward.
+    cr = value.find("\r")
+    lf = value.find("\n")
+    cut = min(x for x in (cr, lf, len(value)) if x >= 0)
+    return value[:cut].strip()
 
 
 def render_response(profile: Dict[str, Any]) -> bytes:
     """Renders HTTP status line and headers into wire bytes."""
     raw_status = profile.get("status", "HTTP/1.1 200 Connection established")
-    status = _sanitize_header_field(raw_status).strip()
+    status = _sanitize_header_field(raw_status)
     headers = profile.get("headers", {})
     lines = [status]
     if isinstance(headers, dict):
@@ -331,16 +371,124 @@ def load_valid_users(force_refresh: bool = False) -> Dict[str, str]:
     return users
 
 
+def load_carrier_profile() -> Optional[str]:
+    """Reads the carrier profile written by mubx-probe.
+    Returns the profile name string, or None if the file is absent/stale/invalid.
+    Stale = older than 24 h (probe runs every 6 h; if we haven't heard in 24 h
+    something is wrong and we fall back to the safe default)."""
+    if not os.path.isfile(CARRIER_PROFILE_FILE):
+        return None
+    try:
+        mtime = os.path.getmtime(CARRIER_PROFILE_FILE)
+        if time.time() - mtime > 86400:   # 24-hour staleness guard
+            log.info("Carrier profile file is stale (>24h); ignoring")
+            return None
+        with open(CARRIER_PROFILE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        name = str(data.get("profile", "")).strip().lower()
+        if name and name in load_response_profiles():
+            return name
+    except Exception as e:
+        log.debug("Could not read carrier profile: %s", e)
+    return None
+
+
+def set_carrier_profile(profile_name: Optional[str]) -> None:
+    """Sets the active carrier profile for auto-adaptation."""
+    global _CARRIER_PROFILE
+    _CARRIER_PROFILE = profile_name
+
+
+def get_carrier_profile() -> Optional[str]:
+    """Returns the active carrier profile."""
+    return _CARRIER_PROFILE
+
+
+def write_carrier_profile(profile: str, reason: str, bug_host: str = "field-telemetry") -> None:
+    """Atomically writes carrier profile to CARRIER_PROFILE_FILE."""
+    try:
+        os.makedirs(os.path.dirname(CARRIER_PROFILE_FILE), exist_ok=True)
+        tmp = f"{CARRIER_PROFILE_FILE}.tmp.{os.getpid()}"
+        data = {
+            "profile": profile,
+            "reason": reason,
+            "ts": int(time.time()),
+            "bug_host": bug_host,
+        }
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, CARRIER_PROFILE_FILE)
+    except Exception as e:
+        log.debug("Failed writing carrier profile: %s", e)
+
+
+def process_carrier_hint(hint: str, client_ip: str = "?") -> Optional[str]:
+    """Processes a client-reported carrier hint and adapts evasion if needed."""
+    global STATS
+    STATS["client_hints_received"] += 1
+    h = hint.strip().lower()
+    log.info("Received carrier hint '%s' from client %s", h, client_ip)
+
+    adapted = None
+    if h in ("302", "302_seen", "redirect"):
+        adapted = "204_nocontent"
+        reason = f"client {client_ip} reported 302 redirect block"
+    elif h in ("410", "410_seen", "block", "403"):
+        adapted = "204_nocontent"
+        reason = f"client {client_ip} reported 410/403 block"
+    elif h in ("reset", "rst", "timeout"):
+        adapted = "chunked_evasion"
+        reason = f"client {client_ip} reported TCP RST / drop"
+    elif h in load_response_profiles():
+        adapted = h
+        reason = f"client {client_ip} requested carrier profile {h}"
+
+    if adapted and adapted != get_carrier_profile():
+        set_carrier_profile(adapted)
+        write_carrier_profile(adapted, reason)
+        log.info("Carrier profile adapted via client hint: %s (%s)", adapted, reason)
+        return adapted
+    return get_carrier_profile()
+
+
+def record_abrupt_disconnect(client_ip: str = "?") -> bool:
+    """Records an abrupt post-handshake disconnect (RST signature).
+    Returns True if the anomaly threshold was reached and profile adapted."""
+    now = time.time()
+    _abrupt_disconnects.append(now)
+    while _abrupt_disconnects and now - _abrupt_disconnects[0] > _ANOMALY_WINDOW:
+        _abrupt_disconnects.popleft()
+
+    if len(_abrupt_disconnects) >= _ANOMALY_THRESHOLD:
+        STATS["middlebox_anomalies_detected"] += 1
+        current = get_carrier_profile() or "default"
+        if current == "default":
+            new_p = "204_nocontent"
+        elif current == "204_nocontent":
+            new_p = "302_spoof"
+        else:
+            new_p = "chunked_evasion"
+
+        reason = f"passive: {len(_abrupt_disconnects)} abrupt disconnects in {int(_ANOMALY_WINDOW)}s"
+        set_carrier_profile(new_p)
+        write_carrier_profile(new_p, reason)
+        log.warning("Middlebox RST anomaly detected! Adapted profile to %s (%s)", new_p, reason)
+        _abrupt_disconnects.clear()
+        return True
+    return False
+
+
 def reload_caches():
-    global _LOCAL_IDENTIFIERS, _RESPONSE_PROFILES, _AUTH_TOKENS, _responses_cache
+    global _LOCAL_IDENTIFIERS, _RESPONSE_PROFILES, _AUTH_TOKENS, _responses_cache, _CARRIER_PROFILE
     _LOCAL_IDENTIFIERS = set()
     _LOCAL_IDENTIFIERS = load_local_identifiers()
     _responses_cache["ts"] = 0.0
     _RESPONSE_PROFILES = load_response_profiles()
     _AUTH_TOKENS = load_auth_tokens()
+    _CARRIER_PROFILE = load_carrier_profile()
     log.info(
-        "Caches reloaded: %d local identifiers, %d response profiles, %d auth tokens",
-        len(_LOCAL_IDENTIFIERS), len(_RESPONSE_PROFILES), len(_AUTH_TOKENS),
+        "Caches reloaded: %d local identifiers, %d response profiles, %d auth tokens, carrier_profile=%s",
+        len(_LOCAL_IDENTIFIERS), len(_RESPONSE_PROFILES), len(_AUTH_TOKENS), _CARRIER_PROFILE or "default",
     )
 
 
@@ -431,9 +579,26 @@ def extract_profile_name(buffer: bytes) -> Optional[str]:
 
 
 def build_ack(profile_name: Optional[str], is_ws: bool) -> bytes:
-    """Builds the acknowledgement response from the profile table."""
+    """Builds the acknowledgement response from the profile table.
+
+    Priority order:
+      1. Explicit X-MUBX-Profile header from the client payload
+      2. _CARRIER_PROFILE auto-selected by mubx-probe (auto-adapt)
+      3. WebSocket upgrade detection -> "ws"
+      4. Global "default"
+    """
     profiles = load_response_profiles()
-    name = "ws" if (is_ws and profile_name is None) else (profile_name or "default")
+    carrier = get_carrier_profile()
+    if profile_name is not None:
+        # Explicit client request always wins
+        name = profile_name
+    elif carrier is not None:
+        # Auto-adapt: probe has identified the carrier's behaviour
+        name = carrier
+    elif is_ws:
+        name = "ws"
+    else:
+        name = "default"
     profile = profiles.get(name.lower()) or profiles.get("default", DEFAULT_PROFILES["default"])
     return render_response(profile)
 
@@ -514,6 +679,16 @@ def set_tcp_opts(writer: asyncio.StreamWriter):
         if sock:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
+            except Exception:
+                pass
+            if hasattr(socket, "TCP_QUICKACK"):
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_QUICKACK, 1)
+                except Exception:
+                    pass
             if hasattr(socket, "TCP_KEEPIDLE"):
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
             if hasattr(socket, "TCP_KEEPINTVL"):
@@ -655,6 +830,70 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
         client_writer.close()
         return
 
+    # Fast-path client field-report endpoint — allows mobile clients / apps behind carrier DPI
+    # to submit telemetry / hints. Authenticated via token to prevent profile poisoning.
+    if buffer.startswith(b"GET /report") or buffer.startswith(b"POST /report"):
+        req_line = bytes(buffer).split(b"\r\n", 1)[0].decode("ascii", errors="ignore")
+        parts = req_line.split()
+        path = parts[1] if len(parts) > 1 else "/report"
+        parsed = urllib.parse.urlparse(path)
+        qs = urllib.parse.parse_qs(parsed.query)
+
+        token = qs.get("token", [""])[0]
+        hint = qs.get("hint", [""])[0]
+
+        if not token:
+            auth_tuple = parse_basic_auth(bytes(buffer))
+            if auth_tuple:
+                token = auth_tuple[1]
+            else:
+                m_bearer = re.search(rb"(?i)\r?\nAuthorization:\s*Bearer\s+(\S+)", bytes(buffer))
+                if m_bearer:
+                    token = m_bearer.group(1).decode("ascii", errors="ignore")
+
+        if not hint and b"\r\n\r\n" in buffer:
+            body_start = buffer.find(b"\r\n\r\n") + 4
+            body_bytes = buffer[body_start:]
+            if body_bytes:
+                try:
+                    body_json = json.loads(body_bytes.decode("utf-8", errors="ignore"))
+                    if isinstance(body_json, dict):
+                        token = token or body_json.get("token", "")
+                        hint = hint or body_json.get("hint", "")
+                except Exception:
+                    pass
+
+        tokens = _AUTH_TOKENS if _AUTH_TOKENS else load_auth_tokens()
+        valid_users = load_valid_users()
+        is_authorized = (
+            (token and (token in tokens or token in valid_users.values())) or
+            peer_ip in ("127.0.0.1", "::1", "0:0:0:0:0:0:0:1")
+        )
+
+        if not is_authorized:
+            resp = b"HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: 26\r\n\r\n{\"error\":\"invalid_token\"}\n"
+            client_writer.write(resp)
+            await client_writer.drain()
+            client_writer.close()
+            return
+
+        active_p = process_carrier_hint(hint, peer_ip) if hint else get_carrier_profile()
+        res_payload = json.dumps({
+            "status": "ok",
+            "hint_received": hint,
+            "active_profile": active_p or "default",
+        }).encode("utf-8")
+        resp = (
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Content-Length: " + str(len(res_payload)).encode() + b"\r\n"
+            b"Connection: close\r\n\r\n" + res_payload
+        )
+        client_writer.write(resp)
+        await client_writer.drain()
+        client_writer.close()
+        return
+
     proto = sniff_protocol(bytes(buffer))
 
     if proto == "tls":
@@ -749,6 +988,10 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
     is_ws_upgrade = b"upgrade: websocket" in buf_lower
     is_ws_direct = (not is_connect) and is_ws_upgrade
 
+    carrier_hint = extract_carrier_hint(bytes(buffer))
+    if carrier_hint:
+        process_carrier_hint(carrier_hint, peer_ip)
+
     requested_profile = extract_profile_name(bytes(buffer))
     if is_ws_direct and requested_profile == "ssh-over-ws" and target_host == "127.0.0.1" and target_port in (80, 443):
         target_port = DEFAULT_PORT
@@ -791,6 +1034,8 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
         target_writer.close()
         return
 
+    pipe_start_ts = time.time()
+    bytes_out_before = STATS["bytes_out"]
     pipe_client = asyncio.create_task(pipe(client_reader, target_writer, "bytes_out"))
     pipe_target = asyncio.create_task(pipe(target_reader, client_writer, "bytes_in"))
     done, pending = await asyncio.wait([pipe_client, pipe_target], return_when=asyncio.FIRST_COMPLETED)
@@ -803,10 +1048,37 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
         except (Exception, asyncio.CancelledError):
             pass
 
+    duration = time.time() - pipe_start_ts
+    client_bytes_sent = STATS["bytes_out"] - bytes_out_before
+    if duration < 0.6 and client_bytes_sent < 100:
+        record_abrupt_disconnect(peer_ip)
+
 
 # --------------------------------------------------------------------------
 # Entry point & Periodic Telemetry
 # --------------------------------------------------------------------------
+
+async def periodic_profile_watcher(interval: float = 30.0) -> None:
+    """Polls the carrier profile file written by mubx-probe every `interval`
+    seconds and updates _CARRIER_PROFILE so new connections use the correct
+    evasion profile without a full restart or SIGHUP."""
+    global _CARRIER_PROFILE
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            new_profile = load_carrier_profile()
+            if new_profile != _CARRIER_PROFILE:
+                log.info(
+                    "Carrier profile changed: %s -> %s",
+                    _CARRIER_PROFILE or "default",
+                    new_profile or "default",
+                )
+                set_carrier_profile(new_profile)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            pass
+
 
 async def periodic_stats_flusher(interval: float = 15.0) -> None:
     """Periodically writes metrics snapshot to STATS_FILE_PATH."""
@@ -860,10 +1132,12 @@ async def main():
         pass
 
     flusher_task = asyncio.create_task(periodic_stats_flusher())
+    profile_watcher_task = asyncio.create_task(periodic_profile_watcher())
 
     await stop_event.wait()
     log.info("Shutting down MUB-X Chameleon...")
     flusher_task.cancel()
+    profile_watcher_task.cancel()
     for s in servers:
         s.close()
         await s.wait_closed()

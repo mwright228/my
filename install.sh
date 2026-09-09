@@ -273,7 +273,7 @@ cd "$INSTALL_ROOT"
 for service in apache2 nginx haproxy xray \
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0 \
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 badvpn@7500 badvpn@7600 badvpn@7700 \
-  zivpn hysteria wstunnel singbox mubx-cron.timer mubx-adaptive.timer; do
+  zivpn hysteria wstunnel singbox mubx-cron.timer mubx-adaptive.timer mubx-probe.timer; do
   systemctl is-active --quiet "$service" && services_was_active["$service"]=1 ||
     services_was_active["$service"]=0
   systemctl is-enabled --quiet "$service" && services_was_enabled["$service"]=1 ||
@@ -785,6 +785,7 @@ run systemctl enable --now mubx-cron.timer
 run /usr/local/bin/mubx-tune
 run systemctl daemon-reload
 run systemctl enable --now mubx-adaptive.timer
+run systemctl enable --now mubx-probe.timer
 if command -v fail2ban-client >/dev/null 2>&1; then
   install -D -m 0644 configs/fail2ban-mubx.conf /etc/fail2ban/jail.d/mubx.conf
   systemctl enable fail2ban

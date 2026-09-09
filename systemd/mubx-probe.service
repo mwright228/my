@@ -1,0 +1,14 @@
+[Unit]
+Description=MUB-X carrier DPI fingerprinter (one-shot)
+After=network-online.target mubx-chameleon.service
+Requires=mubx-chameleon.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mubx-probe --auto
+# Allow the chameleon proxy 2 s to be reachable before probing
+ExecStartPre=/bin/sleep 2
+StandardOutput=journal
+StandardError=journal
+# Non-zero exit (evading=1, all-failed=2) is still a successful run
+SuccessExitStatus=0 1 2

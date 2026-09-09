@@ -1,82 +1,192 @@
 #!/usr/bin/env bash
-# MUB-X bug-host / SNI candidate audit.
+# MUB-X carrier DPI fingerprinter & bug-host auditor.
+#
+# Interactive mode (default):  mubx-probe [bug-host]
+#   Sends calibrated probe payloads through the local chameleon port,
+#   displays a human-readable audit card, then writes the winning profile
+#   to /run/mubx/carrier-profile so chameleon auto-selects it.
+#
+# Automatic mode (cron / timer):  mubx-probe --auto [bug-host]
+#   Skips the card.  Probe logic, result file, and exit code are identical.
+#
+# Profile selection logic:
+#   P1  Standard CONNECT                      -> 200 OK  -> profile "default"
+#   P2  HEAD priming + CONNECT + 204_nocontent-> 200 OK  -> profile "204_nocontent"  (anti-302)
+#   P3  GET prime + delay + CONNECT (default) -> 200 OK  -> profile "204_nocontent"  (anti-410)
+#   P4  CONNECT + 302_spoof profile           -> 200 OK  -> profile "302_spoof"
+#   Fallback if all fail                                 -> profile "chunked_evasion"
+#
+# Output file: /run/mubx/carrier-profile
+#   {"profile":"<name>","reason":"<text>","ts":<unix>,"bug_host":"<host>"}
+#
+set -Eeuo pipefail
+
+AUTO=0
+BUG_ARG=
+
+for arg in "$@"; do
+  case "$arg" in
+    --auto|-a) AUTO=1 ;;
+    *) BUG_ARG="$arg" ;;
+  esac
+done
+
 if [ -r /usr/local/lib/mubx/common.sh ]; then
   source /usr/local/lib/mubx/common.sh
+  load_mubx_env 2>/dev/null || true
 elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
   source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+  load_mubx_env 2>/dev/null || true
 fi
 
-TARGET="${1:-}"
-if [ -z "$TARGET" ]; then
-  printf '  Candidate domain / bug-host to audit: '
+CHAMELEON_PORT="${CHAMELEON_PROBE_PORT:-8080}"
+PROBE_TIMEOUT="${CHAMELEON_PROBE_TIMEOUT:-5}"
+PROFILE_FILE="${CHAMELEON_CARRIER_PROFILE:-/run/mubx/carrier-profile}"
+install -d -m 0755 "$(dirname "$PROFILE_FILE")"
+
+# Pick target: CLI arg > env DOMAIN > interactive prompt
+TARGET="${BUG_ARG:-${DOMAIN:-}}"
+if [ -z "$TARGET" ] && [ "$AUTO" -eq 0 ]; then
+  printf '  Candidate domain / bug-host to probe: '
   read -r TARGET
 fi
-[ -n "$TARGET" ] || die "No target specified."
+[ -n "$TARGET" ] || die "No target specified (set DOMAIN or pass as argument)."
 
-mubx_clear
-mubx_box_top "BUG-HOST & SNI AUDIT" "PROBE"
-mubx_kvrow "Target Domain" "$TARGET"
-mubx_kvrow "Audit Time"    "$(date '+%Y-%m-%d %H:%M:%S %Z')"
-mubx_box_bot
-printf '\n'
+# ---------------------------------------------------------------------------
+# Core probe helper: sends a raw payload to local chameleon, returns first
+# response line.  nc exits as soon as the server closes its write half,
+# which happens after the ACK is sent (before full tunnel teardown).
+# ---------------------------------------------------------------------------
+probe_send() {  # $1 payload bytes (printf-formatted string)
+  local payload="$1"
+  printf '%b' "$payload" | nc -w "$PROBE_TIMEOUT" 127.0.0.1 "$CHAMELEON_PORT" 2>/dev/null | head -n 1 || true
+}
 
-# --- Collect probe results ------------------------------------------------
-RESOLVED_IP=$(dig +short "$TARGET" 2>/dev/null | grep -E '^[0-9.]+' | head -n 1 || true)
-if [ -z "$RESOLVED_IP" ]; then
-  RESOLVED_IP=$(getent ahostsv4 "$TARGET" 2>/dev/null | awk '{print $1}' | head -n 1 || getent hosts "$TARGET" 2>/dev/null | awk '{print $1}' | head -n 1 || true)
+# Classify the first response line: "ok" | "302" | "410" | "407" | "timeout" | "other"
+classify() {  # $1 response line
+  local r="$1"
+  if [ -z "$r" ]; then echo "timeout"; return; fi
+  case "$r" in
+    *" 200 "*) echo "ok" ;;
+    *" 302 "*|*" 301 "*) echo "302" ;;
+    *" 410 "*|*" 403 "*) echo "410" ;;
+    *" 407 "*) echo "407" ;;
+    *" 101 "*) echo "ok" ;;
+    *) echo "other" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Four calibrated probe payloads
+# ---------------------------------------------------------------------------
+
+# P1: plain CONNECT — the baseline
+p1_resp=$(probe_send "CONNECT ${TARGET}:443 HTTP/1.1\r\nHost: ${TARGET}:443\r\nConnection: Keep-Alive\r\n\r\n")
+p1=$(classify "$p1_resp")
+
+# P2: HEAD priming + CONNECT with 204_nocontent (anti-302 trick)
+p2_payload="HEAD http://${TARGET}/ HTTP/1.1\r\nHost: ${TARGET}\r\nConnection: Keep-Alive\r\n\r\n"
+p2_payload+="CONNECT ${TARGET}:443 HTTP/1.1\r\nHost: ${TARGET}:443\r\nX-MUBX-Profile: 204_nocontent\r\n\r\n"
+p2_resp=$(probe_send "$p2_payload")
+p2=$(classify "$p2_resp")
+
+# P3: GET prime then CONNECT (anti-410 delay-split; ~300ms gap is local so
+#     we emulate it by splitting into two separate nc calls back to back)
+p3a_resp=$(probe_send "GET http://${TARGET}/ HTTP/1.1\r\nHost: ${TARGET}\r\n\r\n")
+sleep 0.3
+p3b_resp=$(probe_send "CONNECT ${TARGET}:443 HTTP/1.1\r\nHost: ${TARGET}:443\r\nConnection: Keep-Alive\r\n\r\n")
+p3=$(classify "$p3b_resp")
+
+# P4: 302_spoof profile
+p4_resp=$(probe_send "CONNECT ${TARGET}:443 HTTP/1.1\r\nHost: ${TARGET}:443\r\nX-MUBX-Profile: 302_spoof\r\nConnection: Keep-Alive\r\n\r\n")
+p4=$(classify "$p4_resp")
+
+# ---------------------------------------------------------------------------
+# Verdict: pick the best working profile
+# ---------------------------------------------------------------------------
+chosen_profile="chunked_evasion"
+chosen_reason="all direct probes failed; using chunked_evasion as last resort"
+
+if [ "$p1" = "ok" ]; then
+  chosen_profile="default"
+  chosen_reason="standard CONNECT accepted by carrier (P1 clean)"
+elif [ "$p2" = "ok" ]; then
+  chosen_profile="204_nocontent"
+  chosen_reason="carrier intercepts plain CONNECT but accepts HEAD-primed 204 (anti-302)"
+elif [ "$p3" = "ok" ]; then
+  chosen_profile="204_nocontent"
+  chosen_reason="carrier 410-blocking plain CONNECT; GET-prime delay-split succeeds (anti-410)"
+elif [ "$p4" = "ok" ]; then
+  chosen_profile="302_spoof"
+  chosen_reason="carrier 302-redirecting; 302_spoof profile fools DPI state machine"
 fi
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 4 "http://${TARGET}" 2>/dev/null || echo "000")
-RTT=$(curl -s -o /dev/null -w "%{time_appconnect}s" --connect-timeout 5 --max-time 8 "https://${TARGET}" 2>/dev/null || echo "")
-CHAMELEON_TEST=$(printf "CONNECT ${TARGET}:443 HTTP/1.1\r\nHost: ${TARGET}:443\r\n\r\n" \
-  | nc -w 4 127.0.0.1 8080 2>/dev/null | head -n 1 || true)
 
-mubx_group_open "SECURITY & CARRIER PROBE CHECKS"
+NOW_TS="$(date +%s)"
 
-# 1. DNS resolution
-if [ -n "$RESOLVED_IP" ]; then
-  mubx_card "  DNS Resolution" "$(mubx_pill OK "$RESOLVED_IP")"
+# Write result atomically (tmp → rename)
+TMP_FILE="${PROFILE_FILE}.tmp.$$"
+printf '{"profile":"%s","reason":"%s","ts":%s,"bug_host":"%s"}\n' \
+  "$chosen_profile" "$chosen_reason" "$NOW_TS" "$TARGET" > "$TMP_FILE"
+mv -f "$TMP_FILE" "$PROFILE_FILE"
+
+# Signal chameleon to reload caches (picks up the new profile immediately)
+if command -v pkill >/dev/null 2>&1; then
+  pkill -HUP -f mubx-chameleon 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------------------
+# Interactive card (skipped in --auto mode)
+# ---------------------------------------------------------------------------
+if [ "$AUTO" -eq 0 ]; then
+  mubx_clear
+  mubx_box_top "CARRIER DPI FINGERPRINTER" "PROBE"
+  mubx_kvrow "Target Domain"  "$TARGET"
+  mubx_kvrow "Chameleon Port" "$CHAMELEON_PORT"
+  mubx_kvrow "Audit Time"     "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+  mubx_box_bot
+  printf '\n'
+
+  mubx_group_open "RAW PROBE RESULTS"
+
+  _pill_probe() {
+    local r="$1"
+    case "$r" in
+      ok)      mubx_pill OK "200 OK" ;;
+      302)     mubx_pill WARN "302 REDIRECT" ;;
+      410)     mubx_pill WARN "410/403 BLOCK" ;;
+      407)     mubx_pill WARN "407 AUTH REQ" ;;
+      timeout) mubx_pill FAIL "TIMEOUT" ;;
+      *)       mubx_pill WARN "$r" ;;
+    esac
+  }
+
+  mubx_card "  P1  Standard CONNECT"           "$(_pill_probe "$p1")"
+  mubx_card "  P2  HEAD-prime + 204_nocontent"  "$(_pill_probe "$p2")"
+  mubx_card "  P3  GET-prime + delay CONNECT"   "$(_pill_probe "$p3")"
+  mubx_card "  P4  302_spoof profile"           "$(_pill_probe "$p4")"
+
+  mubx_group_close
+
+  mubx_box_top "AUTO-ADAPT VERDICT" "RESULT"
+  mubx_kvrow "Selected Profile" "$chosen_profile"
+  mubx_kvrow "Reason"           "$chosen_reason"
+  mubx_kvrow "Written To"       "$PROFILE_FILE"
+  if [ "$chosen_profile" = "default" ]; then
+    mubx_put "$(printf '  %s● [CLEAN]%s No DPI interference detected — standard profile active.' "$C_MINT" "$C_RESET")"
+  elif [ "$chosen_profile" = "chunked_evasion" ]; then
+    mubx_put "$(printf '  %s○ [DEGRADED]%s No probe succeeded — chunked fallback active.' "$C_CORAL" "$C_RESET")"
+  else
+    mubx_put "$(printf '  %s◐ [EVADING]%s Profile %s selected — chameleon adapted.' "$C_AMBER" "$C_RESET" "$chosen_profile")"
+  fi
+  mubx_box_bot
+  printf '\n'
+fi
+
+# Machine-readable exit: 0 = clean, 1 = evading, 2 = all-failed
+if [ "$chosen_profile" = "default" ]; then
+  exit 0
+elif [ "$chosen_profile" = "chunked_evasion" ]; then
+  exit 2
 else
-  mubx_card "  DNS Resolution" "$(mubx_pill FAIL "UNRESOLVED")"
-  mubx_hint "Host did not return any valid A record"
+  exit 1
 fi
-
-# 2. HTTP direct response (port 80)
-case "$HTTP_CODE" in
-  200|301|302)
-    mubx_card "  HTTP Direct (Port 80)" "$(mubx_pill OK "HTTP $HTTP_CODE")"
-    ;;
-  *)
-    mubx_card "  HTTP Direct (Port 80)" "$(mubx_pill WARN "HTTP ${HTTP_CODE:-NONE}")"
-    mubx_hint "Host returned non-standard status code: ${HTTP_CODE:-timed out}"
-    ;;
-esac
-
-# 3. TLS 1.3 handshake & RTT
-if [ -n "$RTT" ] && [ "$RTT" != "0.000s" ]; then
-  mubx_card "  TLS Handshake & RTT" "$(mubx_pill OK "$RTT")"
-  mubx_hint "TLS handshake completed successfully"
-else
-  mubx_card "  TLS Handshake & RTT" "$(mubx_pill FAIL "TIMEOUT")"
-  mubx_hint "TLS handshake timed out or was intercepted/blocked"
-fi
-
-# 4. Chameleon Proxy CONNECT forwarding (127.0.0.1:8080)
-if echo "$CHAMELEON_TEST" | grep -Eqi "200 (Connection|OK)"; then
-  mubx_card "  Chameleon Proxy (8080)" "$(mubx_pill OK "200 OK")"
-else
-  mubx_card "  Chameleon Proxy (8080)" "$(mubx_pill WARN "FAILED")"
-  mubx_hint "Proxy response: ${CHAMELEON_TEST:-timed out}"
-fi
-
-mubx_group_close
-
-# --- Verdict ----------------------------------------------------------------
-mubx_box_top "INSPECTION VERDICT" "ANALYSIS"
-if [ -n "$RESOLVED_IP" ] && [ -n "$RTT" ] && [ "$RTT" != "0.000s" ]; then
-  mubx_put "$(printf '  %s● [OPTIMAL]%s Candidate valid for SNI spoofing & VLESS-WS bypass' "$C_MINT" "$C_RESET")"
-else
-  mubx_put "$(printf '  %s○ [HIGH RISK]%s Risk of carrier deep-packet drop / redirection' "$C_CORAL" "$C_RESET")"
-fi
-mubx_box_bot
-printf '\n'
-

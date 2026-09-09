@@ -1,0 +1,15 @@
+[Unit]
+Description=MUB-X carrier DPI probe — 6-hour auto-adapt timer
+
+[Timer]
+# Fire 2 minutes after boot (gives chameleon time to start)
+OnBootSec=2min
+# Then every 6 hours — catches carrier policy changes during the day.
+# If the weekly mubx-cron runs during this window it will fire as well;
+# that's fine, writes are atomic and the result is idempotent.
+OnUnitActiveSec=6h
+Persistent=true
+Unit=mubx-probe.service
+
+[Install]
+WantedBy=timers.target
