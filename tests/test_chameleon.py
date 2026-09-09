@@ -326,6 +326,53 @@ class TestAsyncClientFlows(unittest.IsolatedAsyncioTestCase):
         # Verify active connection counter is safely 0
         self.assertEqual(chameleon["_active_connections"], 0)
 
+    async def test_loopback_port_22_fallback_to_dropbear_2222(self):
+        """When client targets 127.0.0.1:22 and port 22 is unavailable, fallback to DEFAULT_PORT."""
+        target_received = bytearray()
+        async def mock_dropbear(r, w):
+            d = await r.read(1024)
+            target_received.extend(d)
+            w.close()
+
+        server = await asyncio.start_server(mock_dropbear, "127.0.0.1", 0)
+        dropbear_port = server.sockets[0].getsockname()[1]
+        globals_dict = chameleon["handle_client"].__globals__
+        orig_default_port = globals_dict["DEFAULT_PORT"]
+        globals_dict["DEFAULT_PORT"] = dropbear_port
+        globals_dict["LOCAL_TUNNEL_PORTS"].add(dropbear_port)
+        globals_dict["ALLOWED_LOCAL_PORTS"].add(dropbear_port)
+
+        reader = asyncio.StreamReader()
+        writer_transport = asyncio.StreamWriter(
+            transport=mock.MagicMock(),
+            protocol=asyncio.StreamReaderProtocol(reader),
+            reader=reader,
+            loop=asyncio.get_running_loop()
+        )
+        written_data = bytearray()
+        writer_transport.write = lambda d: written_data.extend(d)
+        writer_transport.get_extra_info = lambda info: ("127.0.0.1", 54321) if info == "peername" else None
+
+        # Point port 22 connection attempt at loopback
+        orig_open_conn = asyncio.open_connection
+        async def mock_open_conn(host, port, **kwargs):
+            if port == 22:
+                raise ConnectionRefusedError(111, "Connection refused")
+            return await orig_open_conn(host, port, **kwargs)
+
+        with mock.patch("asyncio.open_connection", side_effect=mock_open_conn):
+            reader.feed_data(b"CONNECT 127.0.0.1:22 HTTP/1.1\r\n\r\n")
+            reader.feed_eof()
+            try:
+                await handle_client(reader, writer_transport)
+                self.assertIn(b"200 Connection established", written_data)
+            finally:
+                server.close()
+                await server.wait_closed()
+                globals_dict["DEFAULT_PORT"] = orig_default_port
+                globals_dict["LOCAL_TUNNEL_PORTS"].discard(dropbear_port)
+                globals_dict["ALLOWED_LOCAL_PORTS"].discard(dropbear_port)
+
 
 class TestResponseProfiles(unittest.TestCase):
     """Tests for Chameleon response profile engine."""

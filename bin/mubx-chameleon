@@ -197,6 +197,7 @@ _abrupt_disconnects: collections.deque = collections.deque()
 
 _active_connections = 0
 _connections_per_ip: Dict[str, int] = {}
+_last_limit_warning: Dict[str, float] = {}
 
 STATS: Dict[str, Any] = {
     "start_time": time.time(),
@@ -790,7 +791,10 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
             pass
         return
     if _connections_per_ip.get(peer_ip, 0) >= MAX_CONNECTIONS_PER_IP:
-        log.warning("Per-IP connection limit hit for %s", peer_ip)
+        now = time.time()
+        if now - _last_limit_warning.get(peer_ip, 0.0) > 30.0:
+            _last_limit_warning[peer_ip] = now
+            log.warning("Per-IP connection limit (%d) hit for %s (throttling log for 30s)", MAX_CONNECTIONS_PER_IP, peer_ip)
         try:
             client_writer.close()
             await asyncio.wait_for(client_writer.wait_closed(), timeout=1.0)
@@ -818,6 +822,8 @@ async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyn
         new_count = max(0, _connections_per_ip.get(peer_ip, 1) - 1)
         if new_count == 0:
             _connections_per_ip.pop(peer_ip, None)  # prune zero entries to prevent unbounded growth
+            if len(_last_limit_warning) > 1000:
+                _last_limit_warning.pop(peer_ip, None)
         else:
             _connections_per_ip[peer_ip] = new_count
 
@@ -984,7 +990,7 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
     leftover = bytes(buffer[header_end:]) if (header_end != -1 and header_end < len(buffer)) else b""
 
     if not target_host:
-        log.warning("Unclassifiable payload from %s (%d bytes) — defaulting to SSH tunnel", client_addr, len(buffer))
+        log.info("Unclassifiable payload from %s (%d bytes) — defaulting to SSH tunnel", client_addr, len(buffer))
         target_host = DEFAULT_HOST
         target_port = DEFAULT_PORT
         is_connect = True
@@ -1001,7 +1007,7 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
         # External destination — gate behind auth
         if not is_authorized_external(bytes(buffer)):
             STATS["blocked_unauthorized"] += 1
-            log.warning("Blocked unauthenticated open-relay attempt to %s:%d from %s", target_host, target_port, client_addr)
+            log.info("Blocked unauthenticated open-relay attempt to %s:%d from %s", target_host, target_port, client_addr)
             await send_response_and_close(
                 client_writer,
                 b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"MUB-X\"\r\nContent-Length: 0\r\n\r\n"
@@ -1031,10 +1037,26 @@ async def _handle_client_inner(client_reader, client_writer, client_addr):
         )
         set_tcp_opts(target_writer)
     except Exception as e:
-        STATS["upstream_failures"] += 1
-        log.warning("Failed connecting to %s:%d: %s", target_host, target_port, e)
-        await send_response_and_close(client_writer, b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
-        return
+        # If client requested port 22 on loopback but 22 failed,
+        # fallback to Dropbear SSH port (DEFAULT_PORT, 2222)
+        if target_host == "127.0.0.1" and target_port == 22:
+            try:
+                target_reader, target_writer = await asyncio.wait_for(
+                    asyncio.open_connection("127.0.0.1", DEFAULT_PORT), timeout=6.0
+                )
+                set_tcp_opts(target_writer)
+                target_port = DEFAULT_PORT
+                log.info("Port 22 unavailable on loopback; seamlessly rerouted %s to Dropbear SSH :%d", client_addr, DEFAULT_PORT)
+            except Exception as e_fb:
+                STATS["upstream_failures"] += 1
+                log.warning("Failed connecting to 127.0.0.1:22 and fallback to :%d failed: %s", DEFAULT_PORT, e_fb)
+                await send_response_and_close(client_writer, b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+                return
+        else:
+            STATS["upstream_failures"] += 1
+            log.warning("Failed connecting to %s:%d: %s", target_host, target_port, e)
+            await send_response_and_close(client_writer, b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+            return
 
     try:
         if is_connect or is_ws_direct:
