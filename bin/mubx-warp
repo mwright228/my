@@ -6,7 +6,7 @@
 # and AI services (Netflix, ChatGPT, Disney+, Hulu, Spotify) through WARP.
 set -Eeuo pipefail
 
-[ "$(id -u)" -eq 0 ] || { echo "[!] Run mubx-warp as root." >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || [ "${MUBX_ALLOW_NON_ROOT:-0}" -eq 1 ] || { echo "[!] Run mubx-warp as root." >&2; exit 1; }
 
 if [ -r /usr/local/lib/mubx/common.sh ]; then
   source /usr/local/lib/mubx/common.sh
@@ -16,8 +16,19 @@ elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
   source "$(dirname "${BASH_SOURCE[0]}")/../lib/render.sh"
 fi
 
-WARP_CONF=/etc/mubx/warp.json
-install -d -m 0700 "$(dirname "$WARP_CONF")"
+WARP_CONF="${WARP_CONF:-/etc/mubx/warp.json}"
+[ -d "$(dirname "$WARP_CONF")" ] || install -d -m 0700 "$(dirname "$WARP_CONF")" 2>/dev/null || true
+
+reload_xray_service() {
+  [ "${MUBX_ALLOW_NON_ROOT:-0}" -eq 1 ] && return 0
+  local mubx_users_bin="/usr/local/bin/mubx-users"
+  [ -x "$mubx_users_bin" ] || mubx_users_bin="$(dirname "${BASH_SOURCE[0]}")/mubx-users"
+  if [ -x "$mubx_users_bin" ]; then
+    "$mubx_users_bin" unfreeze admin >/dev/null 2>&1 || true
+  elif [ -x /usr/local/bin/mubx-update ]; then
+    /usr/local/bin/mubx-update >/dev/null 2>&1 || true
+  fi
+}
 
 warp_register() {
   mubx_clear
@@ -63,16 +74,6 @@ warp_register() {
 }
 EOF
   chmod 0600 "$WARP_CONF"
-
-  reload_xray_service() {
-    local mubx_users_bin="/usr/local/bin/mubx-users"
-    [ -x "$mubx_users_bin" ] || mubx_users_bin="$(dirname "${BASH_SOURCE[0]}")/mubx-users"
-    if [ -x "$mubx_users_bin" ]; then
-      "$mubx_users_bin" unfreeze admin >/dev/null 2>&1 || true
-    elif [ -x /usr/local/bin/mubx-update ]; then
-      /usr/local/bin/mubx-update >/dev/null 2>&1 || true
-    fi
-  }
 
   # Trigger Xray re-render to load WARP outbound
   reload_xray_service

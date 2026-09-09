@@ -359,6 +359,7 @@ mubx_xray_render() { # $1 base_template  $2 out
   if declare -F mubx_ss2022_psk >/dev/null 2>&1; then
     mubx_ss2022_apply "$out" "$(dirname "$base_tpl")/ss-2022-inbound.json" || return 1
   fi
+  chmod 0600 "$out" 2>/dev/null || true
 }
 
 # Emit one tab-separated row per Shadowsocks user: name, uuid (the SS
@@ -541,6 +542,7 @@ mubx_singbox_render() { # $1 template  $2 out
       jq --argjson tu "$tuic_users" '.inbounds |= map(if .tag == "tuic-in" then .users = $tu else . end)' "$out" > "$out.tmp" && mv -f "$out.tmp" "$out"
     fi
   fi
+  chmod 0600 "$out" 2>/dev/null || true
 }
 
 # Render /etc/nginx/nginx.conf from the template: expand the shared

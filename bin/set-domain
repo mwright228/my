@@ -71,7 +71,7 @@ trap cleanup EXIT
 for path in /usr/local/etc/xray/domain /etc/mubx/domain /usr/local/etc/xray/config.json \
   /etc/telecom-engine.env /etc/nginx/nginx.conf /etc/hysteria/config.yaml \
   /etc/sing-box/config.json /etc/haproxy/haproxy.cfg \
-  /etc/wireguard/mubx-client.conf \
+  /etc/wireguard/mubx-client.conf /etc/wireguard/mubx-awg-client.conf \
   /etc/zivpn/zivpn.crt /etc/zivpn/zivpn.key; do
   backup_file "$path"
 done
@@ -101,6 +101,7 @@ install -d -m 0755 /etc/mubx
 echo "$d" > /etc/mubx/domain
 if [ -f /etc/telecom-engine.env ]; then
   sed -i "s/^DOMAIN=.*/DOMAIN=\"$d\"/" /etc/telecom-engine.env
+  chmod 0600 /etc/telecom-engine.env
 fi
 if [ -f /etc/nginx/nginx.conf ]; then
   sed -i "s|/etc/letsencrypt/live/[^/]*/|/etc/letsencrypt/live/$d/|g" /etc/nginx/nginx.conf
@@ -134,6 +135,10 @@ done
 if [ -f /etc/wireguard/mubx-client.conf ]; then
   sed -i -E "s/^Endpoint = .+:51820$/Endpoint = $d:51820/" \
     /etc/wireguard/mubx-client.conf
+fi
+if [ -f /etc/wireguard/mubx-awg-client.conf ]; then
+  sed -i -E "s/^Endpoint = .+:51821$/Endpoint = $d:51821/" \
+    /etc/wireguard/mubx-awg-client.conf
 fi
 nginx -t
 haproxy -c -f /etc/haproxy/haproxy.cfg

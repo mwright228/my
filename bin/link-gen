@@ -207,7 +207,7 @@ if [ "$SHOW_INJECTOR_ONLY" -eq 0 ] && { u_has "hysteria2" || u_has "shadowtls" |
       source /usr/local/lib/mubx/subscribe.sh
       STLS_KEY="$(mubx_ss2022_psk admin 2>/dev/null || true)"
       if [ -n "$STLS_KEY" ]; then
-        STLS_B64="$(printf '2022-blake3-aes-256-gcm:%s' "$STLS_KEY" | base64 -w 0 | tr '+/' '-_' | tr -d '=')"
+        STLS_B64="$(printf '2022-blake3-aes-256-gcm:%s' "$STLS_KEY" | mubx_b64url)"
         item "STLS" "ShadowTLS v3 + SS-2022 Decoy Route (Port 443)"
         block "ss://${STLS_B64}@${DOMAIN}:443?plugin=shadow-tls%3Bhost%3D${STLS_SNI}%3Bpassword%3D${SHADOWTLS_PASS}%3Bversion%3D3#MUBX-ShadowTLS"
         manual "Address: ${DOMAIN} | Port: 443 | SS-Method: 2022-blake3-aes-256-gcm | SS-Key: ${STLS_KEY} | Plugin: shadow-tls | Host/SNI: ${STLS_SNI} | STLS-Password: ${SHADOWTLS_PASS} | Version: 3"
@@ -271,14 +271,14 @@ if [ "$SHOW_INJECTOR_ONLY" -eq 0 ] && { u_has "vless_ws_tls" || u_has "vless_ws_
   if u_has "vmess_ws_tls"; then
     item "VMESS-WS" "VMess WebSocket (TLS 443)"
     VJ="{\"v\":\"2\",\"ps\":\"MUBX-VMess\",\"add\":\"${BUG}\",\"port\":\"443\",\"id\":\"${UUID}\",\"aid\":\"0\",\"net\":\"ws\",\"path\":\"/vmess-ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"tls\":\"tls\",\"sni\":\"${BUG}\"}"
-    block "vmess://$(echo -n "$VJ" | base64 -w 0)"
+    block "vmess://$(echo -n "$VJ" | mubx_base64)"
     manual "Address: ${BUG} | Port: 443 | UUID: ${UUID} | AlterId: 0 | Network: ws | Host: ${DOMAIN} | Path: /vmess-ws | Security: tls"
   fi
 
   if u_has "vmess_ws_ntls"; then
     item "VMESS-WS-80" "VMess WebSocket (Plain HTTP 80)"
     VJ80="{\"v\":\"2\",\"ps\":\"MUBX-VMess-80\",\"add\":\"${BUG}\",\"port\":\"80\",\"id\":\"${UUID}\",\"aid\":\"0\",\"net\":\"ws\",\"path\":\"/vmess-ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\"}"
-    block "vmess://$(echo -n "$VJ80" | base64 -w 0)"
+    block "vmess://$(echo -n "$VJ80" | mubx_base64)"
     manual "Address: ${BUG} | Port: 80 | UUID: ${UUID} | AlterId: 0 | Network: ws | Host: ${DOMAIN} | Path: /vmess-ws | Security: none"
   fi
 
@@ -302,7 +302,7 @@ fi
 if [ "$SHOW_INJECTOR_ONLY" -eq 0 ] && { u_has "ss_ws_tls" || u_has "ss_ws_ntls" || u_has "ss_tcp" || u_has "ss_2022"; }; then
   card_header "xray haproxy" "SHADOWSOCKS FAMILY" "WS & RAW TCP"
 
-  SS_B64="$(printf 'aes-256-gcm:%s' "$UUID" | base64 -w 0)"
+  SS_B64="$(printf 'aes-256-gcm:%s' "$UUID" | mubx_base64)"
   SS_PLAIN_PORT=$(( ${SS_PLAIN_BASE_PORT:-8388} + ${user_idx:-0} ))
 
   if u_has "ss_ws_tls"; then
@@ -339,7 +339,7 @@ if [ "$SHOW_INJECTOR_ONLY" -eq 0 ] && { u_has "ss_ws_tls" || u_has "ss_ws_ntls" 
     source /usr/local/lib/mubx/subscribe.sh
     SS22_PSK="$(mubx_ss2022_psk "$USER_NAME" 2>/dev/null || true)"
     if [ -n "$SS22_PSK" ]; then
-      SS22_B64="$(printf '2022-blake3-aes-256-gcm:%s' "$SS22_PSK" | base64 -w 0)"
+      SS22_B64="$(printf '2022-blake3-aes-256-gcm:%s' "$SS22_PSK" | mubx_base64)"
       item "SS-2022" "Shadowsocks 2022 WS (Port 443 BLAKE3 Cipher)"
       block "ss://${SS22_B64}@${DOMAIN}:443/?plugin=v2ray-plugin%3Btls%3Bhost%3D${DOMAIN}%3Bpath%3D%2Fss22-${USER_NAME}%3Bmux%3D0#MUBX-SS22-${USER_NAME}"
       manual "Address: ${DOMAIN} | Port: 443 | Method: 2022-blake3-aes-256-gcm | Password: ${SS22_PSK} | Network: ws | Host: ${DOMAIN} | Path: /ss22-${USER_NAME} | Security: tls"

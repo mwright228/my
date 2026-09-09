@@ -616,6 +616,7 @@ if grep -q "^SHADOWTLS_SNI=" /etc/telecom-engine.env; then
 else
   printf 'SHADOWTLS_SNI="%s"\n' "$SHADOWTLS_SNI" >> /etc/telecom-engine.env
 fi
+chmod 0600 /etc/telecom-engine.env
 load_secrets
 sed -i "s|__SSH_WS_PATH__|$SSH_WS_PATH|g" /etc/systemd/system/wstunnel.service
 sed -i "s|__DOMAIN__|$DOMAIN|g; s|__HY2_PASS__|$HY2_PASS|g" /etc/hysteria/config.yaml

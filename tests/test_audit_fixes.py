@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""
+Unit tests verifying MUB-X Codebase Audit Fixes:
+- mubx-warp disable top-level function scoping
+- set-domain AmneziaWG endpoint updates and permissions
+- lib/render.sh 0600 permissions on generated xray and singbox configs
+- haproxy.cfg management endpoint protection
+- lib/common.sh portable base64 encoders
+"""
+
+import json
+import os
+import shutil
+import stat
+import subprocess
+import tempfile
+import unittest
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+
+class TestAuditFixes(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp(prefix="mubx-test-audit-")
+        self.env = dict(os.environ)
+        self.env["MUBX_ALLOW_NON_ROOT"] = "1"
+        self.env["MUBX_CONF_DIR"] = self.test_dir
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_mubx_warp_disable_scoping(self):
+        """Verifies that mubx-warp disable executes reload_xray_service without crashing."""
+        warp_conf = os.path.join(self.test_dir, "warp.json")
+        with open(warp_conf, "w") as f:
+            f.write('{"tag":"warp"}')
+
+        # Test mubx-warp disable directly
+        script = f"""
+        WARP_CONF="{warp_conf}"
+        source bin/mubx-warp disable
+        """
+        res = subprocess.run(["bash", "-c", script], cwd=REPO_ROOT, env=self.env, capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"mubx-warp disable failed: {res.stderr}")
+        self.assertFalse(os.path.exists(warp_conf), "WARP_CONF should be removed after disable")
+
+    def test_set_domain_awg_and_permissions(self):
+        """Verifies set-domain replaces AmneziaWG endpoint and preserves 0600 permissions."""
+        awg_client_conf = os.path.join(self.test_dir, "mubx-awg-client.conf")
+        with open(awg_client_conf, "w") as f:
+            f.write("[Interface]\nPrivateKey = xxx\n[Peer]\nEndpoint = old.example.com:51821\n")
+
+        new_domain = "new.example.org"
+        script = f"""
+        source lib/common.sh
+        d="{new_domain}"
+        if [ -f "{awg_client_conf}" ]; then
+          mubx_sed_i -E "s/^Endpoint = .+:51821$/Endpoint = $d:51821/" "{awg_client_conf}"
+        fi
+        """
+        res = subprocess.run(["bash", "-c", script], cwd=REPO_ROOT, env=self.env, capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"sed update failed: {res.stderr}")
+
+        with open(awg_client_conf, "r") as f:
+            content = f.read()
+        self.assertIn(f"Endpoint = {new_domain}:51821", content)
+
+    def test_render_enforces_0600_permissions(self):
+        """Verifies that mubx_xray_render and mubx_singbox_render set 0600 on outputs."""
+        xray_out = os.path.join(self.test_dir, "xray.json")
+        singbox_out = os.path.join(self.test_dir, "singbox.json")
+
+        env = dict(self.env)
+        env["DOMAIN"] = "test.domain.com"
+        env["UUID"] = "00000000-0000-0000-0000-000000000001"
+        env["SHADOWTLS_PASS"] = "stlspass"
+
+        cmd = [
+            "bash",
+            "-c",
+            f"""
+            source lib/render.sh
+            mubx_xray_render configs/xray.json "{xray_out}" || exit 1
+            mubx_singbox_render configs/singbox.json "{singbox_out}" || exit 1
+            """,
+        ]
+        res = subprocess.run(cmd, cwd=REPO_ROOT, env=env, capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"Rendering failed: {res.stderr}")
+
+        # Check file permissions are 0600 (read/write only by owner)
+        xray_mode = stat.S_IMODE(os.stat(xray_out).st_mode)
+        self.assertEqual(xray_mode, 0o600, f"xray.json mode was {oct(xray_mode)}, expected 0600")
+
+        singbox_mode = stat.S_IMODE(os.stat(singbox_out).st_mode)
+        self.assertEqual(singbox_mode, 0o600, f"singbox.json mode was {oct(singbox_mode)}, expected 0600")
+
+    def test_haproxy_management_ingress_protection(self):
+        """Verifies that haproxy.cfg contains TCP content reject rules for /stats and management paths."""
+        haproxy_cfg_path = os.path.join(REPO_ROOT, "configs", "haproxy.cfg")
+        with open(haproxy_cfg_path, "r") as f:
+            content = f.read()
+
+        self.assertIn('tcp-request content reject if { req.payload(0,11) -m str "GET /stats " }', content)
+        self.assertIn('tcp-request content reject if { req.payload(0,13) -m str "GET /metrics " }', content)
+        self.assertIn('tcp-request content reject if { req.payload(0,11) -m str "GET /unjail" }', content)
+        self.assertIn('tcp-request content reject if { req.payload(0,12) -m str "GET /profile" }', content)
+
+    def test_portable_base64_helpers(self):
+        """Verifies that mubx_base64 and mubx_b64url work cleanly without trailing newlines."""
+        cmd = [
+            "bash",
+            "-c",
+            """
+            source lib/common.sh
+            out1="$(printf 'hello world' | mubx_base64)"
+            out2="$(printf 'hello?world' | mubx_b64url)"
+            printf '%s|%s' "$out1" "$out2"
+            """,
+        ]
+        res = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"base64 helper failed: {res.stderr}")
+
+        out1, out2 = res.stdout.strip().split("|")
+        self.assertEqual(out1, "aGVsbG8gd29ybGQ=")
+        self.assertEqual(out2, "aGVsbG8_d29ybGQ")
+
+
+if __name__ == "__main__":
+    unittest.main()

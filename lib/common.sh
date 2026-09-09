@@ -47,6 +47,24 @@ log()  { echo -e "${C_MINT}[✓]${C_RESET} $*"; }
 warn() { echo -e "${C_AMBER}[!]${C_RESET} $*" >&2; }
 die()  { echo -e "${C_CORAL}[✕]${C_RESET} $*" >&2; exit 1; }
 
+# Portable base64 encoders: works uniformly on GNU coreutils (Linux), busybox, and BSD/macOS.
+mubx_base64() { # stdin -> stdout (single line without newlines)
+  (base64 -w 0 2>/dev/null || base64 2>/dev/null) | tr -d '\r\n'
+}
+
+mubx_b64url() { # stdin -> stdout (URL-safe base64 without padding)
+  mubx_base64 | tr '+/' '-_' | tr -d '='
+}
+
+# Portable in-place sed: works with both GNU sed (-i) and BSD/macOS sed (-i '')
+mubx_sed_i() {
+  if sed --version 2>&1 | grep -q GNU; then
+    sed -i "$@"
+  else
+    sed -i '' "$@"
+  fi
+}
+
 load_mubx_env() {
   local env_file="${1:-/etc/telecom-engine.env}" key value
   if [ ! -r "$env_file" ]; then

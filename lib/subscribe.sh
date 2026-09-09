@@ -137,7 +137,7 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
   # Shadowsocks WS+TLS (legacy aes-256-gcm) on the per-user nginx route
   if mubx_user_has_proto "$user" "ss_ws_tls"; then
     printf 'ss://%s@%s:443/?plugin=v2ray-plugin%%3Btls%%3Bhost%%3D%s%%3Bpath%%3D%%2Fss-%s%%3Bmux%%3D0#MUBX-SS-%s\n' \
-      "$(printf 'aes-256-gcm:%s' "$uuid" | base64 -w 0)" "$dom" "$dom" "$user" "$user"
+      "$(printf 'aes-256-gcm:%s' "$uuid" | mubx_base64)" "$dom" "$dom" "$user" "$user"
   fi
   # Shadowsocks 2022 WS+TLS on the per-user route (when a key exists)
   if mubx_user_has_proto "$user" "ss_2022"; then
@@ -145,18 +145,18 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
     psk="$(mubx_ss2022_psk "$user")"
     if [ -n "$psk" ]; then
       printf 'ss://%s@%s:443/?plugin=v2ray-plugin%%3Btls%%3Bhost%%3D%s%%3Bpath%%3D%%2Fss22-%s%%3Bmux%%3D0#MUBX-SS22-%s\n' \
-        "$(printf '2022-blake3-aes-256-gcm:%s' "$psk" | base64 -w 0)" "$dom" "$dom" "$user" "$user"
+        "$(printf '2022-blake3-aes-256-gcm:%s' "$psk" | mubx_base64)" "$dom" "$dom" "$user" "$user"
     fi
   fi
   # Shadowsocks plain TCP on Port 443 (direct, no TLS, multiplexed by HAProxy)
   if mubx_user_has_proto "$user" "ss_tcp"; then
     printf 'ss://%s@%s:443#MUBX-SS-%s-443\n' \
-      "$(printf 'aes-256-gcm:%s' "$uuid" | base64 -w 0)" "$dom" "$user"
+      "$(printf 'aes-256-gcm:%s' "$uuid" | mubx_base64)" "$dom" "$user"
   fi
   # Shadowsocks plain TCP on the per-user standalone port
   if mubx_user_has_proto "$user" "ss_tcp"; then
     printf 'ss://%s@%s:%s#MUBX-SS-%s-tcp\n' \
-      "$(printf 'aes-256-gcm:%s' "$uuid" | base64 -w 0)" \
+      "$(printf 'aes-256-gcm:%s' "$uuid" | mubx_base64)" \
       "$dom" "$(( ${SS_PLAIN_BASE_PORT:-8388} + idx ))" "$user"
   fi
   # ShadowTLS v3 + SS-2022 (when configured)
@@ -166,7 +166,7 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
       stls_key="$(mubx_ss2022_psk admin 2>/dev/null || true)"
       if [ -n "$stls_key" ]; then
         printf 'ss://%s@%s:443/?plugin=shadow-tls%%3Bhost%%3D%s%%3Bpassword%%3D%s%%3Bversion%%3D3#MUBX-ShadowTLS\n' \
-          "$(printf '2022-blake3-aes-256-gcm:%s' "$stls_key" | base64 -w 0)" "$dom" \
+          "$(printf '2022-blake3-aes-256-gcm:%s' "$stls_key" | mubx_base64)" "$dom" \
           "${SHADOWTLS_SNI:-www.microsoft.com}" "$SHADOWTLS_PASS"
       fi
     fi
@@ -502,7 +502,7 @@ mubx_sub_generate() { # $1 user name
   install -d -m 0755 "$out"
   links="$(mubx_sub_links "$user" "$uuid" "$idx")"
   printf '%s\n' "$links" > "$out/links.txt"
-  printf '%s\n' "$links" | base64 -w 0 > "$out/index.txt"
+  printf '%s\n' "$links" | mubx_base64 > "$out/index.txt"
   cp -f "$out/index.txt" "$out/sub.txt" 2>/dev/null || true
   mubx_sub_clash "$user" "$uuid" "$idx" | jq . > "$out/clash.yaml"
   mubx_sub_singbox "$user" "$uuid" "$idx" | jq . > "$out/singbox.json"

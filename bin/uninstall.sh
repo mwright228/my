@@ -73,12 +73,14 @@ for path in /usr/local/bin/mubx /usr/local/bin/mubx-udp443 /usr/local/bin/menu /
   /usr/local/bin/mubx-probe /usr/local/bin/mubx-restart-failed \
   /usr/local/bin/mubx-update /usr/local/bin/set-domain /usr/local/bin/mubx-cron \
   /usr/local/bin/mubx-users /usr/local/bin/svc-status /usr/local/bin/mubx-chameleon \
+  /usr/local/bin/mubx-shield /usr/local/bin/mubx-awg /usr/local/bin/mubx-bughost-eval /usr/local/bin/mubx-top \
   /usr/local/bin/mubx-sub /usr/local/bin/generate-secrets /usr/local/bin/uninstall.sh; do
   restore_path "$path"
 done
 restore_path /usr/local/lib/mubx/common.sh
 restore_path /usr/local/lib/mubx/render.sh
 restore_path /usr/local/lib/mubx/subscribe.sh
+restore_path /usr/local/lib/mubx/proto-def.jq
 # Reality was removed from MUB-X; make sure no stale copy of its manager or
 # builder lib survives the uninstall (nothing restores them).
 rm -f /usr/local/bin/reality-fronts /usr/local/lib/mubx/reality-build.sh
@@ -98,16 +100,27 @@ else
     iptables -t nat -D PREROUTING -i "$WAN_IF" -p udp --dport 6000:19999 \
       -j DNAT --to-destination :5667 2>/dev/null || true
   fi
+  if command -v iptables >/dev/null 2>&1; then
+    while iptables -t nat -D PREROUTING -p udp --dport 443 -j REDIRECT --to-ports 4433 2>/dev/null; do :; done
+    while iptables -t nat -D PREROUTING -p udp --dport 443 -j REDIRECT --to-ports 8444 2>/dev/null; do :; done
+    iptables -D INPUT -m set --match-set mubx-shield src -j DROP 2>/dev/null || true
+    iptables -D INPUT -m set --match-set mubx-scanners src -j DROP 2>/dev/null || true
+  fi
+  if command -v ipset >/dev/null 2>&1; then
+    ipset destroy mubx-shield 2>/dev/null || true
+    ipset destroy mubx-scanners 2>/dev/null || true
+  fi
   iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 fi
 restore_path /etc/sysctl.d/99-mubx-forwarding.conf
 restore_path /etc/sysctl.d/99-mubx-network.conf
 for path in /etc/telecom-engine.env /usr/local/etc/xray/domain /etc/mubx/domain \
   /etc/hysteria/config.yaml /etc/sing-box/config.json \
+  /etc/wireguard/awg0.conf /etc/wireguard/mubx-awg-client.conf \
   /etc/zivpn/config.json /etc/zivpn/zivpn.crt /etc/zivpn/zivpn.key; do
   restore_path "$path"
 done
-rm -rf /var/www/mubx-sub
+rm -rf /var/www/mubx-sub /run/mubx
 for path in /usr/local/etc/xray/config.json /usr/local/share/xray/geoip.dat \
   /usr/local/share/xray/geosite.dat; do
   restore_path "$path"
