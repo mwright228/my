@@ -152,6 +152,7 @@ show_p "ssh"                    "SSH Dropbear / WS"  "2222, 109, 53 / 443 wss, 8
 show_p "chameleon"              "Chameleon Proxy"    "8080, 3128, 8888, 443"
 show_p "openvpn"                "OpenVPN Server"     "1194 (TCP), 2200 (UDP)"
 show_p "wireguard"              "WireGuard VPN"      "51820 (UDP)"
+show_p "amneziawg"              "AmneziaWG Obfs"     "51821 (UDP Obfuscated)"
 show_p "hysteria2"              "Hysteria 2"         "4433 (UDP QUIC)"
 show_p "shadowtls"              "ShadowTLS v3"       "443 (Decoy SNI)"
 show_p "ss_ws_tls"              "Shadowsocks WS"     "443 TLS / 80 Plain"

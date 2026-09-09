@@ -817,6 +817,31 @@ def is_ip_jailed(peer_ip: str) -> bool:
     return False
 
 
+async def _async_notify_shield(args: list) -> None:
+    shield_bin = "/usr/local/bin/mubx-shield"
+    if not os.path.isfile(shield_bin):
+        shield_bin = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mubx-shield")
+    if os.path.isfile(shield_bin) and os.access(shield_bin, os.X_OK):
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                shield_bin, *args,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
+            )
+            await proc.wait()
+        except Exception:
+            pass
+
+
+def notify_kernel_shield(peer_ip: str, reason: str = "chameleon_autojail", timeout: int = 300) -> None:
+    """Non-blocking async dispatch to mubx-shield if available on the system."""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_async_notify_shield(["block", peer_ip, reason, str(timeout)]))
+    except RuntimeError:
+        pass
+
+
 def record_relay_violation(peer_ip: str) -> bool:
     """Records an unauthenticated relay violation. Returns True if IP crossed threshold into jail."""
     if peer_ip in ("127.0.0.1", "::1", "localhost"):
@@ -832,6 +857,7 @@ def record_relay_violation(peer_ip: str) -> bool:
         STATS["ips_jailed_total"] += 1
         log.warning("Auto-jailed scanner IP %s for %.0fs (%d violations in 30s)",
                     peer_ip, CHAMELEON_JAIL_DURATION, len(history))
+        notify_kernel_shield(peer_ip, "relay_violation", int(CHAMELEON_JAIL_DURATION))
         return True
     return False
 
@@ -840,6 +866,11 @@ def clear_jailed_ips():
     """Manually flushes all active IP jails and violation history."""
     _jailed_ips.clear()
     _violation_tracker.clear()
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_async_notify_shield(["flush"]))
+    except RuntimeError:
+        pass
     log.info("Cleared all active IP jails and violation tracking.")
 
 

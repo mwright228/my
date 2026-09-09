@@ -1,0 +1,272 @@
+#!/bin/bash
+# ==============================================================================
+# MUB-X AmneziaWG (Obfuscated WireGuard) Engine (bin/mubx-awg)
+#
+# Manages AmneziaWG (Awg) - an advanced obfuscated fork of WireGuard that
+# defeats Deep Packet Inspection (DPI) by adding randomized junk packets (Jc,
+# Jmin, Jmax), packet size padding (S1, S2), and replacing fixed protocol magic
+# headers with unique random 32-bit integers (H1, H2, H3, H4).
+#
+# Runs on dedicated UDP port 51821, alongside standard WireGuard on port 51820.
+#
+# Usage:
+#   mubx-awg init                     # Generate or load unique server obfuscation keys
+#   mubx-awg client-config [user]     # Generate AmneziaWG client .conf to stdout
+#   mubx-awg show                     # Show active Awg parameters & server config
+#   mubx-awg status                   # Check Awg listener and interface status
+# ==============================================================================
+set -euo pipefail
+
+# Allow non-root in dry-run / mock test modes
+[ "$(id -u)" -eq 0 ] || [ "${MUBX_ALLOW_NON_ROOT:-0}" -eq 1 ] || [ "${MUBX_AWG_TEST:-0}" -eq 1 ] || {
+  echo "[!] Run mubx-awg as root." >&2
+  exit 1
+}
+
+AWG_ENV_FILE="${MUBX_AWG_ENV:-/etc/mubx/awg.env}"
+AWG_SERVER_CONF="${MUBX_AWG_SERVER_CONF:-/etc/wireguard/awg0.conf}"
+AWG_CLIENT_CONF="${MUBX_AWG_CLIENT_CONF:-/etc/wireguard/mubx-awg-client.conf}"
+DOMAIN_FILE="${MUBX_DOMAIN_FILE:-/etc/mubx/domain}"
+
+# Color formatting
+C_RESET="\033[0m"
+C_BOLD="\033[1m"
+C_GREEN="\033[32m"
+C_CYAN="\033[36m"
+C_YELLOW="\033[33m"
+C_SLATE="\033[90m"
+
+# Generate a cryptographically secure random 32-bit positive integer
+rand_uint32() {
+  python3 -c "import secrets; print(secrets.randbelow(2147483647) + 1)" 2>/dev/null || \
+  awk 'BEGIN{srand(); printf "%d\n", int(rand()*2147483640)+1}'
+}
+
+# Resolve public IP / domain
+resolve_endpoint_host() {
+  if [ -s "$DOMAIN_FILE" ]; then
+    cat "$DOMAIN_FILE" | tr -d ' \r\n'
+    return 0
+  fi
+  curl -s --max-time 2 https://api.ipify.org 2>/dev/null || \
+  curl -s --max-time 2 https://ifconfig.me 2>/dev/null || \
+  echo "127.0.0.1"
+}
+
+# Resolve WAN interface for iptables forwarding
+resolve_wan_if() {
+  ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -n1 || echo "eth0"
+}
+
+# Initialize and generate unique AmneziaWG obfuscation environment
+awg_init() {
+  if [ -s "$AWG_ENV_FILE" ]; then
+    # Already initialized
+    return 0
+  fi
+
+  local env_dir
+  env_dir="$(dirname "$AWG_ENV_FILE")"
+  mkdir -p "$env_dir"
+
+  # Standard server / client keys
+  local srv_priv="" srv_pub="" cl_priv="" cl_pub=""
+  if [ -s /etc/wireguard/server.key ] && [ -s /etc/wireguard/server.pub ]; then
+    srv_priv="$(cat /etc/wireguard/server.key | tr -d '\r\n')"
+    srv_pub="$(cat /etc/wireguard/server.pub | tr -d '\r\n')"
+  elif command -v wg >/dev/null 2>&1; then
+    srv_priv="$(wg genkey)"
+    srv_pub="$(echo "$srv_priv" | wg pubkey)"
+  else
+    # Fallback base64 key generation for unit test / non-wg environments
+    srv_priv="$(python3 -c 'import secrets, base64; print(base64.b64encode(secrets.token_bytes(32)).decode())' 2>/dev/null || echo 'c2VydmVyX3ByaXZhdGVfa2V5XzMyYnl0ZXNsb25nCg==')"
+    srv_pub="$(python3 -c 'import secrets, base64; print(base64.b64encode(secrets.token_bytes(32)).decode())' 2>/dev/null || echo 'c2VydmVyX3B1YmxpY19rZXlfMzJieXRlc2xvbmcxCg==')"
+  fi
+
+  if [ -s /etc/wireguard/client.key ] && [ -s /etc/wireguard/client.pub ]; then
+    cl_priv="$(cat /etc/wireguard/client.key | tr -d '\r\n')"
+    cl_pub="$(cat /etc/wireguard/client.pub | tr -d '\r\n')"
+  elif command -v wg >/dev/null 2>&1; then
+    cl_priv="$(wg genkey)"
+    cl_pub="$(echo "$cl_priv" | wg pubkey)"
+  else
+    cl_priv="$(python3 -c 'import secrets, base64; print(base64.b64encode(secrets.token_bytes(32)).decode())' 2>/dev/null || echo 'Y2xpZW50X3ByaXZhdGVfa2V5XzMyYnl0ZXNsb25nCg==')"
+    cl_pub="$(python3 -c 'import secrets, base64; print(base64.b64encode(secrets.token_bytes(32)).decode())' 2>/dev/null || echo 'Y2xpZW50X3B1YmxpY19rZXlfMzJieXRlc2xvbmcxCg==')"
+  fi
+
+  # Generate unique obfuscation magic integers & padding
+  local h1 h2 h3 h4
+  h1="$(rand_uint32)"
+  h2="$(rand_uint32)"
+  h3="$(rand_uint32)"
+  h4="$(rand_uint32)"
+
+  (
+    umask 077
+    cat > "$AWG_ENV_FILE" <<EOF
+# MUB-X AmneziaWG Obfuscation Environment (Auto-Generated)
+AWG_PORT=51821
+AWG_JC=4
+AWG_JMIN=50
+AWG_JMAX=1000
+AWG_S1=56
+AWG_S2=112
+AWG_H1=${h1}
+AWG_H2=${h2}
+AWG_H3=${h3}
+AWG_H4=${h4}
+AWG_SERVER_PRIV="${srv_priv}"
+AWG_SERVER_PUB="${srv_pub}"
+AWG_CLIENT_PRIV="${cl_priv}"
+AWG_CLIENT_PUB="${cl_pub}"
+EOF
+    chmod 0600 "$AWG_ENV_FILE"
+  )
+
+  # Render server and default client configs
+  awg_render_server
+  awg_render_client > "$AWG_CLIENT_CONF" 2>/dev/null || true
+  chmod 0600 "$AWG_CLIENT_CONF" 2>/dev/null || true
+}
+
+# Load environment
+awg_load_env() {
+  if [ ! -s "$AWG_ENV_FILE" ]; then
+    awg_init
+  fi
+  # shellcheck source=/dev/null
+  source "$AWG_ENV_FILE"
+}
+
+# Render server configuration file
+awg_render_server() {
+  awg_load_env
+  local wan_if
+  wan_if="$(resolve_wan_if)"
+  mkdir -p "$(dirname "$AWG_SERVER_CONF")"
+
+  (
+    umask 077
+    cat > "$AWG_SERVER_CONF" <<EOF
+[Interface]
+Address = 10.9.0.1/24
+ListenPort = ${AWG_PORT:-51821}
+PrivateKey = ${AWG_SERVER_PRIV}
+Jc = ${AWG_JC:-4}
+Jmin = ${AWG_JMIN:-50}
+Jmax = ${AWG_JMAX:-1000}
+S1 = ${AWG_S1:-56}
+S2 = ${AWG_S2:-112}
+H1 = ${AWG_H1}
+H2 = ${AWG_H2}
+H3 = ${AWG_H3}
+H4 = ${AWG_H4}
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o ${wan_if} -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o ${wan_if} -j MASQUERADE
+
+[Peer]
+PublicKey = ${AWG_CLIENT_PUB}
+AllowedIPs = 10.9.0.2/32
+EOF
+    chmod 0600 "$AWG_SERVER_CONF"
+  )
+}
+
+# Output AmneziaWG client configuration
+awg_render_client() {
+  local user="${1:-client}"
+  local client_ip="${2:-10.9.0.2}"
+  awg_load_env
+
+  local endpoint_host
+  endpoint_host="$(resolve_endpoint_host)"
+
+  cat <<EOF
+[Interface]
+PrivateKey = ${AWG_CLIENT_PRIV}
+Address = ${client_ip}/24
+DNS = 1.1.1.1, 8.8.8.8
+Jc = ${AWG_JC:-4}
+Jmin = ${AWG_JMIN:-50}
+Jmax = ${AWG_JMAX:-1000}
+S1 = ${AWG_S1:-56}
+S2 = ${AWG_S2:-112}
+H1 = ${AWG_H1}
+H2 = ${AWG_H2}
+H3 = ${AWG_H3}
+H4 = ${AWG_H4}
+
+[Peer]
+PublicKey = ${AWG_SERVER_PUB}
+Endpoint = ${endpoint_host}:${AWG_PORT:-51821}
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+EOF
+}
+
+# Show parameters
+awg_show() {
+  awg_load_env
+  echo -e "\n${C_BOLD}=== MUB-X AMNEZIAWG OBFUSCATED WIREGUARD ===${C_RESET}"
+  echo -e "  Port:                ${C_CYAN}${AWG_PORT:-51821} (UDP)${C_RESET}"
+  echo -e "  Junk Packet Count:   ${C_BOLD}${AWG_JC:-4}${C_RESET} (Jc)"
+  echo -e "  Junk Size Range:     ${C_BOLD}${AWG_JMIN:-50} - ${AWG_JMAX:-1000}${C_RESET} bytes (Jmin/Jmax)"
+  echo -e "  Packet Padding (S1): ${C_BOLD}${AWG_S1:-56}${C_RESET} bytes"
+  echo -e "  Packet Padding (S2): ${C_BOLD}${AWG_S2:-112}${C_RESET} bytes"
+  echo -e "  Magic Headers:       H1=${AWG_H1} H2=${AWG_H2} H3=${AWG_H3} H4=${AWG_H4}"
+  echo -e "  Server Public Key:   ${C_SLATE}${AWG_SERVER_PUB}${C_RESET}"
+  echo -e "  Server Config:       ${AWG_SERVER_CONF}"
+  echo -e "  Client Config:       ${AWG_CLIENT_CONF}"
+  echo
+}
+
+# Check service status
+awg_status() {
+  awg_load_env
+  echo -e "\n${C_BOLD}=== MUB-X AMNEZIAWG LISTENER STATUS ===${C_RESET}"
+  local port="${AWG_PORT:-51821}"
+  local is_listening=false
+
+  if command -v ss >/dev/null 2>&1; then
+    if ss -uln | grep -q ":${port} "; then
+      is_listening=true
+    fi
+  elif command -v netstat >/dev/null 2>&1; then
+    if netstat -uln | grep -q ":${port} "; then
+      is_listening=true
+    fi
+  fi
+
+  if [ "$is_listening" = true ]; then
+    echo -e "  Listener (UDP ${port}): ${C_GREEN}ONLINE (Active)${C_RESET}"
+  else
+    echo -e "  Listener (UDP ${port}): ${C_YELLOW}STANDBY (Ready to start on awg0/wg0)${C_RESET}"
+  fi
+  echo -e "  Obfuscation Params:    ${C_GREEN}INITIALIZED (H1-H4, Jc, S1-S2 present)${C_RESET}"
+  echo
+}
+
+# Main command dispatcher
+case "${1:-show}" in
+  init)
+    awg_init
+    echo -e "${C_GREEN}[+] AmneziaWG obfuscated environment successfully initialized.${C_RESET}"
+    ;;
+  render-server)
+    awg_render_server
+    echo -e "${C_GREEN}[+] Server configuration rendered to ${AWG_SERVER_CONF}.${C_RESET}"
+    ;;
+  client-config|render-client|client)
+    awg_render_client "${2:-client}" "${3:-10.9.0.2}"
+    ;;
+  show)
+    awg_show
+    ;;
+  status)
+    awg_status
+    ;;
+  *)
+    echo "Usage: mubx-awg {init|render-server|client-config [user]|show|status}" >&2
+    exit 1
+    ;;
+esac

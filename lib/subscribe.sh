@@ -463,6 +463,20 @@ mubx_sub_generate() { # $1 user name
     rm -f "$out"/wireguard*.conf "$out"/wg*.conf 2>/dev/null || true
   fi
 
+  # Publish AmneziaWG (Obfuscated WireGuard) config if user is authorized
+  if mubx_user_has_proto "$user" "amneziawg" || mubx_user_has_proto "$user" "wireguard"; then
+    if [ -f /etc/wireguard/mubx-awg-client.conf ]; then
+      cp -f /etc/wireguard/mubx-awg-client.conf "$out/awg.conf" 2>/dev/null || true
+      cp -f /etc/wireguard/mubx-awg-client.conf "$out/amneziawg.conf" 2>/dev/null || true
+      cp -f /etc/wireguard/mubx-awg-client.conf "$out/awg-51821.conf" 2>/dev/null || true
+    elif [ -x /usr/local/bin/mubx-awg ]; then
+      /usr/local/bin/mubx-awg client-config "$user" > "$out/awg.conf" 2>/dev/null || true
+      cp -f "$out/awg.conf" "$out/amneziawg.conf" 2>/dev/null || true
+    fi
+  else
+    rm -f "$out"/awg*.conf "$out"/amneziawg*.conf 2>/dev/null || true
+  fi
+
   chmod 0644 "$out"/* 2>/dev/null || true
   printf 'https://%s/sub/%s/index.txt\n' "$DOMAIN" "$token"
 }

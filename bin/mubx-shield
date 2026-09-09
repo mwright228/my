@@ -1,0 +1,340 @@
+#!/bin/bash
+# ==============================================================================
+# MUB-X Kernel Scanner Auto-Shield (bin/mubx-shield)
+#
+# Hardware/kernel-level defense engine using Linux ipset + Netfilter.
+# Drops automated port scanners, open-relay abusers, and mass-probing botnets
+# at the Linux kernel PREROUTING/INPUT hook before packets ever consume CPU
+# or socket file descriptors in Python (Chameleon), Nginx, or HAProxy.
+#
+# Usage:
+#   mubx-shield init                # Create ipsets and insert iptables drop rules
+#   mubx-shield block <ip> [r] [t]  # Block IP/CIDR with reason and timeout (default 300s)
+#   mubx-shield unblock <ip>        # Unblock IP/CIDR
+#   mubx-shield list                # Display active kernel blocks & drop counters
+#   mubx-shield sync                # Pull active jails from Chameleon stats API
+#   mubx-shield update-scanners     # Load known mass-scanner subnets (Censys, Shodan, etc.)
+#   mubx-shield flush               # Clear all dynamic IP blocks
+#   mubx-shield status              # Show shield health, ipset rules, and packet drops
+# ==============================================================================
+set -euo pipefail
+
+# Check root privileges unless explicitly running in mock/test mode
+[ "$(id -u)" -eq 0 ] || [ "${MUBX_ALLOW_NON_ROOT:-0}" -eq 1 ] || [ "${MUBX_SHIELD_DRY_RUN:-0}" -eq 1 ] || {
+  echo "[!] Run mubx-shield as root." >&2
+  exit 1
+}
+
+# Color formatting
+C_RESET="\033[0m"
+C_BOLD="\033[1m"
+C_RED="\033[31m"
+C_GREEN="\033[32m"
+C_YELLOW="\033[33m"
+C_CYAN="\033[36m"
+C_SLATE="\033[90m"
+
+SET_DYNAMIC="mubx-shield"
+SET_STATIC="mubx-scanners"
+CHAMELEON_STATS_URL="${CHAMELEON_STATS_URL:-http://127.0.0.1:18088/stats}"
+
+# Helper to execute ipset / iptables or mock in test mode
+run_cmd() {
+  if [ "${MUBX_SHIELD_DRY_RUN:-0}" -eq 1 ]; then
+    echo "[DRY-RUN] $*"
+    return 0
+  fi
+  "$@"
+}
+
+# Validate IP or CIDR format
+is_valid_ip_or_cidr() {
+  local target="$1"
+  # IPv4 address or CIDR notation
+  local ipv4_regex='^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$'
+  # IPv6 address or CIDR notation
+  local ipv6_regex='^[0-9a-fA-F:]+(/[0-9]{1,3})?$'
+
+  if [[ "$target" =~ $ipv4_regex ]]; then
+    return 0
+  elif [[ "$target" =~ $ipv6_regex ]]; then
+    return 0
+  fi
+  return 1
+}
+
+# Initialize ipsets and iptables filter chains
+shield_init() {
+  if ! command -v ipset >/dev/null 2>&1; then
+    echo -e "${C_RED}[!] ipset command not found. Install it with: apt-get install -y ipset${C_RESET}" >&2
+    return 1
+  fi
+
+  # Create dynamic auto-jail set with timeout and drop counters
+  if ! ipset list "$SET_DYNAMIC" >/dev/null 2>&1; then
+    run_cmd ipset create "$SET_DYNAMIC" hash:net hashsize 4096 maxelem 65536 counters timeout 86400 comment 2>/dev/null || \
+    run_cmd ipset create "$SET_DYNAMIC" hash:net hashsize 4096 maxelem 65536 counters timeout 86400
+    echo -e "${C_GREEN}[+] Created dynamic kernel set: $SET_DYNAMIC${C_RESET}"
+  fi
+
+  # Create static known-scanner set without timeout
+  if ! ipset list "$SET_STATIC" >/dev/null 2>&1; then
+    run_cmd ipset create "$SET_STATIC" hash:net hashsize 4096 maxelem 65536 counters comment 2>/dev/null || \
+    run_cmd ipset create "$SET_STATIC" hash:net hashsize 4096 maxelem 65536 counters
+    echo -e "${C_GREEN}[+] Created static scanner kernel set: $SET_STATIC${C_RESET}"
+  fi
+
+  # Insert iptables drop rules at the top of INPUT chain if not already present
+  if command -v iptables >/dev/null 2>&1; then
+    if ! iptables -C INPUT -m set --match-set "$SET_DYNAMIC" src -j DROP >/dev/null 2>&1; then
+      run_cmd iptables -I INPUT 1 -m set --match-set "$SET_DYNAMIC" src -j DROP
+      echo -e "${C_GREEN}[+] Installed iptables rule for $SET_DYNAMIC${C_RESET}"
+    fi
+    if ! iptables -C INPUT -m set --match-set "$SET_STATIC" src -j DROP >/dev/null 2>&1; then
+      run_cmd iptables -I INPUT 1 -m set --match-set "$SET_STATIC" src -j DROP
+      echo -e "${C_GREEN}[+] Installed iptables rule for $SET_STATIC${C_RESET}"
+    fi
+  fi
+}
+
+# Block an IP or CIDR in the dynamic shield
+shield_block() {
+  local target="${1:-}"
+  local reason="${2:-manual_block}"
+  local timeout="${3:-300}"
+
+  if [ -z "$target" ]; then
+    echo -e "${C_RED}[!] Usage: mubx-shield block <ip_or_cidr> [reason] [timeout_secs]${C_RESET}" >&2
+    return 1
+  fi
+
+  if ! is_valid_ip_or_cidr "$target"; then
+    echo -e "${C_RED}[!] Invalid IP or CIDR: $target${C_RESET}" >&2
+    return 1
+  fi
+
+  # Ensure shield is initialized
+  shield_init >/dev/null 2>&1 || true
+
+  # Sanitize reason to safe characters
+  local clean_reason
+  clean_reason="$(echo "$reason" | tr -dc 'a-zA-Z0-9_-' | head -c 48)"
+  clean_reason="${clean_reason:-blocked}"
+
+  run_cmd ipset add "$SET_DYNAMIC" "$target" timeout "$timeout" comment "$clean_reason" -exist 2>/dev/null || \
+  run_cmd ipset add "$SET_DYNAMIC" "$target" timeout "$timeout" -exist
+
+  echo -e "${C_GREEN}[+] Kernel-shielded: ${C_BOLD}${target}${C_RESET} (${clean_reason}, ${timeout}s timeout)"
+}
+
+# Unblock an IP or CIDR from all sets
+shield_unblock() {
+  local target="${1:-}"
+  if [ -z "$target" ]; then
+    echo -e "${C_RED}[!] Usage: mubx-shield unblock <ip_or_cidr>${C_RESET}" >&2
+    return 1
+  fi
+
+  run_cmd ipset del "$SET_DYNAMIC" "$target" 2>/dev/null || true
+  run_cmd ipset del "$SET_STATIC" "$target" 2>/dev/null || true
+  echo -e "${C_YELLOW}[-] Unblocked: ${target}${C_RESET}"
+}
+
+# List all blocked entries and drop statistics
+shield_list() {
+  echo -e "\n${C_BOLD}=== MUB-X KERNEL SCANNER AUTO-SHIELD ===${C_RESET}"
+  if ! command -v ipset >/dev/null 2>&1; then
+    echo -e "${C_RED}[!] ipset is not installed.${C_RESET}"
+    return 1
+  fi
+
+  echo -e "\n${C_CYAN}── Dynamic Auto-Jail Set (${SET_DYNAMIC}) ──────────────────────────${C_RESET}"
+  if ipset list "$SET_DYNAMIC" >/dev/null 2>&1; then
+    ipset list "$SET_DYNAMIC" | awk '
+      /^Members:/ { in_members=1; print "Target               Packets      Bytes        Timeout (s)  Comment"; print "-------------------  -----------  -----------  -----------  -------"; next }
+      in_members && NF >= 1 {
+        target = $1
+        packets = "0"; bytes = "0"; timeout = "-"; comment = ""
+        for (i=2; i<=NF; i++) {
+          if ($i == "packets") packets = $(i+1)
+          if ($i == "bytes") bytes = $(i+1)
+          if ($i == "timeout") timeout = $(i+1)
+          if ($i == "comment") {
+            for (j=i+1; j<=NF; j++) comment = comment " " $(j)
+          }
+        }
+        printf "%-20s %-12s %-12s %-12s %s\n", target, packets, bytes, timeout, comment
+      }
+    '
+  else
+    echo -e "${C_SLATE}(Set not created or inactive)${C_RESET}"
+  fi
+
+  echo -e "\n${C_CYAN}── Known Scanner Datacenters (${SET_STATIC}) ──────────────────────${C_RESET}"
+  if ipset list "$SET_STATIC" >/dev/null 2>&1; then
+    local count
+    count="$(ipset list "$SET_STATIC" | grep -E -c '^[0-9a-fA-F]' || true)"
+    echo -e "Active scanner subnets: ${C_BOLD}${count}${C_RESET} subnets loaded."
+  else
+    echo -e "${C_SLATE}(Set not created or inactive)${C_RESET}"
+  fi
+  echo
+}
+
+# Synchronize in-memory jails from Chameleon stats API
+shield_sync() {
+  echo -e "${C_CYAN}[*] Synchronizing kernel shield with Chameleon telemetry...${C_RESET}"
+  if ! command -v curl >/dev/null 2>&1; then
+    echo -e "${C_RED}[!] curl is required for sync.${C_RESET}" >&2
+    return 1
+  fi
+
+  local stats_json
+  stats_json="$(curl -s --max-time 2 "$CHAMELEON_STATS_URL" 2>/dev/null || true)"
+  if [ -z "$stats_json" ]; then
+    echo -e "${C_YELLOW}[!] Chameleon stats endpoint ($CHAMELEON_STATS_URL) unreachable.${C_RESET}"
+    return 0
+  fi
+
+  local jailed_count=0
+  if command -v jq >/dev/null 2>&1; then
+    local jailed_ips
+    jailed_ips="$(echo "$stats_json" | jq -r '.jailed_ips // [] | keys[]' 2>/dev/null || true)"
+    for ip in $jailed_ips; do
+      if [ -n "$ip" ] && is_valid_ip_or_cidr "$ip"; then
+        shield_block "$ip" "chameleon_sync" 300 >/dev/null
+        ((jailed_count++))
+      fi
+    done
+  fi
+
+  echo -e "${C_GREEN}[+] Successfully synced ${jailed_count} jailed IP(s) into Linux kernel Netfilter.${C_RESET}"
+}
+
+# Update known scanner subnets (Censys, Shodan, Shadowserver, Project Sonar)
+shield_update_scanners() {
+  echo -e "${C_CYAN}[*] Updating known scanner subnets into ${SET_STATIC}...${C_RESET}"
+  shield_init >/dev/null 2>&1 || true
+
+  # Curated high-confidence scanner CIDRs
+  local scanner_cidrs=(
+    # Censys Scanner Fleet
+    "162.142.125.0/24"
+    "167.94.138.0/24"
+    "167.94.145.0/24"
+    "167.94.146.0/24"
+    "167.248.133.0/24"
+    "192.35.168.0/23"
+
+    # Shodan Crawler Fleet
+    "198.20.69.0/24"
+    "198.20.70.0/24"
+    "198.20.99.0/24"
+    "208.180.20.0/24"
+    "216.117.2.0/24"
+    "66.240.236.0/24"
+    "71.6.135.0/24"
+    "71.6.165.0/24"
+    "71.6.167.0/24"
+
+    # Shadowserver Foundation Scanners
+    "184.105.139.64/26"
+    "184.105.247.192/26"
+    "216.218.206.64/26"
+    "64.88.196.0/24"
+
+    # Palo Alto Networks / Unit 42 / Cybereason Active Probes
+    "74.120.14.0/24"
+    "87.236.176.0/24"
+    "193.163.125.0/24"
+  )
+
+  local added=0
+  for cidr in "${scanner_cidrs[@]}"; do
+    run_cmd ipset add "$SET_STATIC" "$cidr" comment "scanner_intel" -exist 2>/dev/null || \
+    run_cmd ipset add "$SET_STATIC" "$cidr" -exist 2>/dev/null || true
+    ((added++))
+  done
+
+  echo -e "${C_GREEN}[+] Loaded ${added} mass-scanner subnets into kernel filter.${C_RESET}"
+}
+
+# Flush dynamic auto-jail set
+shield_flush() {
+  if command -v ipset >/dev/null 2>&1 && ipset list "$SET_DYNAMIC" >/dev/null 2>&1; then
+    run_cmd ipset flush "$SET_DYNAMIC"
+    echo -e "${C_YELLOW}[+] Flushed all dynamic kernel blocks in ${SET_DYNAMIC}.${C_RESET}"
+  fi
+}
+
+# Shield status report
+shield_status() {
+  echo -e "\n${C_BOLD}=== MUB-X KERNEL SHIELD STATUS ===${C_RESET}"
+  if ! command -v ipset >/dev/null 2>&1; then
+    if [ "${MUBX_SHIELD_DRY_RUN:-0}" -eq 1 ]; then
+      echo -e "  Dynamic Shield Set:    ${C_GREEN}ONLINE (Simulated)${C_RESET}"
+      echo -e "  Dynamic Netfilter Hook: ${C_GREEN}ACTIVE (Simulated)${C_RESET}"
+      echo -e "  Scanner Intel Set:     ${C_GREEN}ONLINE (Simulated)${C_RESET}"
+      echo -e "  Scanner Netfilter Hook: ${C_GREEN}ACTIVE (Simulated)${C_RESET}"
+      echo
+      return 0
+    fi
+    echo -e "${C_RED}[!] ipset command not installed.${C_RESET}"
+    return 1
+  fi
+
+  local dyn_ok="OFFLINE"
+  local stat_ok="OFFLINE"
+  local ipt_dyn="NOT CONFIGURED"
+  local ipt_stat="NOT CONFIGURED"
+
+  if ipset list "$SET_DYNAMIC" >/dev/null 2>&1; then dyn_ok="${C_GREEN}ONLINE${C_RESET}"; fi
+  if ipset list "$SET_STATIC" >/dev/null 2>&1; then stat_ok="${C_GREEN}ONLINE${C_RESET}"; fi
+
+  if command -v iptables >/dev/null 2>&1; then
+    if iptables -C INPUT -m set --match-set "$SET_DYNAMIC" src -j DROP >/dev/null 2>&1; then
+      ipt_dyn="${C_GREEN}ACTIVE (INPUT -j DROP)${C_RESET}"
+    fi
+    if iptables -C INPUT -m set --match-set "$SET_STATIC" src -j DROP >/dev/null 2>&1; then
+      ipt_stat="${C_GREEN}ACTIVE (INPUT -j DROP)${C_RESET}"
+    fi
+  fi
+
+  echo -e "  Dynamic Shield Set:    $dyn_ok"
+  echo -e "  Dynamic Netfilter Hook: $ipt_dyn"
+  echo -e "  Scanner Intel Set:     $stat_ok"
+  echo -e "  Scanner Netfilter Hook: $ipt_stat"
+  echo
+}
+
+# Main command dispatch
+case "${1:-status}" in
+  init)
+    shield_init
+    ;;
+  block)
+    shield_block "${2:-}" "${3:-manual_block}" "${4:-300}"
+    ;;
+  unblock)
+    shield_unblock "${2:-}"
+    ;;
+  list|show)
+    shield_list
+    ;;
+  sync)
+    shield_sync
+    ;;
+  update-scanners|update)
+    shield_update_scanners
+    ;;
+  flush)
+    shield_flush
+    ;;
+  status)
+    shield_status
+    ;;
+  *)
+    echo "Usage: mubx-shield {init|block <ip> [reason] [timeout]|unblock <ip>|list|sync|update-scanners|flush|status}" >&2
+    exit 1
+    ;;
+esac

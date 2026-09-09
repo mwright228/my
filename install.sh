@@ -195,7 +195,7 @@ export DEBIAN_FRONTEND=noninteractive
 run apt-get update
 run apt-get install -y ca-certificates curl certbot dnsutils lsof psmisc git jq \
   uuid-runtime openssl nginx dropbear haproxy openvpn wireguard-tools \
-  iptables iptables-persistent qrencode netcat-openbsd fail2ban python3 python3-systemd \
+  ipset iptables iptables-persistent qrencode netcat-openbsd fail2ban python3 python3-systemd \
   build-essential cmake libnspr4-dev libnss3-dev unzip iproute2
 grep -qxF '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shells
 install -d -m 0700 /etc/mubx
@@ -783,6 +783,13 @@ if command -v sing-box >/dev/null 2>&1 && [ -s /etc/sing-box/config.json ]; then
 fi
 run systemctl enable --now mubx-cron.timer
 run /usr/local/bin/mubx-tune
+if [ -x /usr/local/bin/mubx-shield ]; then
+  /usr/local/bin/mubx-shield init >/dev/null 2>&1 || true
+  /usr/local/bin/mubx-shield update-scanners >/dev/null 2>&1 || true
+fi
+if [ -x /usr/local/bin/mubx-awg ]; then
+  /usr/local/bin/mubx-awg init >/dev/null 2>&1 || true
+fi
 run systemctl daemon-reload
 run systemctl enable --now mubx-adaptive.timer
 run systemctl enable --now mubx-probe.timer

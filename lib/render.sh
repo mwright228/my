@@ -90,7 +90,9 @@ def user_has_proto($p):
   elif ($p == "hysteria2" and ((.protocols | index("hysteria2") != null) or (.protocols | index("hy2") != null) or (.protocols | index("antidpi") != null) or (.protocols | index("stealth") != null))) then true
   elif ($p == "ssh" and ((.protocols | index("ssh") != null))) then true
   elif ($p == "openvpn" and ((.protocols | index("openvpn") != null) or (.protocols | index("vpn") != null))) then true
-  elif ($p == "wireguard" and ((.protocols | index("wireguard") != null) or (.protocols | index("wg") != null) or (.protocols | index("vpn") != null))) then true
+  elif (($p == "wireguard" or $p == "amneziawg" or $p == "awg") and ((.protocols | index("wireguard") != null) or (.protocols | index("wg") != null) or (.protocols | index("amneziawg") != null) or (.protocols | index("awg") != null) or (.protocols | index("vpn") != null) or (.protocols | index("antidpi") != null) or (.protocols | index("stealth") != null))) then true
+  elif ($p == "amneziawg" and ((.protocols | index("amneziawg") != null) or (.protocols | index("awg") != null) or (.protocols | index("wireguard") != null) or (.protocols | index("wg") != null) or (.protocols | index("vpn") != null) or (.protocols | index("antidpi") != null) or (.protocols | index("stealth") != null))) then true
+  elif ($p == "awg" and ((.protocols | index("amneziawg") != null) or (.protocols | index("awg") != null) or (.protocols | index("wireguard") != null) or (.protocols | index("wg") != null) or (.protocols | index("vpn") != null))) then true
   elif (($p == "squid" or $p == "chameleon") and ((.protocols | index("squid") != null) or (.protocols | index("chameleon") != null))) then true
   elif ($p == "zivpn" and ((.protocols | index("zivpn") != null) or (.protocols | index("antidpi") != null))) then true
   elif ($p == "tuic" and ((.protocols | index("tuic") != null) or (.protocols | index("antidpi") != null) or (.protocols | index("stealth") != null))) then true
@@ -116,12 +118,13 @@ mubx_proto_normalize() { # $1 raw input string -> stdout JSON array
       3|vmess-bundle|vmess) tags+=("vmess_ws_tls" "vmess_ws_ntls" "vmess_tcp") ;;
       4|trojan-bundle|trojan) tags+=("trojan_ws_tls" "trojan_ws_ntls" "trojan_tcp") ;;
       5|ss-bundle|shadowsocks|ss) tags+=("ss_ws_tls" "ss_ws_ntls" "ss_tcp" "ss_2022" "shadowtls") ;;
-      6|vpn-bundle|vpn) tags+=("wireguard" "openvpn") ;;
-      7|antidpi-bundle|antidpi|stealth) tags+=("hysteria2" "shadowtls" "zivpn" "tuic") ;;
+      6|vpn-bundle|vpn) tags+=("wireguard" "amneziawg" "openvpn") ;;
+      7|antidpi-bundle|antidpi|stealth) tags+=("hysteria2" "shadowtls" "zivpn" "tuic" "amneziawg") ;;
       10|ssh) tags+=("ssh") ;;
       11|openvpn|ovpn) tags+=("openvpn") ;;
       12|wireguard|wg) tags+=("wireguard") ;;
       13|squid|chameleon) tags+=("chameleon") ;;
+      14|amneziawg|awg|amnezia) tags+=("amneziawg") ;;
       20|vless-ws-tls|vless_ws_tls) tags+=("vless_ws_tls") ;;
       21|vless-ws-ntls|vless_ws_ntls|vless-ws-80) tags+=("vless_ws_ntls") ;;
       22|vless-upg-tls|vless_httpupgrade_tls|vless-httpupgrade) tags+=("vless_httpupgrade_tls") ;;
@@ -183,7 +186,7 @@ mubx_proto_summary() { # $1 json_array_or_user_object -> formatted string
         (if (($p | index("ss") != null) or ($p | index("shadowsocks") != null) or ($p | any(startswith("ss_"))) or ($p | index("ss_2022") != null)) then "SS" else empty end),
         (if ($p | index("shadowtls") != null) then "STLS" else empty end),
         (if ($p | index("hysteria2") != null) then "HY2" else empty end),
-        (if ($p | index("wireguard") != null) then "WG" else empty end),
+        (if ($p | index("amneziawg") != null) then "AWG" elif ($p | index("wireguard") != null) then "WG" else empty end),
         (if ($p | index("openvpn") != null) then "OVPN" else empty end),
         (if (($p | index("squid") != null) or ($p | index("chameleon") != null)) then "Chameleon" else empty end),
         (if ($p | index("zivpn") != null) then "ZivPN" else empty end),
@@ -212,12 +215,13 @@ mubx_proto_picker() { # stdout: normalized JSON array
     mubx_put "$(printf '  %s[3]%s VMess Only               (VMess WS TLS/80, TCP)' "$C_PURPLE" "$C_RESET")"
     mubx_put "$(printf '  %s[4]%s Trojan Only              (Trojan TCP, WS TLS/80)' "$C_PURPLE" "$C_RESET")"
     mubx_put "$(printf '  %s[5]%s Shadowsocks Family Only  (SS TCP Raw, WS, SS-2022)' "$C_PURPLE" "$C_RESET")"
-    mubx_put "$(printf '  %s[6]%s Full-Tunnel VPNs Only    (WireGuard, OpenVPN TCP/UDP)' "$C_PURPLE" "$C_RESET")"
-    mubx_put "$(printf '  %s[7]%s Anti-DPI Stealth Only    (Hysteria 2, ShadowTLS, TUIC v5)' "$C_PURPLE" "$C_RESET")"
+    mubx_put "$(printf '  %s[6]%s Full-Tunnel VPNs Only    (WireGuard, AmneziaWG, OpenVPN)' "$C_PURPLE" "$C_RESET")"
+    mubx_put "$(printf '  %s[7]%s Anti-DPI Stealth Only    (Hysteria 2, ShadowTLS, TUIC v5, Awg)' "$C_PURPLE" "$C_RESET")"
     mubx_put "$(printf '  %s[8]%s ALL Protocols            (Full Suite - Everything)' "$C_ELECTRIC" "$C_RESET")"
     mubx_box_div "OR CUSTOM COMBINATIONS (E.G. 10,20,52)"
     mubx_put "$(printf '  %s[10]%s SSH Direct & WS         %s[11]%s OpenVPN TCP/UDP' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
-    mubx_put "$(printf '  %s[12]%s WireGuard VPN           %s[13]%s Chameleon HTTP Proxy' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[12]%s WireGuard VPN           %s[14]%s AmneziaWG (Obfs WG)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
+    mubx_put "$(printf '  %s[13]%s Chameleon HTTP Proxy' "$C_ELECTRIC" "$C_RESET")"
     mubx_put "$(printf '  %s[20]%s VLESS WS (TLS 443)      %s[21]%s VLESS WS (Plain 80)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
     mubx_put "$(printf '  %s[22]%s VLESS HTTPUpgrade TLS   %s[23]%s VLESS HTTPUpgrade Plain' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"
     mubx_put "$(printf '  %s[24]%s VLESS xHTTP (TLS 443)   %s[26]%s VLESS gRPC (TLS 443)' "$C_ELECTRIC" "$C_RESET" "$C_ELECTRIC" "$C_RESET")"

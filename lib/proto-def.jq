@@ -18,7 +18,9 @@ def user_has_proto($p):
   elif ($p == "hysteria2" and ((.protocols | index("hysteria2") != null) or (.protocols | index("hy2") != null) or (.protocols | index("antidpi") != null) or (.protocols | index("stealth") != null))) then true
   elif ($p == "ssh" and ((.protocols | index("ssh") != null))) then true
   elif ($p == "openvpn" and ((.protocols | index("openvpn") != null) or (.protocols | index("vpn") != null))) then true
-  elif ($p == "wireguard" and ((.protocols | index("wireguard") != null) or (.protocols | index("wg") != null) or (.protocols | index("vpn") != null))) then true
+  elif (($p == "wireguard" or $p == "amneziawg" or $p == "awg") and ((.protocols | index("wireguard") != null) or (.protocols | index("wg") != null) or (.protocols | index("amneziawg") != null) or (.protocols | index("awg") != null) or (.protocols | index("vpn") != null) or (.protocols | index("antidpi") != null) or (.protocols | index("stealth") != null))) then true
+  elif ($p == "amneziawg" and ((.protocols | index("amneziawg") != null) or (.protocols | index("awg") != null) or (.protocols | index("wireguard") != null) or (.protocols | index("wg") != null) or (.protocols | index("vpn") != null) or (.protocols | index("antidpi") != null) or (.protocols | index("stealth") != null))) then true
+  elif ($p == "awg" and ((.protocols | index("amneziawg") != null) or (.protocols | index("awg") != null) or (.protocols | index("wireguard") != null) or (.protocols | index("wg") != null) or (.protocols | index("vpn") != null))) then true
   elif (($p == "squid" or $p == "chameleon") and ((.protocols | index("squid") != null) or (.protocols | index("chameleon") != null))) then true
   elif ($p == "zivpn" and ((.protocols | index("zivpn") != null) or (.protocols | index("antidpi") != null))) then true
   elif ($p == "tuic" and ((.protocols | index("tuic") != null) or (.protocols | index("antidpi") != null) or (.protocols | index("stealth") != null))) then true

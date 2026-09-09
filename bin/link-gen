@@ -411,7 +411,7 @@ fi
 # ============================================================================
 # 5. FULL-TUNNEL VPN PROFILES & DOWNLOAD LINKS
 # ============================================================================
-if [ "$SHOW_INJECTOR_ONLY" -eq 0 ] && { u_has "wireguard" || u_has "openvpn"; }; then
+if [ "$SHOW_INJECTOR_ONLY" -eq 0 ] && { u_has "wireguard" || u_has "amneziawg" || u_has "openvpn"; }; then
   card_header "wg-quick@wg0 openvpn-server@tcp" "FULL-TUNNEL VPNS" "PROFILES & DOWNLOADS"
 
   if u_has "wireguard"; then
@@ -424,6 +424,21 @@ if [ "$SHOW_INJECTOR_ONLY" -eq 0 ] && { u_has "wireguard" || u_has "openvpn"; };
       note "Local File:  $WG_CONF"
       if [ -n "$sub_tok" ] && [ -n "${DOMAIN:-}" ]; then
         block "https://${DOMAIN}/sub/${sub_tok}/wireguard.conf"
+      fi
+    fi
+  fi
+
+  if u_has "amneziawg" || u_has "wireguard"; then
+    AWG_CONF=/etc/wireguard/mubx-awg-client.conf
+    if [ -f "$AWG_CONF" ]; then
+      item "AWG" "AmneziaWG Obfuscated WireGuard QR Code (UDP 51821)"
+      if command -v qrencode >/dev/null 2>&1; then
+        qrencode -t ansiutf8 < "$AWG_CONF"
+      fi
+      note "Obfuscated with randomized Jc, Jmin/max, S1/S2, and H1-H4 headers"
+      note "Local File:  $AWG_CONF"
+      if [ -n "$sub_tok" ] && [ -n "${DOMAIN:-}" ]; then
+        block "https://${DOMAIN}/sub/${sub_tok}/awg.conf"
       fi
     fi
   fi
