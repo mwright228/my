@@ -107,6 +107,7 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
     else
       printf 'hysteria2://%s@%s:4433/?sni=%s#MUBX-Hysteria2\n' "$HY2_PASS" "$dom" "$dom"
     fi
+    printf 'hysteria2://%s@%s:443/?sni=%s#MUBX-Hysteria2-443\n' "$HY2_PASS" "$dom" "$dom"
   fi
   # Xray WS-family transports over TLS on 443
   if mubx_user_has_proto "$user" "vless_ws_tls"; then
@@ -242,6 +243,11 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
       password: \$hy2pass, sni: \$dom, \"skip-cert-verify\": false,
       up: \"100 Mbps\", down: \"500 Mbps\"
     } + (if \$hy2range != \"\" then {\"ports\": (\$hy2range | gsub(\":\"; \"-\"))} else {} end);
+    def hy2_443: {
+      name: \"MUBX-Hysteria2-443\", type: \"hysteria2\", server: \$dom, port: 443,
+      password: \$hy2pass, sni: \$dom, \"skip-cert-verify\": false,
+      up: \"100 Mbps\", down: \"500 Mbps\"
+    };
     def vws(path; name): {
       name: name, type: \"vless\", server: \$dom, port: 443, uuid: \$uuid,
       udp: true, tls: true, servername: \$dom, network: \"ws\",
@@ -253,7 +259,7 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
       plugin: \"v2ray-plugin\", \"plugin-opts\": {
         mode: \"websocket\", tls: true, host: \$dom, path: (\"/ss22-\" + \$user), mux: false
       }}] else [] end);
-    (if (cur_user | user_has_proto(\"hysteria2\")) then [ hy2 ] else [] end)
+    (if (cur_user | user_has_proto(\"hysteria2\")) then [ hy2, hy2_443 ] else [] end)
     + (if (\$bughost != \"\" and (cur_user | user_has_proto(\"hysteria2\"))) then [{
         name: \"MUBX-HY2-BugHost\", type: \"hysteria2\", server: \$myip, port: 443,
         password: \$hy2pass, sni: \$bughost, \"skip-cert-verify\": true,
@@ -385,9 +391,13 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
     def cur_user: {name: \$user, protocols: \$protos};
     def hop(h): (if \$hy2range != \"\" then {\"server_ports\": [\"4433\", \$hy2range]} else {} end);
     (
-      (if (cur_user | user_has_proto(\"hysteria2\")) then [{
-        type: \"hysteria2\", tag: \"MUBX-Hysteria2\", server: \$dom, server_port: 4433,
-        password: \$hy2pass, tls: {enabled: true, server_name: \$dom}} + hop(1)
+      (if (cur_user | user_has_proto(\"hysteria2\")) then [
+        ({
+          type: \"hysteria2\", tag: \"MUBX-Hysteria2\", server: \$dom, server_port: 4433,
+          password: \$hy2pass, tls: {enabled: true, server_name: \$dom}} + hop(1)),
+        {
+          type: \"hysteria2\", tag: \"MUBX-Hysteria2-443\", server: \$dom, server_port: 443,
+          password: \$hy2pass, tls: {enabled: true, server_name: \$dom}}
       ] else [] end)
       + (if (\$bughost != \"\" and (cur_user | user_has_proto(\"hysteria2\"))) then [{
         type: \"hysteria2\", tag: \"MUBX-HY2-BugHost\", server: \$myip, server_port: 443,

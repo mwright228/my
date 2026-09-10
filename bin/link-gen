@@ -181,14 +181,16 @@ if [ "$SHOW_INJECTOR_ONLY" -eq 0 ] && { u_has "hysteria2" || u_has "shadowtls" |
   # Hysteria 2
   if u_has "hysteria2" && [ -n "$HY2_PASS" ]; then
     HY2_HOP_RANGE="$(sed -n 's/^HY2_HOPPING_RANGE=//p' /etc/mubx/hy2-hopping.conf 2>/dev/null | head -n1)"
-    item "HY2" "Hysteria 2 Direct (QUIC / UDP 4433)"
+    item "HY2" "Hysteria 2 Direct (QUIC / UDP 443 & 4433)"
     if [ -n "$HY2_HOP_RANGE" ]; then
       block "hysteria2://${HY2_PASS}@${DOMAIN}:4433/?sni=${DOMAIN}&mport=4433%2C${HY2_HOP_RANGE}#MUBX-Hysteria2"
       note "Port hopping active: UDP ${HY2_HOP_RANGE} → 4433 (bypass ISP rate-limiting)"
     else
       block "hysteria2://${HY2_PASS}@${DOMAIN}:4433/?sni=${DOMAIN}#MUBX-Hysteria2"
     fi
-    manual "Address: ${DOMAIN} | Port: 4433 | Password: ${HY2_PASS} | SNI: ${DOMAIN}"
+    block "hysteria2://${HY2_PASS}@${DOMAIN}:443/?sni=${DOMAIN}#MUBX-Hysteria2-443"
+    manual "Address: ${DOMAIN} | Port: 443 (or 4433) | Password: ${HY2_PASS} | SNI: ${DOMAIN}"
+    note "UDP 443 is redirected by the kernel directly to Hysteria 2 for carrier compatibility."
 
     if [ "$BUG" != "$DOMAIN" ]; then
       item "HY2-BUGHOST" "Hysteria 2 Carrier SNI Bug-Host (UDP 443 Direct)"
