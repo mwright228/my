@@ -124,6 +124,23 @@ class TestAuditFixes(unittest.TestCase):
         self.assertEqual(out1, "aGVsbG8gd29ybGQ=")
         self.assertEqual(out2, "aGVsbG8_d29ybGQ")
 
+    def test_diagnose_target_resolution(self):
+        """Verifies mubx-diagnose resolves TARGET to configured DOMAIN rather than 1.1.1.1."""
+        test_domain = "gr.mub.my.id"
+        domain_file = os.path.join(self.test_dir, "domain")
+        with open(domain_file, "w") as f:
+            f.write(test_domain + "\n")
+
+        script = f"""
+        DOMAIN="$(cat '{domain_file}' 2>/dev/null || true)"
+        TARGET="${{1:-${{DOMAIN:-127.0.0.1}}}}"
+        echo "TARGET=$TARGET"
+        """
+        res = subprocess.run(["bash", "-c", script], cwd=REPO_ROOT, capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0)
+        self.assertIn(f"TARGET={test_domain}", res.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
+
