@@ -328,8 +328,13 @@ for svc in "${SERVICES[@]}"; do
   systemctl cat "$svc.service" >/dev/null 2>&1 || continue
   [ "${was_active[$svc]}" -eq 1 ] || continue
   if ! timeout 6 systemctl restart "$svc" 2>/dev/null || ! systemctl is-active --quiet "$svc" 2>/dev/null; then
-    mubx_card "  $svc" "$(mubx_pill DOWN "FAILED")"
-    down=$((down + 1))
+    sleep 1
+    if systemctl is-active --quiet "$svc" 2>/dev/null || { systemctl restart "$svc" 2>/dev/null && systemctl is-active --quiet "$svc" 2>/dev/null; }; then
+      mubx_card "  $svc" "$(mubx_pill UP "ONLINE")"
+    else
+      mubx_card "  $svc" "$(mubx_pill DOWN "FAILED")"
+      down=$((down + 1))
+    fi
   else
     mubx_card "  $svc" "$(mubx_pill UP "ONLINE")"
   fi

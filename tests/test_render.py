@@ -45,15 +45,21 @@ class TestRenderConfigs(unittest.TestCase):
         # Verify placeholders were substituted
         self.assertNotIn("__DOMAIN__", content)
         self.assertNotIn("__SHADOWTLS_SNI__", content)
-        self.assertIn("use_backend srv_singbox if { req.ssl_sni -i decoy.microsoft.com }", content)
-        self.assertIn("use_backend srv_nginx if { req_ssl_hello_type 1 }", content)
+        self.assertIn("acl is_vps_domain req.ssl_sni -i vpn.example.com", content)
+        self.assertIn("acl is_stls_sni req.ssl_sni -i decoy.microsoft.com", content)
+        self.assertIn("use_backend srv_singbox if is_stls_sni", content)
+        self.assertIn("use_backend srv_chameleon_ssl if is_tls_hello has_sni !is_vps_domain", content)
+        self.assertIn("use_backend srv_nginx if is_tls_hello", content)
 
-        # Verify rule ordering: ShadowTLS SNI rule must come BEFORE req_ssl_hello_type 1 catch-all
-        pos_stls = content.find("use_backend srv_singbox if { req.ssl_sni -i decoy.microsoft.com }")
-        pos_nginx = content.find("use_backend srv_nginx if { req_ssl_hello_type 1 }")
+        # Verify rule ordering: ShadowTLS and Chameleon SNI rules must come BEFORE Nginx TLS catch-all
+        pos_stls = content.find("use_backend srv_singbox if is_stls_sni")
+        pos_chameleon = content.find("use_backend srv_chameleon_ssl if is_tls_hello has_sni !is_vps_domain")
+        pos_nginx = content.find("use_backend srv_nginx if is_tls_hello")
         self.assertNotEqual(pos_stls, -1)
+        self.assertNotEqual(pos_chameleon, -1)
         self.assertNotEqual(pos_nginx, -1)
         self.assertLess(pos_stls, pos_nginx, "ShadowTLS SNI rule must precede Nginx TLS catch-all")
+        self.assertLess(pos_chameleon, pos_nginx, "Chameleon SNI rule must precede Nginx TLS catch-all")
 
         # Verify no tcp-request rules occur after use_backend (avoids HAProxy parser warnings)
         lines = [line.strip() for line in content.splitlines()]
