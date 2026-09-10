@@ -160,6 +160,63 @@ class TestAuditFixes(unittest.TestCase):
         # Exit on failure instead of invalid top-level return
         self.assertNotIn('return 1\nfi\nif command -v nginx', content)
 
+    def test_chameleon_ssrf_and_forbidden_ports(self):
+        """Verifies Chameleon blocks SSRF cloud metadata and loopback rebinding, and protects admin ports."""
+        chameleon_script = os.path.join(REPO_ROOT, "bin", "mubx-chameleon")
+        with open(chameleon_script, "r") as f:
+            content = f.read()
+
+        # Admin ports forbidden
+        self.assertIn("10085,", content)
+        self.assertIn("10808,", content)
+        self.assertIn("is_safe_external_target", content)
+
+        # Direct python test of is_safe_external_target
+        code = """
+import asyncio, sys
+from importlib.machinery import SourceFileLoader
+ch = SourceFileLoader("mubx_chameleon", "bin/mubx-chameleon").load_module()
+
+async def check():
+    # 1. Cloud metadata
+    assert not await ch.is_safe_external_target("169.254.169.254")
+    assert not await ch.is_safe_external_target("169.254.1.1")
+    # 2. Loopback direct
+    assert not await ch.is_safe_external_target("127.0.0.1")
+    assert not await ch.is_safe_external_target("::1")
+    # 3. Loopback rebinding
+    assert not await ch.is_safe_external_target("127.0.0.1.nip.io")
+    assert not await ch.is_safe_external_target("localhost")
+    # 4. Safe public IP
+    assert await ch.is_safe_external_target("1.1.1.1")
+    assert await ch.is_safe_external_target("8.8.8.8")
+    print("ALL_CHECKS_PASSED")
+
+asyncio.run(check())
+"""
+        res = subprocess.run(["python3", "-c", code], cwd=REPO_ROOT, capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"SSRF check failed: {res.stderr}\nOutput: {res.stdout}")
+        self.assertIn("ALL_CHECKS_PASSED", res.stdout)
+
+    def test_uninstaller_and_cron_coverage(self):
+        """Verifies uninstall.sh and mubx-cron include mubx-tbrutal and awg services."""
+        uninstall_script = os.path.join(REPO_ROOT, "bin", "uninstall.sh")
+        with open(uninstall_script, "r") as f:
+            un_content = f.read()
+
+        self.assertIn("mubx-tbrutal", un_content)
+        self.assertIn("awg-quick@awg0", un_content)
+        self.assertIn("/etc/systemd/system/mubx-tbrutal.service", un_content)
+        self.assertIn("/usr/local/bin/mubx-tbrutal", un_content)
+        self.assertIn("/usr/local/bin/tbrutal-client-android-arm64", un_content)
+
+        cron_script = os.path.join(REPO_ROOT, "bin", "mubx-cron")
+        with open(cron_script, "r") as f:
+            cron_content = f.read()
+
+        self.assertIn("mubx-tbrutal", cron_content)
+        self.assertIn("awg-quick@awg0", cron_content)
+
 
 if __name__ == "__main__":
     unittest.main()
