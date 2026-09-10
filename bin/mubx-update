@@ -120,8 +120,16 @@ done
 
 # 1) Pull the new tree. Nothing is touched until this succeeds, so a network
 #    failure is a clean no-op.
+export GIT_TERMINAL_PROMPT=0
+rm -f "$ROOT/.git/index.lock" "$ROOT/.git/FETCH_HEAD.lock" "$ROOT/.git/refs/heads/main.lock" 2>/dev/null || true
 printf '%s[*]%s Fetching latest updates from %s\n' "$C_MINT" "$C_RESET" "$REPO_URL"
-git -C "$ROOT" fetch origin main
+if ! timeout 25 git -C "$ROOT" fetch origin main; then
+  echo "[!] Network fetch timed out; retrying with 30s timeout..." >&2
+  timeout 30 git -C "$ROOT" fetch origin main || {
+    echo "[!] Failed to fetch updates from GitHub ($REPO_URL). Check network." >&2
+    exit 1
+  }
+fi
 git -C "$ROOT" checkout -B main origin/main 2>/dev/null || true
 
 # Guard against accidental destruction of uncommitted local changes
@@ -137,6 +145,9 @@ if ! git -C "$ROOT" diff --quiet 2>/dev/null || ! git -C "$ROOT" diff --cached -
 fi
 
 git -C "$ROOT" reset --hard origin/main
+
+# Prune old backup snapshots, retaining only the 3 most recent
+ls -dt /etc/mubx/update-backups/* 2>/dev/null | tail -n +4 | xargs rm -rf 2>/dev/null || true
 
 
 # 2) Snapshot the live files we are about to overwrite.
@@ -233,14 +244,20 @@ fi
 if [ -f configs/hysteria.yaml ]; then
   mubx_hysteria_render configs/hysteria.yaml "$tmp/hysteria.yaml" || true
 fi
-if ! xray_out="$(xray run -test -config "$tmp/xray.json" 2>&1)"; then
-  echo "$xray_out" >&2
-  echo "[!] New Xray config failed validation; nothing was changed." >&2
-  rm -rf "$tmp"
-  return 1
+if command -v xray >/dev/null 2>&1; then
+  if ! xray_out="$(xray run -test -config "$tmp/xray.json" 2>&1)"; then
+    echo "$xray_out" >&2
+    echo "[!] New Xray config failed validation; nothing was changed." >&2
+    rm -rf "$tmp"
+    exit 1
+  fi
 fi
-nginx -t -c "$tmp/nginx.conf" >/dev/null
-haproxy -c -f "$tmp/haproxy.cfg" >/dev/null
+if command -v nginx >/dev/null 2>&1; then
+  nginx -t -c "$tmp/nginx.conf" >/dev/null
+fi
+if command -v haproxy >/dev/null 2>&1; then
+  haproxy -c -f "$tmp/haproxy.cfg" >/dev/null
+fi
 if command -v sing-box >/dev/null 2>&1 && [ -s "$tmp/singbox.json" ]; then
   sing-box check -c "$tmp/singbox.json" >/dev/null || true
 fi
@@ -257,6 +274,12 @@ if [ -s "$tmp/hysteria.yaml" ] && [ -d /etc/hysteria ]; then
   install -m 0600 "$tmp/hysteria.yaml" /etc/hysteria/config.yaml
 fi
 rm -rf "$tmp"
+
+# Cache server public IP for fast, offline-safe subscription rendering
+if [ ! -s /etc/mubx/myip ]; then
+  myip="$(curl -4 -s --max-time 2 https://ifconfig.me 2>/dev/null || curl -4 -s --max-time 2 https://api.ipify.org 2>/dev/null || echo "${DOMAIN:-}")"
+  [ -n "$myip" ] && printf '%s\n' "$myip" > /etc/mubx/myip
+fi
 
 # Regenerate the per-user subscription files for the new tree (harmless
 # no-op when the user store is absent).
@@ -285,6 +308,10 @@ if [ -s /etc/sing-box/config.json ] && systemctl cat singbox.service >/dev/null 
   systemctl enable --now singbox.service 2>/dev/null || true
   was_active["singbox"]=1
 fi
+if [ -s /etc/hysteria/config.yaml ] && systemctl cat hysteria.service >/dev/null 2>&1 && ! systemctl is-active --quiet hysteria 2>/dev/null; then
+  systemctl enable --now hysteria.service 2>/dev/null || true
+  was_active["hysteria"]=1
+fi
 if [ -d "$ROOT/systemd" ]; then
   install -m 0644 "$ROOT"/systemd/*.service /etc/systemd/system/ 2>/dev/null || true
   install -m 0644 "$ROOT"/systemd/*.timer /etc/systemd/system/ 2>/dev/null || true
@@ -294,20 +321,10 @@ if systemctl cat mubx-quota.timer >/dev/null 2>&1; then
   systemctl enable --now mubx-quota.timer 2>/dev/null || true
 fi
 mubx_group_open "SERVICES RELOAD"
-restart_list=()
 for svc in "${SERVICES[@]}"; do
   systemctl cat "$svc.service" >/dev/null 2>&1 || continue
   [ "${was_active[$svc]}" -eq 1 ] || continue
-  restart_list+=("$svc")
-done
-
-if [ "${#restart_list[@]}" -gt 0 ]; then
-  # Parallel restart via systemctl batching (restarts all active units concurrently)
-  systemctl restart "${restart_list[@]}" 2>/dev/null || true
-fi
-
-for svc in "${restart_list[@]}"; do
-  if ! systemctl is-active --quiet "$svc" 2>/dev/null; then
+  if ! timeout 6 systemctl restart "$svc" 2>/dev/null || ! systemctl is-active --quiet "$svc" 2>/dev/null; then
     mubx_card "  $svc" "$(mubx_pill DOWN "FAILED")"
     down=$((down + 1))
   else

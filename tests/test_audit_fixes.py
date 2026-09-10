@@ -140,6 +140,26 @@ class TestAuditFixes(unittest.TestCase):
         self.assertEqual(res.returncode, 0)
         self.assertIn(f"TARGET={test_domain}", res.stdout)
 
+    def test_mubx_update_syntax_and_guards(self):
+        """Verifies mubx-update syntax is clean and protects against hanging with timeouts."""
+        update_script = os.path.join(REPO_ROOT, "bin", "mubx-update")
+        res = subprocess.run(["bash", "-n", update_script], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"mubx-update syntax check failed: {res.stderr}")
+
+        with open(update_script, "r") as f:
+            content = f.read()
+
+        # Network timeouts on git fetch
+        self.assertIn('timeout 25 git -C "$ROOT" fetch origin main', content)
+        # Stale lock cleanup
+        self.assertIn('.git/index.lock', content)
+        # Timeout on service restart
+        self.assertIn('timeout 6 systemctl restart "$svc"', content)
+        # No batched parallel restart that deadlocks systemd/iptables
+        self.assertNotIn('systemctl restart "${restart_list[@]}"', content)
+        # Exit on failure instead of invalid top-level return
+        self.assertNotIn('return 1\nfi\nif command -v nginx', content)
+
 
 if __name__ == "__main__":
     unittest.main()
