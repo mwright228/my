@@ -45,6 +45,7 @@ func NewServer(cfg Config) *Server {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/tbrutal", s.handleUpgrade)
+	mux.HandleFunc("/ws", s.handleUpgrade)
 	mux.HandleFunc("/", s.handleUpgrade)
 
 	s.httpServer = &http.Server{
@@ -85,10 +86,11 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 		_ = tc.SetKeepAlivePeriod(30 * time.Second)
 	}
 
-	// Send HTTP 101 Switching Protocols
+	// Send RFC 6455 compliant HTTP 101 Switching Protocols response
 	resp := "HTTP/1.1 101 Switching Protocols\r\n" +
-		"Upgrade: tbrutal\r\n" +
+		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n" +
 		"\r\n"
 	if _, err := buf.WriteString(resp); err != nil {
 		_ = conn.Close()

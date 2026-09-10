@@ -186,11 +186,14 @@ func (p *Pool) dialSingle(index int) (*PooledConn, error) {
 		transportConn = tlsConn
 	}
 
-	// Send HTTP Upgrade Request
+	// Send HTTP Upgrade Request (RFC 6455 compliant WebSocket headers to pass through CDNs and carrier DPI)
 	req := fmt.Sprintf("GET %s HTTP/1.1\r\n"+
 		"Host: %s\r\n"+
-		"Upgrade: tbrutal\r\n"+
+		"Upgrade: websocket\r\n"+
 		"Connection: Upgrade\r\n"+
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"+
+		"Sec-WebSocket-Version: 13\r\n"+
+		"User-Agent: Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36\r\n"+
 		"\r\n", p.path, p.hostHeader)
 
 	if _, err := transportConn.Write([]byte(req)); err != nil {
