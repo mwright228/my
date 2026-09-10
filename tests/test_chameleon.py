@@ -127,6 +127,19 @@ class TestChameleonParsing(unittest.TestCase):
         h, p, ic = parse_target(carrier_payload)
         self.assertEqual((h, p, ic), ("127.0.0.1", 2222, True))
 
+    def test_connect_with_at_userinfo_and_host_port(self):
+        buf1 = b"CONNECT downloads.vodafone.co.uk@[host_port] HTTP/1.1\r\n\r\n"
+        self.assertEqual(parse_target(buf1), ("127.0.0.1", 2222, True))
+
+        buf2 = b"CONNECT [host_port]@downloads.vodafone.co.uk HTTP/1.1\r\n\r\n"
+        self.assertEqual(parse_target(buf2), ("127.0.0.1", 2222, True))
+
+        buf3 = b"CONNECT [host_port] HTTP/1.1\r\n\r\n"
+        self.assertEqual(parse_target(buf3), ("127.0.0.1", 2222, True))
+
+        buf4 = b"CONNECT bughost.com@127.0.0.1:2222 HTTP/1.1\r\n\r\n"
+        self.assertEqual(parse_target(buf4), ("127.0.0.1", 2222, True))
+
     def test_empty_buffer(self):
         self.assertEqual(parse_target(b""), (None, None, False))
         self.assertEqual(parse_target(b"RANDOM NON HTTP BYTES\x00\x01\x02"), (None, None, False))

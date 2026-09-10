@@ -197,8 +197,7 @@ DEFAULT_PROFILES: Dict[str, dict] = {
 # Per-listen-port default profile name (falls back to "default" if absent).
 PORT_PROFILE_DEFAULTS: Dict[int, str] = {}
 
-# Precompiled regexes for lenient payload extraction
-RE_CONNECT = re.compile(rb"(?i)\bCONNECT\s+(?:\[([a-fA-F0-9:]+)\]|([a-zA-Z0-9\.\-_]+))(?::(\d+))?")
+RE_CONNECT = re.compile(rb"(?i)\bCONNECT\s+([^\s\r\n]+)")
 RE_TARGET_HDR = re.compile(rb"(?i)\r?\n(?:X-Target|X-Real-Host):\s*(?:\[([a-fA-F0-9:]+)\]|([a-zA-Z0-9\.\-_]+))(?::(\d+))?")
 RE_HTTP_URL = re.compile(rb"(?i)\b(?:GET|POST|HEAD|OPTIONS|PUT|DELETE|TRACE|PATCH)\s+https?://(?:\[([a-fA-F0-9:]+)\]|([a-zA-Z0-9\.\-_]+))(?::(\d+))?")
 RE_HOST_HDR = re.compile(rb"(?i)\r?\n(?:X-Online-Host|X-Forward-Host|Host):\s*(?:\[([a-fA-F0-9:]+)\]|([a-zA-Z0-9\.\-_]+))(?::(\d+))?")
@@ -655,9 +654,24 @@ def parse_target(buffer: bytes) -> Tuple[Optional[str], Optional[int], bool]:
     target host and port. Returns (host, port, is_connect)."""
     m = RE_CONNECT.search(buffer)
     if m:
-        raw_host = (m.group(1) or m.group(2)).decode("ascii", errors="ignore")
-        port = int(m.group(3).decode("ascii")) if m.group(3) else 443
-        return raw_host, port, True
+        raw_auth = m.group(1).decode("ascii", errors="ignore").strip()
+        # Handle userinfo@host:port or host:port@bughost or literal [host_port]
+        if "@" in raw_auth:
+            part1, part2 = raw_auth.split("@", 1)
+            if "[host_port]" in part1.lower() or "[host_port]" in part2.lower():
+                return DEFAULT_HOST, DEFAULT_PORT, True
+            target_str = part2 if (":" in part2 or "." in part2) else part1
+        else:
+            target_str = raw_auth
+
+        if "[host_port]" in target_str.lower():
+            return DEFAULT_HOST, DEFAULT_PORT, True
+
+        m_host = re.search(r"(?:\[([a-fA-F0-9:]+)\]|([a-zA-Z0-9\.\-_]+))(?::(\d+))?", target_str)
+        if m_host:
+            raw_host = m_host.group(1) or m_host.group(2)
+            port = int(m_host.group(3)) if m_host.group(3) else 443
+            return raw_host, port, True
 
     m = RE_TARGET_HDR.search(buffer)
     if m:
@@ -1473,8 +1487,15 @@ async def _handle_client_inner(client_reader, client_writer, client_addr, initia
             await send_response_and_close(client_writer, b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
             return
     else:
-        # External destination — gate behind auth
-        if not is_authorized_external(bytes(buffer)):
+        # If client is inside Chameleon SSL, they are tunneling to this VPS.
+        # Unknown/bughost CONNECT targets inside SSL default to local SSH instead of returning 407.
+        if is_ssl and not is_authorized_external(bytes(buffer)):
+            log.info("Chameleon SSL client requested %s:%d — defaulting to local SSH tunnel", target_host, target_port)
+            target_host = DEFAULT_HOST
+            target_port = DEFAULT_PORT
+            is_connect = True
+            STATS["routes_local"] += 1
+        elif not is_authorized_external(bytes(buffer)):
             STATS["blocked_unauthorized"] += 1
             jailed = record_relay_violation(peer_ip)
             if jailed or is_ip_jailed(peer_ip):
@@ -1487,7 +1508,8 @@ async def _handle_client_inner(client_reader, client_writer, client_addr, initia
                 b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"MUB-X\"\r\nContent-Length: 0\r\n\r\n"
             )
             return
-        STATS["routes_external"] += 1
+        else:
+            STATS["routes_external"] += 1
 
     buf_lower = bytes(buffer).lower()
     is_ws_upgrade = b"upgrade: websocket" in buf_lower
