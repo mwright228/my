@@ -230,7 +230,12 @@ mubx_nginx_render configs/nginx.conf "$tmp/nginx.conf"
 if [ -f configs/singbox.json ]; then
   mubx_singbox_render configs/singbox.json "$tmp/singbox.json" || true
 fi
-xray run -test -config "$tmp/xray.json"
+if ! xray_out="$(xray run -test -config "$tmp/xray.json" 2>&1)"; then
+  echo "$xray_out" >&2
+  echo "[!] New Xray config failed validation; nothing was changed." >&2
+  rm -rf "$tmp"
+  return 1
+fi
 nginx -t -c "$tmp/nginx.conf" >/dev/null
 haproxy -c -f "$tmp/haproxy.cfg" >/dev/null
 if command -v sing-box >/dev/null 2>&1 && [ -s "$tmp/singbox.json" ]; then
@@ -283,10 +288,20 @@ if systemctl cat mubx-quota.timer >/dev/null 2>&1; then
   systemctl enable --now mubx-quota.timer 2>/dev/null || true
 fi
 mubx_group_open "SERVICES RELOAD"
+restart_list=()
 for svc in "${SERVICES[@]}"; do
   systemctl cat "$svc.service" >/dev/null 2>&1 || continue
   [ "${was_active[$svc]}" -eq 1 ] || continue
-  if ! systemctl restart "$svc" 2>/dev/null || ! systemctl is-active --quiet "$svc" 2>/dev/null; then
+  restart_list+=("$svc")
+done
+
+if [ "${#restart_list[@]}" -gt 0 ]; then
+  # Parallel restart via systemctl batching (restarts all active units concurrently)
+  systemctl restart "${restart_list[@]}" 2>/dev/null || true
+fi
+
+for svc in "${restart_list[@]}"; do
+  if ! systemctl is-active --quiet "$svc" 2>/dev/null; then
     mubx_card "  $svc" "$(mubx_pill DOWN "FAILED")"
     down=$((down + 1))
   else

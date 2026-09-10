@@ -55,6 +55,19 @@ class TestRenderConfigs(unittest.TestCase):
         self.assertNotEqual(pos_nginx, -1)
         self.assertLess(pos_stls, pos_nginx, "ShadowTLS SNI rule must precede Nginx TLS catch-all")
 
+        # Verify no tcp-request rules occur after use_backend (avoids HAProxy parser warnings)
+        lines = [line.strip() for line in content.splitlines()]
+        first_use_backend = None
+        last_tcp_request = None
+        for idx, line in enumerate(lines):
+            if line.startswith("use_backend") and first_use_backend is None:
+                first_use_backend = idx
+            if line.startswith("tcp-request"):
+                last_tcp_request = idx
+        self.assertIsNotNone(first_use_backend)
+        self.assertIsNotNone(last_tcp_request)
+        self.assertLess(last_tcp_request, first_use_backend, "All tcp-request rules must precede any use_backend rules")
+
     def test_nginx_render_https_only_subs_and_resolver(self):
         nginx_conf_out = os.path.join(self.test_dir, "nginx.conf")
         env = dict(os.environ)
