@@ -37,7 +37,7 @@ fi
 
 
 SERVICES=(
-  haproxy nginx xray dropbear wstunnel hysteria zivpn singbox mubx-chameleon
+  haproxy nginx xray dropbear wstunnel hysteria zivpn singbox mubx-chameleon mubx-tbrutal
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0
   badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400
   badvpn@7500 badvpn@7600 badvpn@7700
@@ -311,6 +311,10 @@ fi
 if [ -s /etc/hysteria/config.yaml ] && systemctl cat hysteria.service >/dev/null 2>&1 && ! systemctl is-active --quiet hysteria 2>/dev/null; then
   systemctl enable --now hysteria.service 2>/dev/null || true
   was_active["hysteria"]=1
+fi
+if systemctl cat mubx-tbrutal.service >/dev/null 2>&1 && ! systemctl is-active --quiet mubx-tbrutal 2>/dev/null; then
+  systemctl enable --now mubx-tbrutal.service 2>/dev/null || true
+  was_active["mubx-tbrutal"]=1
 fi
 if [ -d "$ROOT/systemd" ]; then
   install -m 0644 "$ROOT"/systemd/*.service /etc/systemd/system/ 2>/dev/null || true

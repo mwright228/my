@@ -158,8 +158,18 @@ fi
 # ============================================================================
 # 1. ANTI-DPI & STEALTH PROTOCOLS
 # ============================================================================
-if [ "$SHOW_INJECTOR_ONLY" -eq 0 ] && { u_has "hysteria2" || u_has "shadowtls" || u_has "zivpn" || u_has "tuic"; }; then
+if [ "$SHOW_INJECTOR_ONLY" -eq 0 ] && { u_has "hysteria2" || u_has "shadowtls" || u_has "zivpn" || u_has "tuic" || u_has "tbrutal"; }; then
   card_header "hysteria singbox" "ANTI-DPI & STEALTH PROTOCOLS" "NEXT-GEN"
+
+  # T-Brutal (TCP-Brutal Wire-Speed Multi-Connection Carrier Engine)
+  if u_has "tbrutal"; then
+    item "T-BRUTAL" "T-Brutal Multi-TCP Rate-Pacing Engine (Port 443 / SOCKS5)"
+    block "socks5://127.0.0.1:10808#MUBX-T-Brutal-LocalSOCKS5"
+    manual "Android/Linux Micro-Daemon: ./tbrutal-client -s ${MYIP}:443 -sni ${BUG} -token ${UUID} -l 127.0.0.1:10808 -p 4 -rate 60"
+    note "Connects over TCP 443 with TLS carrier SNI '${BUG}' using 4-8 pooled connections."
+    note "Userspace Brutal rate-pacer pushes 60-100 Mbps fixed wire throughput without carrier backoff."
+    note "Local SOCKS5 proxy on 127.0.0.1:10808 works seamlessly with HTTP Custom, NekoBox, and v2rayNG."
+  fi
 
   # TUIC v5
   if u_has "tuic"; then

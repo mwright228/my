@@ -66,6 +66,14 @@ if command -v iptables >/dev/null 2>&1; then
   iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 fi
 
+# Expand default route initial congestion and receive windows (instant ~90KB burst, bypasses slow-start delay)
+if command -v ip >/dev/null 2>&1; then
+  def_route="$(ip route show default 2>/dev/null | head -n1)"
+  if [ -n "$def_route" ]; then
+    ip route change $def_route initcwnd 64 initrwnd 64 2>/dev/null || true
+  fi
+fi
+
 if declare -F log >/dev/null 2>&1; then
   log "Telecom-grade kernel network tuning applied (BBR + 64MB buffers + TCPMSS clamp)."
 else

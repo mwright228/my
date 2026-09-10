@@ -24,5 +24,6 @@ def user_has_proto($p):
   elif (($p == "squid" or $p == "chameleon") and ((.protocols | index("squid") != null) or (.protocols | index("chameleon") != null))) then true
   elif ($p == "zivpn" and ((.protocols | index("zivpn") != null) or (.protocols | index("antidpi") != null))) then true
   elif ($p == "tuic" and ((.protocols | index("tuic") != null) or (.protocols | index("antidpi") != null) or (.protocols | index("stealth") != null))) then true
+  elif ($p == "tbrutal" and ((.protocols | index("tbrutal") != null) or (.protocols | index("antidpi") != null) or (.protocols | index("stealth") != null))) then true
   else false
   end;

@@ -38,6 +38,6 @@ if [ -n "$target_bin" ]; then
   exec "$target_bin" "$@"
 else
   echo "[!] Unknown mubx command: $cmd" >&2
-  echo "Usage: mubx [menu|update|link-gen|status|udp443|users|quota|diagnose|top|shield|awg|warp|sub]" >&2
+  echo "Usage: mubx [menu|update|link-gen|status|udp443|tbrutal|users|quota|diagnose|top|shield|awg|warp|sub]" >&2
   exit 1
 fi

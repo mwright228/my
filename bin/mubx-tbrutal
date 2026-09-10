@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# MUB-X T-Brutal Protocol Manager & Daemon Launcher
+# Manages the userspace TCP Brutal rate-pacing engine for carrier zero-rated SNI.
+set -Eeuo pipefail
+
+BIN_DIR="$(dirname "$(realpath "$0")")"
+BINARY="$BIN_DIR/mubx-tbrutal-linux-amd64"
+if [ ! -x "$BINARY" ] && [ -x "/usr/local/bin/mubx-tbrutal-linux-amd64" ]; then
+  BINARY="/usr/local/bin/mubx-tbrutal-linux-amd64"
+fi
+
+cmd="${1:-status}"
+
+case "$cmd" in
+  start)
+    systemctl start mubx-tbrutal.service
+    echo "[+] T-Brutal service started."
+    ;;
+  stop)
+    systemctl stop mubx-tbrutal.service
+    echo "[*] T-Brutal service stopped."
+    ;;
+  restart)
+    systemctl restart mubx-tbrutal.service
+    echo "[+] T-Brutal service restarted."
+    ;;
+  status)
+    if systemctl is-active --quiet mubx-tbrutal.service 2>/dev/null; then
+      echo "[+] mubx-tbrutal is running (Active)"
+    else
+      echo "[-] mubx-tbrutal is inactive"
+    fi
+    ;;
+  client-config|config)
+    user="${2:-admin}"
+    bughost="${3:-downloads.vodafone.co.uk}"
+    rate="${4:-60}"
+    conns="${5:-4}"
+    
+    users_file="${MUBX_USERS_FILE:-/etc/mubx/users.json}"
+    uuid=""
+    if [ -f "$users_file" ]; then
+      uuid="$(jq -r --arg u "$user" '.[] | select(.name == $u) | .uuid' "$users_file" 2>/dev/null || true)"
+    fi
+    if [ -z "$uuid" ] && [ -r /etc/telecom-engine.env ]; then
+      uuid="$(sed -n 's/^UUID=//p' /etc/telecom-engine.env | head -n1)"
+    fi
+    if [ -z "$uuid" ]; then
+      uuid="11111111-2222-3333-4444-555555555555"
+    fi
+
+    myip="$(cat /etc/mubx/myip 2>/dev/null || curl -4 -s --max-time 2 https://ifconfig.me 2>/dev/null || echo "YOUR_SERVER_IP")"
+
+    echo "================================================================="
+    echo "         MUB-X T-BRUTAL ZERO-RATED CLIENT CONFIGURATION          "
+    echo "================================================================="
+    echo "User:       $user"
+    echo "UUID:       $uuid"
+    echo "Server IP:  $myip:443"
+    echo "Bug-Host:   $bughost (SNI)"
+    echo "Pool Conns: $conns TCP connections"
+    echo "Rate:       $rate Mbps (Brutal Userspace Pacing)"
+    echo "Local Port: 127.0.0.1:10808 (SOCKS5)"
+    echo "-----------------------------------------------------------------"
+    echo "Run command on Android (Termux / Root) or Linux Client:"
+    echo ""
+    echo "  ./tbrutal-client -s $myip:443 -sni $bughost -token $uuid -l 127.0.0.1:10808 -p $conns -rate $rate"
+    echo ""
+    echo "Then in HTTP Custom / NekoBox / v2rayNG:"
+    echo "  Forward Type: SOCKS5"
+    echo "  Host: 127.0.0.1  |  Port: 10808"
+    echo "================================================================="
+    ;;
+  build)
+    echo "[*] Compiling T-Brutal Go engine..."
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "$BIN_DIR/mubx-tbrutal-linux-amd64" "$BIN_DIR/../src/tbrutal/cmd/mubx-tbrutal"
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o "$BIN_DIR/tbrutal-client-android-arm64" "$BIN_DIR/../src/tbrutal/cmd/tbrutal-client"
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "$BIN_DIR/tbrutal-client-linux-amd64" "$BIN_DIR/../src/tbrutal/cmd/tbrutal-client"
+    echo "[+] Build complete: bin/mubx-tbrutal-linux-amd64, bin/tbrutal-client-android-arm64, bin/tbrutal-client-linux-amd64"
+    ;;
+  *)
+    # Direct execution fallback
+    if [ -x "$BINARY" ]; then
+      exec "$BINARY" "$@"
+    elif command -v go >/dev/null 2>&1 && [ -d "$BIN_DIR/../src/tbrutal" ]; then
+      exec go run "$BIN_DIR/../src/tbrutal/cmd/mubx-tbrutal" "$@"
+    else
+      echo "Usage: mubx-tbrutal [start|stop|restart|status|client-config|build] or run flags"
+      exit 1
+    fi
+    ;;
+esac

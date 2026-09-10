@@ -213,6 +213,9 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
       printf 'vless://%s@%s:443?encryption=none&security=tls&type=httpupgrade&host=%s&sni=%s&path=%%2Fvless-httpupgrade#MUBX-HTTPUpgrade-BugHost\n' \
         "$uuid" "$myip" "$dom" "$bughost"
     fi
+    if mubx_user_has_proto "$user" "tbrutal" || mubx_user_has_proto "$user" "all"; then
+      printf 'socks5://127.0.0.1:10808#MUBX-T-Brutal-BugHost\n'
+    fi
   fi
 }
 

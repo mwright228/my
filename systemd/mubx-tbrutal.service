@@ -1,0 +1,27 @@
+[Unit]
+Description=MUB-X T-Brutal Userspace Brutal Engine
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mubx-tbrutal -listen 127.0.0.1:18999 -users /etc/mubx/users.json -rate 0
+Restart=always
+RestartSec=3s
+TimeoutStopSec=5s
+KillMode=mixed
+LimitNOFILE=1048576
+Nice=-5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

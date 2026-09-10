@@ -96,6 +96,7 @@ def user_has_proto($p):
   elif (($p == "squid" or $p == "chameleon") and ((.protocols | index("squid") != null) or (.protocols | index("chameleon") != null))) then true
   elif ($p == "zivpn" and ((.protocols | index("zivpn") != null) or (.protocols | index("antidpi") != null))) then true
   elif ($p == "tuic" and ((.protocols | index("tuic") != null) or (.protocols | index("antidpi") != null) or (.protocols | index("stealth") != null))) then true
+  elif ($p == "tbrutal" and ((.protocols | index("tbrutal") != null) or (.protocols | index("antidpi") != null) or (.protocols | index("stealth") != null))) then true
   else false
   end;
 '
@@ -146,6 +147,7 @@ mubx_proto_normalize() { # $1 raw input string -> stdout JSON array
       61|hysteria2|hy2) tags+=("hysteria2") ;;
       62|zivpn) tags+=("zivpn") ;;
       63|tuic|tuic-v5) tags+=("tuic") ;;
+      64|tbrutal|t-brutal) tags+=("tbrutal") ;;
       *) tags+=("$item") ;;
     esac
   done
@@ -190,7 +192,8 @@ mubx_proto_summary() { # $1 json_array_or_user_object -> formatted string
         (if ($p | index("openvpn") != null) then "OVPN" else empty end),
         (if (($p | index("squid") != null) or ($p | index("chameleon") != null)) then "Chameleon" else empty end),
         (if ($p | index("zivpn") != null) then "ZivPN" else empty end),
-        (if ($p | index("tuic") != null) then "TUIC" else empty end)
+        (if ($p | index("tuic") != null) then "TUIC" else empty end),
+        (if ($p | index("tbrutal") != null) then "T-Brutal" else empty end)
       ] as $cats |
       if ($cats | length) > 0 then ($cats | join("+"))
       else ($p | length | tostring + " protos")
