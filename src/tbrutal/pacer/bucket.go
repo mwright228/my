@@ -86,3 +86,30 @@ func (p *Pacer) Wait(n int) {
 
 	time.Sleep(sleepDuration)
 }
+
+// SetRate updates the transmission rate dynamically.
+func (p *Pacer) SetRate(rateMbps int) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if rateMbps <= 0 {
+		p.enabled = false
+		return
+	}
+
+	bytesPerSec := int64(rateMbps) * 1000 * 1000 / 8
+	capacity := bytesPerSec / 10
+	if capacity < 128*1024 {
+		capacity = 128 * 1024
+	}
+
+	p.rateBytesSec = bytesPerSec
+	p.capacity = capacity
+	p.tokens = capacity
+	p.lastUpdate = time.Now()
+	p.enabled = true
+}
+

@@ -1,0 +1,2 @@
+-keep class id.my.mub.service.NativeCoreBridge { *; }
+-keepclassmembers class id.my.mub.service.NativeCoreBridge { *; }

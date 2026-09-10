@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_obsidian">#0A0B10</color>
+    <color name="accent_cyan">#00F0FF</color>
+    <color name="accent_violet">#9D4EDD</color>
+    <color name="status_mint">#00FFA3</color>
+    <color name="status_coral">#FF5964</color>
+    <color name="surface_card">#141826</color>
+</resources>

@@ -183,6 +183,16 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
     printf 'tuic://%s:%s@%s:8444?congestion_control=bbr&alpn=h3&sni=%s&allow_insecure=0#MUBX-TUIC-v5\n' \
       "$uuid" "$uuid" "$dom" "$dom"
   fi
+  # ZivPN UDP Tunnel (UDP 5667 / Multiport 6000-19999)
+  if mubx_user_has_proto "$user" "zivpn" && [ -n "${ZIVPN_PASS:-}" ]; then
+    printf 'zivpn://%s@%s:5667/?obfs=zivpn&mport=6000-19999#MUBX-ZivPN-UDP\n' \
+      "$ZIVPN_PASS" "$dom"
+  fi
+  # T-Brutal Wire-Speed Pacing
+  if mubx_user_has_proto "$user" "tbrutal" || mubx_user_has_proto "$user" "all"; then
+    printf 'tbrutal://%s@%s:443/?sni=%s&path=%%2Ftbrutal&rate=80&conns=4#MUBX-T-Brutal\n' \
+      "$uuid" "$dom" "$dom"
+  fi
 
   # Dynamic Carrier SNI Bug-Host nodes (Hysteria 2 & TUIC over UDP 443)
   local bughost="" myip=""

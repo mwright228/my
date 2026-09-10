@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MUB-X</string>
+    <string name="app_full_name">MUB-X Telecom Engine</string>
+    <string name="vpn_service_title">MUB-X Tunnel Active</string>
+    <string name="vpn_channel_name">MUB-X Tunnel Service</string>
+    <string name="vpn_channel_desc">Shows real-time connection status and bandwidth pacing</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="connecting">Connecting...</string>
+    <string name="connected">CONNECTED</string>
+    <string name="disconnected">DISCONNECTED</string>
+</resources>
