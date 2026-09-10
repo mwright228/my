@@ -21,6 +21,32 @@
       }
     },
     {
+      "tag": "vless-tcp",
+      "listen": "127.0.0.1",
+      "port": 10030,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "__UUID__"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": false
+      }
+    },
+    {
       "tag": "vless-ws",
       "listen": "127.0.0.1",
       "port": 10001,

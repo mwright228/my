@@ -272,6 +272,7 @@ mubx_users_apply() { # $1 rendered config file
             elif \$tag == \"vless-httpupgrade\" then \"vless-httpupgrade\"
             elif \$tag == \"vless-xhttp\" then \"vless-xhttp\"
             elif \$tag == \"vless-grpc\" then \"vless_grpc_tls\"
+            elif \$tag == \"vless-tcp\" then \"vless_tcp_tls\"
             else \"vless-ws\"
             end
           ) as \$req_proto |

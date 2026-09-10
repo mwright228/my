@@ -243,6 +243,14 @@ fi
 if [ "$SHOW_INJECTOR_ONLY" -eq 0 ] && { u_has "vless_ws_tls" || u_has "vless_ws_ntls" || u_has "vless_httpupgrade_tls" || u_has "vless_httpupgrade_ntls" || u_has "vless_xhttp_tls" || u_has "vless_grpc_tls" || u_has "vmess_ws_tls" || u_has "vmess_ws_ntls" || u_has "trojan_ws_tls" || u_has "trojan_ws_ntls"; }; then
   card_header "xray" "XRAY TRANSPORTS" "TLS & HTTP/80"
 
+  if u_has "vless_tcp_tls" || u_has "vless"; then
+    item "VLESS-TCP" "VLESS Direct TCP SNI (Port 443 TLS)"
+    block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=tcp&headerType=none&host=${DOMAIN}&sni=${BUG}#MUBX-VLESS-TCP"
+    manual "Address: ${BUG} | Port: 443 | UUID: ${UUID} | Network: tcp | Security: tls | SNI: ${BUG} | Insecure: true"
+    note "Pure raw TCP with carrier SNI: zero WebSocket overhead (SSH SSL SNI style)."
+    note "In v2rayNG: Enable Mux (Multiplexing) -> Concurrency: 4 or 8 for 4-lane parallel speed!"
+  fi
+
   if u_has "vless_grpc_tls"; then
     item "VLESS-gRPC" "VLESS gRPC (TLS 443)"
     block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=grpc&serviceName=vless-grpc&host=${DOMAIN}&sni=${BUG}#MUBX-VLESS-gRPC"
@@ -254,6 +262,7 @@ if [ "$SHOW_INJECTOR_ONLY" -eq 0 ] && { u_has "vless_ws_tls" || u_has "vless_ws_
     item "VLESS-WS" "VLESS WebSocket (TLS 443)"
     block "vless://${UUID}@${BUG}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&sni=${BUG}&path=%2Fvless-ws#MUBX-VLESS-WS"
     manual "Address: ${BUG} | Port: 443 | UUID: ${UUID} | Network: ws | Host: ${DOMAIN} | Path: /vless-ws | Security: tls | SNI: ${BUG}"
+    note "In v2rayNG: Enable Mux (Multiplexing) -> Concurrency: 4 or 8 for 4-lane parallel speed!"
   fi
 
   if u_has "vless_ws_ntls"; then
