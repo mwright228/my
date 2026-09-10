@@ -15,6 +15,7 @@ import (
 type Config struct {
 	ServerAddr     string
 	SNI            string
+	HostHeader     string
 	Path           string
 	Token          string
 	LocalSocksAddr string
@@ -43,7 +44,7 @@ func NewClient(cfg Config) *Client {
 	}
 
 	p := pacer.NewPacer(cfg.RateMbps)
-	pool := NewPool(cfg.ServerAddr, cfg.SNI, cfg.Path, cfg.Token, cfg.NumConns, cfg.UseTLS, cfg.InsecureTLS, p)
+	pool := NewPool(cfg.ServerAddr, cfg.SNI, cfg.HostHeader, cfg.Path, cfg.Token, cfg.NumConns, cfg.UseTLS, cfg.InsecureTLS, p)
 
 	return &Client{
 		cfg:   cfg,

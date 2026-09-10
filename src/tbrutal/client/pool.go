@@ -46,6 +46,7 @@ func (pc *PooledConn) sendFrame(f *protocol.Frame) error {
 type Pool struct {
 	serverAddr   string
 	sni          string
+	hostHeader   string
 	path         string
 	token        string
 	numConns     int
@@ -62,7 +63,7 @@ type Pool struct {
 	stopChan     chan struct{}
 }
 
-func NewPool(serverAddr, sni, path, token string, numConns int, useTLS, insecureTLS bool, p *pacer.Pacer) *Pool {
+func NewPool(serverAddr, sni, hostHeader, path, token string, numConns int, useTLS, insecureTLS bool, p *pacer.Pacer) *Pool {
 	if numConns <= 0 {
 		numConns = 4
 	}
@@ -72,10 +73,19 @@ func NewPool(serverAddr, sni, path, token string, numConns int, useTLS, insecure
 	if sni == "" {
 		sni, _, _ = net.SplitHostPort(serverAddr)
 	}
+	if hostHeader == "" {
+		h, _, err := net.SplitHostPort(serverAddr)
+		if err == nil && h != "" {
+			hostHeader = h
+		} else {
+			hostHeader = sni
+		}
+	}
 
 	return &Pool{
 		serverAddr:  serverAddr,
 		sni:         sni,
+		hostHeader:  hostHeader,
 		path:        path,
 		token:       token,
 		numConns:    numConns,
@@ -132,7 +142,7 @@ func (p *Pool) maintainConnection(index int) {
 		p.conns[index] = pc
 		p.connsMu.Unlock()
 
-		log.Printf("[*] Pool connection [%d] connected to %s (SNI: %s)", index, p.serverAddr, p.sni)
+		log.Printf("[*] Pool connection [%d] connected to %s (SNI: %s, Host: %s)", index, p.serverAddr, p.sni, p.hostHeader)
 
 		// Start heartbeat loop
 		go p.heartbeat(pc)
@@ -158,10 +168,13 @@ func (p *Pool) dialSingle(index int) (*PooledConn, error) {
 	}
 
 	var transportConn net.Conn = rawConn
+
 	if p.useTLS {
 		tlsConfig := &tls.Config{
 			ServerName:         p.sni,
 			InsecureSkipVerify: p.insecureTLS,
+			NextProtos:         []string{"http/1.1"},
+			MinVersion:         tls.VersionTLS12,
 		}
 		tlsConn := tls.Client(rawConn, tlsConfig)
 		tlsConn.SetDeadline(time.Now().Add(10 * time.Second))
@@ -178,7 +191,7 @@ func (p *Pool) dialSingle(index int) (*PooledConn, error) {
 		"Host: %s\r\n"+
 		"Upgrade: tbrutal\r\n"+
 		"Connection: Upgrade\r\n"+
-		"\r\n", p.path, p.sni)
+		"\r\n", p.path, p.hostHeader)
 
 	if _, err := transportConn.Write([]byte(req)); err != nil {
 		_ = transportConn.Close()
@@ -194,8 +207,22 @@ func (p *Pool) dialSingle(index int) (*PooledConn, error) {
 	}
 
 	if !strings.Contains(statusLine, "101") {
+		var extra strings.Builder
+		for i := 0; i < 8; i++ {
+			line, err := reader.ReadString('\n')
+			if err != nil || strings.TrimSpace(line) == "" {
+				break
+			}
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(strings.ToLower(trimmed), "server:") ||
+				strings.HasPrefix(strings.ToLower(trimmed), "content-type:") ||
+				strings.HasPrefix(strings.ToLower(trimmed), "via:") ||
+				strings.HasPrefix(strings.ToLower(trimmed), "x-cache:") {
+				extra.WriteString(" [" + trimmed + "]")
+			}
+		}
 		_ = transportConn.Close()
-		return nil, fmt.Errorf("upgrade failed, expected 101 but got: %s", strings.TrimSpace(statusLine))
+		return nil, fmt.Errorf("upgrade failed, expected 101 but got: %s%s", strings.TrimSpace(statusLine), extra.String())
 	}
 
 	// Consume remaining headers until empty line

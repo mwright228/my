@@ -13,7 +13,8 @@ import (
 
 func main() {
 	serverAddr := flag.String("s", "", "Server address host:port (e.g. 212.60.151.69:443)")
-	sni := flag.String("sni", "downloads.vodafone.co.uk", "Carrier bug-host SNI (e.g. downloads.vodafone.co.uk)")
+	sni := flag.String("sni", "images.vodafone.co.uk", "Carrier bug-host SNI (e.g. images.vodafone.co.uk)")
+	hostHeader := flag.String("host", "", "HTTP Host header (defaults to server host or SNI)")
 	path := flag.String("path", "/tbrutal", "HTTP upgrade path (default /tbrutal)")
 	token := flag.String("token", "", "User authentication UUID / token")
 	localSocks := flag.String("l", "127.0.0.1:10808", "Local SOCKS5 listen address")
@@ -33,6 +34,7 @@ func main() {
 	cli := client.NewClient(client.Config{
 		ServerAddr:     *serverAddr,
 		SNI:            *sni,
+		HostHeader:     *hostHeader,
 		Path:           *path,
 		Token:          *token,
 		LocalSocksAddr: *localSocks,

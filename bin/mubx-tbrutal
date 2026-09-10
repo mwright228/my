@@ -33,7 +33,7 @@ case "$cmd" in
     ;;
   client-config|config)
     user="${2:-admin}"
-    bughost="${3:-downloads.vodafone.co.uk}"
+    bughost="${3:-images.vodafone.co.uk}"
     rate="${4:-60}"
     conns="${5:-4}"
     
@@ -50,6 +50,8 @@ case "$cmd" in
     fi
 
     myip="$(cat /etc/mubx/myip 2>/dev/null || curl -4 -s --max-time 2 https://ifconfig.me 2>/dev/null || echo "YOUR_SERVER_IP")"
+    domain="$(sed -n 's/^DOMAIN=//p' /etc/telecom-engine.env 2>/dev/null | tr -d '"' || cat /etc/mubx/domain 2>/dev/null || echo "$myip")"
+    [ -n "$domain" ] || domain="$myip"
 
     echo "================================================================="
     echo "         MUB-X T-BRUTAL ZERO-RATED CLIENT CONFIGURATION          "
@@ -57,6 +59,7 @@ case "$cmd" in
     echo "User:       $user"
     echo "UUID:       $uuid"
     echo "Server IP:  $myip:443"
+    echo "Server Host:$domain"
     echo "Bug-Host:   $bughost (SNI)"
     echo "Pool Conns: $conns TCP connections"
     echo "Rate:       $rate Mbps (Brutal Userspace Pacing)"
@@ -64,13 +67,17 @@ case "$cmd" in
     echo "-----------------------------------------------------------------"
     echo "[1] Download Binary in Termux (Run this one-liner):"
     echo ""
-    echo "  curl -k -L -o tbrutal-client \"https://$myip/tbrutal-client\" 2>/dev/null || curl -L -o tbrutal-client \"https://raw.githubusercontent.com/mwright228/my/main/bin/tbrutal-client-android-arm64\"; chmod +x tbrutal-client"
+    echo "  curl -k -L -o /data/adb/tbrutal-client \"https://$myip/tbrutal-client\" 2>/dev/null || curl -L -o /data/adb/tbrutal-client \"https://raw.githubusercontent.com/mwright228/my/main/bin/tbrutal-client-android-arm64\"; chmod +x /data/adb/tbrutal-client"
     echo ""
-    echo "[2] Run T-Brutal in Termux:"
+    echo "[2] Run T-Brutal (Mode A: Port 443 with Zero-Rated SNI + Host Header):"
     echo ""
-    echo "  ./tbrutal-client -s $myip:443 -sni $bughost -token $uuid -l 127.0.0.1:10808 -p $conns -rate $rate"
+    echo "  /data/adb/tbrutal-client -s $myip:443 -sni $bughost -host $domain -token $uuid -l 127.0.0.1:10808 -p $conns -rate $rate"
     echo ""
-    echo "[3] In Clash for Magisk (config.yaml):"
+    echo "[3] Run T-Brutal (Mode B: Port 80 Plaintext HTTP Upgrade):"
+    echo ""
+    echo "  /data/adb/tbrutal-client -s $myip:80 -tls=false -host $domain -token $uuid -l 127.0.0.1:10808 -p $conns -rate $rate"
+    echo ""
+    echo "[4] In Clash for Magisk (config.yaml):"
     echo ""
     echo "proxies:"
     echo "  - name: \"T-Brutal-WireSpeed\""
@@ -78,7 +85,7 @@ case "$cmd" in
     echo "    server: 127.0.0.1"
     echo "    port: 10808"
     echo ""
-    echo "[4] Or in HTTP Custom / NekoBox / v2rayNG:"
+    echo "[5] Or in HTTP Custom / NekoBox / v2rayNG:"
     echo "  Forward Type: SOCKS5 | Host: 127.0.0.1 | Port: 10808"
     echo "================================================================="
     ;;
