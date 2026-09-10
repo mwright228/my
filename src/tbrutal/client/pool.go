@@ -52,6 +52,7 @@ type Pool struct {
 	numConns     int
 	useTLS       bool
 	insecureTLS  bool
+	rawMode      bool
 	pacer        *pacer.Pacer
 	conns        []*PooledConn
 	connsMu      sync.RWMutex
@@ -63,12 +64,14 @@ type Pool struct {
 	stopChan     chan struct{}
 }
 
-func NewPool(serverAddr, sni, hostHeader, path, token string, numConns int, useTLS, insecureTLS bool, p *pacer.Pacer) *Pool {
+func NewPool(serverAddr, sni, hostHeader, path, token string, numConns int, useTLS, insecureTLS, rawMode bool, p *pacer.Pacer) *Pool {
 	if numConns <= 0 {
 		numConns = 4
 	}
 	if path == "" {
-		path = "/tbrutal"
+		if !rawMode {
+			path = "/tbrutal"
+		}
 	}
 	if sni == "" {
 		sni, _, _ = net.SplitHostPort(serverAddr)
@@ -91,6 +94,7 @@ func NewPool(serverAddr, sni, hostHeader, path, token string, numConns int, useT
 		numConns:    numConns,
 		useTLS:      useTLS,
 		insecureTLS: insecureTLS,
+		rawMode:     rawMode,
 		pacer:       p,
 		conns:       make([]*PooledConn, numConns),
 		streams:     make(map[uint32]*StreamEntry),
@@ -142,7 +146,11 @@ func (p *Pool) maintainConnection(index int) {
 		p.conns[index] = pc
 		p.connsMu.Unlock()
 
-		log.Printf("[*] Pool connection [%d] connected to %s (SNI: %s, Host: %s)", index, p.serverAddr, p.sni, p.hostHeader)
+		modeStr := "HTTP-Upgrade"
+		if p.rawMode {
+			modeStr = "Raw-TCP-SNI"
+		}
+		log.Printf("[*] Pool connection [%d] connected to %s (SNI: %s, Host: %s, Mode: %s)", index, p.serverAddr, p.sni, p.hostHeader, modeStr)
 
 		// Start heartbeat loop
 		go p.heartbeat(pc)
@@ -173,8 +181,10 @@ func (p *Pool) dialSingle(index int) (*PooledConn, error) {
 		tlsConfig := &tls.Config{
 			ServerName:         p.sni,
 			InsecureSkipVerify: p.insecureTLS,
-			NextProtos:         []string{"http/1.1"},
 			MinVersion:         tls.VersionTLS12,
+		}
+		if !p.rawMode {
+			tlsConfig.NextProtos = []string{"http/1.1"}
 		}
 		tlsConn := tls.Client(rawConn, tlsConfig)
 		tlsConn.SetDeadline(time.Now().Add(10 * time.Second))
@@ -184,6 +194,27 @@ func (p *Pool) dialSingle(index int) (*PooledConn, error) {
 		}
 		tlsConn.SetDeadline(time.Time{})
 		transportConn = tlsConn
+	}
+
+	if p.rawMode {
+		// In raw TCP/TLS SNI mode, send an initial ping frame immediately so upstream multiplexers
+		// (like MUB-X Chameleon on loopback 18443) immediately sniff the TB\x01 magic without waiting.
+		pingFrame, err := protocol.NewFrame(protocol.CmdPing, 0, nil)
+		if err != nil {
+			_ = transportConn.Close()
+			return nil, err
+		}
+		if err := protocol.WriteFrame(transportConn, pingFrame); err != nil {
+			_ = transportConn.Close()
+			return nil, fmt.Errorf("send initial ping frame failed: %w", err)
+		}
+
+		return &PooledConn{
+			pool:      p,
+			index:     index,
+			rawConn:   transportConn,
+			closeChan: make(chan struct{}),
+		}, nil
 	}
 
 	// Send HTTP Upgrade Request (RFC 6455 compliant WebSocket headers to pass through CDNs and carrier DPI)

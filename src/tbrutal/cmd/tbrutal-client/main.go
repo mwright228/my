@@ -15,7 +15,8 @@ func main() {
 	serverAddr := flag.String("s", "", "Server address host:port (e.g. 212.60.151.69:443)")
 	sni := flag.String("sni", "images.vodafone.co.uk", "Carrier bug-host SNI (e.g. images.vodafone.co.uk)")
 	hostHeader := flag.String("host", "", "HTTP Host header (defaults to server host or SNI)")
-	path := flag.String("path", "/tbrutal", "HTTP upgrade path (default /tbrutal)")
+	path := flag.String("path", "/tbrutal", "HTTP upgrade path (default /tbrutal, empty string enables raw mode)")
+	raw := flag.Bool("raw", false, "Use direct raw TCP/TLS SNI mode without HTTP upgrade (like SSH SSL SNI)")
 	token := flag.String("token", "", "User authentication UUID / token")
 	localSocks := flag.String("l", "127.0.0.1:10808", "Local SOCKS5 listen address")
 	numConns := flag.Int("p", 4, "Number of concurrent pooled TCP connections")
@@ -31,6 +32,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	isRaw := *raw || *path == ""
+
 	cli := client.NewClient(client.Config{
 		ServerAddr:     *serverAddr,
 		SNI:            *sni,
@@ -42,6 +45,7 @@ func main() {
 		RateMbps:       *rateMbps,
 		UseTLS:         *useTLS,
 		InsecureTLS:    *insecure,
+		RawMode:        isRaw,
 	})
 
 	log.Printf("[*] Launching T-Brutal Client...")

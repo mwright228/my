@@ -498,6 +498,11 @@ class TestProtocolSniffingAndRewriting(unittest.TestCase):
         ssh_banner = b"SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.1\r\n"
         self.assertEqual(sniff_protocol(ssh_banner), "ssh")
 
+    def test_sniff_tbrutal(self):
+        # T-Brutal protocol magic: 0x54 0x42 0x01 (TB\x01) or TBRU
+        self.assertEqual(sniff_protocol(b"TB\x01\x05\x00\x00\x00\x00\x00\x00"), "tbrutal")
+        self.assertEqual(sniff_protocol(b"TBRU\x01\x00\x00\x00"), "tbrutal")
+
     def test_sniff_http_connect(self):
         req = b"CONNECT 127.0.0.1:2222 HTTP/1.1\r\nHost: bug.com\r\n\r\n"
         self.assertEqual(sniff_protocol(req), "http")
@@ -1240,6 +1245,64 @@ class TestChameleonSSLMultiplexer(unittest.IsolatedAsyncioTestCase):
             server.close()
             await server.wait_closed()
             globals_dict["CHAMELEON_NGINX_PORT"] = orig_nginx_port
+
+    async def test_ssl_direct_tbrutal(self):
+        """When client connects with T-Brutal binary framing (TB\\x01...),
+        handle_ssl_client routes raw stream directly to CHAMELEON_TBRUTAL_PORT."""
+        received_by_tbrutal = bytearray()
+
+        async def tbrutal_daemon_handler(t_reader, t_writer):
+            # Send mock pong
+            t_writer.write(b"TB\x01\x06\x00\x00\x00\x00\x00\x00")
+            await t_writer.drain()
+            while True:
+                chunk = await t_reader.read(4096)
+                if not chunk:
+                    break
+                received_by_tbrutal.extend(chunk)
+            t_writer.close()
+            await t_writer.wait_closed()
+
+        server = await asyncio.start_server(tbrutal_daemon_handler, "127.0.0.1", 0)
+        tbrutal_port = server.sockets[0].getsockname()[1]
+        globals_dict = chameleon["handle_client"].__globals__
+        orig_tbrutal_port = globals_dict["CHAMELEON_TBRUTAL_PORT"]
+        globals_dict["CHAMELEON_TBRUTAL_PORT"] = tbrutal_port
+
+        try:
+            reader = asyncio.StreamReader()
+            writer_transport = asyncio.StreamWriter(
+                transport=mock.MagicMock(),
+                protocol=asyncio.StreamReaderProtocol(reader),
+                reader=reader,
+                loop=asyncio.get_running_loop()
+            )
+            client_written = bytearray()
+            writer_transport.write = lambda d: client_written.extend(d)
+            writer_transport.wait_closed = mock.AsyncMock()
+            writer_transport.can_write_eof = lambda: True
+            writer_transport.write_eof = mock.MagicMock()
+            writer_transport.get_extra_info = lambda info: ("127.0.0.1", 54325) if info == "peername" else None
+
+            # Feed raw T-Brutal ping frame (TB\x01\x05...)
+            reader.feed_data(b"TB\x01\x05\x00\x00\x00\x00\x00\x00")
+
+            async def feed_eof_later():
+                await asyncio.sleep(0.08)
+                reader.feed_eof()
+
+            asyncio.create_task(feed_eof_later())
+
+            await handle_ssl_client(reader, writer_transport)
+
+            # T-Brutal daemon should receive the raw ping frame
+            self.assertTrue(received_by_tbrutal.startswith(b"TB\x01\x05"))
+            # Client should receive T-Brutal's pong
+            self.assertTrue(bytes(client_written).startswith(b"TB\x01\x06"))
+        finally:
+            server.close()
+            await server.wait_closed()
+            globals_dict["CHAMELEON_TBRUTAL_PORT"] = orig_tbrutal_port
 
 
 if __name__ == "__main__":

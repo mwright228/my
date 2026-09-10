@@ -91,6 +91,7 @@ DEFAULT_PORT = 2222
 # Internal SSL multiplexer port (terminates TLS for carrier bug-host SNIs and direct SSL)
 CHAMELEON_SSL_PORT = int(os.environ.get("CHAMELEON_SSL_PORT", "18443"))
 CHAMELEON_NGINX_PORT = int(os.environ.get("CHAMELEON_NGINX_PORT", "80"))
+CHAMELEON_TBRUTAL_PORT = int(os.environ.get("CHAMELEON_TBRUTAL_PORT", "18999"))
 
 # Local TLS terminator — where raw TLS ClientHellos get sent when received on Chameleon ports.
 # Defaults to Chameleon's internal SSL multiplexer (18443) so mobile injector TLS modes work seamlessly.
@@ -99,13 +100,13 @@ TLS_FALLBACK_PORT = int(os.environ.get("CHAMELEON_TLS_FALLBACK_PORT", str(CHAMEL
 # Permitted internal local targets (services requiring their own cryptographic auth)
 ALLOWED_LOCAL_PORTS: Set[int] = {
     22, 53, 80, 109, 443, 1194, 2222, 5667,
-    8388, 8389, 8443, 8444, 8448, 17000, 18080, 18500, 20443
+    8388, 8389, 8443, 8444, 8448, 17000, 18080, 18500, 18999, 20443
 }
 
 # Dedicated local tunnel service ports (always route to loopback)
 LOCAL_TUNNEL_PORTS: Set[int] = {
     22, 53, 109, 1194, 2222, 5667,
-    8388, 8389, 8444, 8448, 17000, 18080, 18500, 20443
+    8388, 8389, 8444, 8448, 17000, 18080, 18500, 18999, 20443
 }
 
 # Explicitly forbidden local ports (e.g. Chameleon control 18088 and internal SSL 18443)
@@ -243,6 +244,7 @@ STATS: Dict[str, Any] = {
     "ssl_connections": 0,
     "routes_ssl_direct_ssh": 0,
     "routes_ssl_payload_ssh": 0,
+    "routes_ssl_tbrutal": 0,
     "routes_ssl_web": 0,
     "blocked_unauthorized": 0,
     "blocked_forbidden_port": 0,
@@ -640,6 +642,8 @@ def sniff_protocol(buf: bytes) -> str:
         return "tls"
     if buf.startswith(b"SSH-"):
         return "ssh"
+    if buf.startswith(b"TB\x01") or buf.startswith(b"TBRU"):
+        return "tbrutal"
     if RE_CONNECT.search(buf) or RE_HTTP_METHOD_LINE.search(buf) or b"\r\n\r\n" in buf or b"\n\n" in buf:
         return "http"
     return "unknown"
@@ -1423,6 +1427,11 @@ async def _handle_client_inner(client_reader, client_writer, client_addr, initia
             await raw_passthrough(client_reader, client_writer, bytes(buffer), DEFAULT_HOST, DEFAULT_PORT)
             return
 
+        if proto == "tbrutal":
+            # Raw T-Brutal framing without HTTP wrapper
+            await raw_passthrough(client_reader, client_writer, bytes(buffer), "127.0.0.1", CHAMELEON_TBRUTAL_PORT)
+            return
+
     # --- Step 2: HTTP-shaped (or genuinely unknown) — accumulate more ---
     target_host = target_port = None
     is_connect = False
@@ -1449,9 +1458,14 @@ async def _handle_client_inner(client_reader, client_writer, client_addr, initia
             buffer.extend(chunk)
             if not is_ssl:
                 proto2 = sniff_protocol(bytes(buffer))
-                if proto2 in ("tls", "ssh"):
+                if proto2 in ("tls", "ssh", "tbrutal"):
                     target_host2 = "127.0.0.1"
-                    target_port2 = TLS_FALLBACK_PORT if proto2 == "tls" else DEFAULT_PORT
+                    if proto2 == "tls":
+                        target_port2 = TLS_FALLBACK_PORT
+                    elif proto2 == "ssh":
+                        target_port2 = DEFAULT_PORT
+                    else:
+                        target_port2 = CHAMELEON_TBRUTAL_PORT
                     await raw_passthrough(client_reader, client_writer, bytes(buffer), target_host2, target_port2)
                     return
     except (asyncio.TimeoutError, ConnectionResetError):
@@ -1652,6 +1666,13 @@ async def handle_ssl_client(client_reader: asyncio.StreamReader, client_writer: 
             STATS["routes_ssl_direct_ssh"] += 1
             log.info("Direct SSH over SSL/TLS detected from %s — routing directly to Dropbear :%d", client_addr, DEFAULT_PORT)
             await raw_passthrough(client_reader, client_writer, bytes(buffer), DEFAULT_HOST, DEFAULT_PORT)
+            return
+
+        # 2. T-Brutal Direct SNI (pure TCP multi-connection proxy): starts with TB\x01 or TBRU
+        if buffer.startswith(b"TB\x01") or buffer.startswith(b"TBRU"):
+            STATS["routes_ssl_tbrutal"] += 1
+            log.info("Direct T-Brutal over SSL/TLS detected from %s — routing directly to T-Brutal daemon :%d", client_addr, CHAMELEON_TBRUTAL_PORT)
+            await raw_passthrough(client_reader, client_writer, bytes(buffer), "127.0.0.1", CHAMELEON_TBRUTAL_PORT)
             return
 
         buf_lower = bytes(buffer).lower()

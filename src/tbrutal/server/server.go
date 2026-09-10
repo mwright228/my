@@ -1,16 +1,20 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/mwright228/my/src/tbrutal/auth"
 	"github.com/mwright228/my/src/tbrutal/pacer"
+	"github.com/mwright228/my/src/tbrutal/protocol"
 )
 
 type Config struct {
@@ -19,11 +23,78 @@ type Config struct {
 	RateMbps   int
 }
 
+type prefixConn struct {
+	net.Conn
+	reader io.Reader
+}
+
+func (c *prefixConn) Read(p []byte) (int, error) {
+	return c.reader.Read(p)
+}
+
+type chanListener struct {
+	addr    net.Addr
+	conns   chan net.Conn
+	closed  atomic.Bool
+	closeCh chan struct{}
+}
+
+func newChanListener(addr net.Addr) *chanListener {
+	return &chanListener{
+		addr:    addr,
+		conns:   make(chan net.Conn, 256),
+		closeCh: make(chan struct{}),
+	}
+}
+
+func (l *chanListener) Accept() (net.Conn, error) {
+	select {
+	case c, ok := <-l.conns:
+		if !ok {
+			return nil, net.ErrClosed
+		}
+		return c, nil
+	case <-l.closeCh:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *chanListener) Close() error {
+	if l.closed.CompareAndSwap(false, true) {
+		close(l.closeCh)
+	}
+	return nil
+}
+
+func (l *chanListener) Addr() net.Addr {
+	if l.addr != nil {
+		return l.addr
+	}
+	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 18999}
+}
+
+func (l *chanListener) Feed(c net.Conn) error {
+	if l.closed.Load() {
+		return net.ErrClosed
+	}
+	select {
+	case l.conns <- c:
+		return nil
+	case <-l.closeCh:
+		return net.ErrClosed
+	case <-time.After(3 * time.Second):
+		return errors.New("http listener buffer full")
+	}
+}
+
 type Server struct {
 	cfg        Config
 	authStore  *auth.Store
 	pacer      *pacer.Pacer
 	httpServer *http.Server
+	listener   net.Listener
+	chanLn     *chanListener
+	closed     atomic.Bool
 }
 
 func NewServer(cfg Config) *Server {
@@ -106,22 +177,79 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) Start() error {
-	log.Printf("[*] T-Brutal server listening on %s (Pacer: %d Mbps, Users: %s)", s.cfg.ListenAddr, s.cfg.RateMbps, s.cfg.UsersFile)
-	err := s.httpServer.ListenAndServe()
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
+	log.Printf("[*] T-Brutal server listening on %s (Pacer: %d Mbps, Users: %s, Dual: Raw+HTTP)", s.cfg.ListenAddr, s.cfg.RateMbps, s.cfg.UsersFile)
+	ln, err := net.Listen("tcp", s.cfg.ListenAddr)
+	if err != nil {
+		return err
 	}
-	return err
+	return s.Serve(ln)
 }
 
 func (s *Server) Serve(ln net.Listener) error {
-	err := s.httpServer.Serve(ln)
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
+	s.listener = ln
+	s.chanLn = newChanListener(ln.Addr())
+
+	go func() {
+		_ = s.httpServer.Serve(s.chanLn)
+	}()
+
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if s.closed.Load() {
+				return nil
+			}
+			return err
+		}
+
+		go s.dispatchConn(conn)
 	}
-	return err
+}
+
+func (s *Server) dispatchConn(conn net.Conn) {
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	prefix := make([]byte, 2)
+	n, err := io.ReadFull(conn, prefix)
+	_ = conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
+
+	wrapped := &prefixConn{
+		Conn:   conn,
+		reader: io.MultiReader(bytes.NewReader(prefix[:n]), conn),
+	}
+
+	// Sniff for T-Brutal raw protocol magic: Magic0=0x54 ('T'), Magic1=0x42 ('B')
+	if n >= 2 && prefix[0] == protocol.Magic0 && prefix[1] == protocol.Magic1 {
+		if tc, ok := conn.(*net.TCPConn); ok {
+			_ = tc.SetNoDelay(true)
+			_ = tc.SetKeepAlive(true)
+			_ = tc.SetKeepAlivePeriod(30 * time.Second)
+		}
+		session := NewSession(wrapped, s.authStore, s.pacer)
+		go session.Handle()
+		return
+	}
+
+	// Forward to internal HTTP server for HTTP Upgrade negotiation
+	if s.chanLn != nil {
+		if err := s.chanLn.Feed(wrapped); err != nil {
+			_ = wrapped.Close()
+		}
+	} else {
+		_ = wrapped.Close()
+	}
 }
 
 func (s *Server) Stop(ctx context.Context) error {
+	s.closed.Store(true)
+	if s.listener != nil {
+		_ = s.listener.Close()
+	}
+	if s.chanLn != nil {
+		_ = s.chanLn.Close()
+	}
 	return s.httpServer.Shutdown(ctx)
 }

@@ -23,6 +23,7 @@ type Config struct {
 	RateMbps       int
 	UseTLS         bool
 	InsecureTLS    bool
+	RawMode        bool
 }
 
 type Client struct {
@@ -39,12 +40,12 @@ func NewClient(cfg Config) *Client {
 	if cfg.NumConns <= 0 {
 		cfg.NumConns = 4
 	}
-	if cfg.Path == "" {
+	if cfg.Path == "" && !cfg.RawMode {
 		cfg.Path = "/tbrutal"
 	}
 
 	p := pacer.NewPacer(cfg.RateMbps)
-	pool := NewPool(cfg.ServerAddr, cfg.SNI, cfg.HostHeader, cfg.Path, cfg.Token, cfg.NumConns, cfg.UseTLS, cfg.InsecureTLS, p)
+	pool := NewPool(cfg.ServerAddr, cfg.SNI, cfg.HostHeader, cfg.Path, cfg.Token, cfg.NumConns, cfg.UseTLS, cfg.InsecureTLS, cfg.RawMode, p)
 
 	return &Client{
 		cfg:   cfg,
