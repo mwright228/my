@@ -209,6 +209,19 @@ func (p *Pool) dialSingle(index int) (*PooledConn, error) {
 			return nil, fmt.Errorf("send initial ping frame failed: %w", err)
 		}
 
+		// Verify round-trip communication with upstream T-Brutal server
+		_ = transportConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		respFrame, err := protocol.ReadFrame(transportConn)
+		_ = transportConn.SetReadDeadline(time.Time{})
+		if err != nil {
+			_ = transportConn.Close()
+			return nil, fmt.Errorf("handshake verification failed: %w", err)
+		}
+		if respFrame.Cmd != protocol.CmdPong {
+			_ = transportConn.Close()
+			return nil, fmt.Errorf("expected CmdPong from server, got %d", respFrame.Cmd)
+		}
+
 		return &PooledConn{
 			pool:      p,
 			index:     index,
@@ -312,6 +325,9 @@ func (p *Pool) readLoop(pc *PooledConn) {
 	for {
 		frame, err := protocol.ReadFrame(pc.rawConn)
 		if err != nil {
+			if !p.closed.Load() && !pc.closed.Load() {
+				log.Printf("[!] Pool connection [%d] read error: %v", pc.index, err)
+			}
 			return
 		}
 

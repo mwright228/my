@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 )
 
 const (
@@ -76,6 +77,9 @@ func ReadFrame(r io.Reader) (*Frame, error) {
 	}
 
 	if hdrBuf[0] != Magic0 || hdrBuf[1] != Magic1 {
+		if strings.HasPrefix(string(hdrBuf[:]), "HTTP/") {
+			return nil, fmt.Errorf("server returned HTTP response %q (VPS needs 'mubx-update --force' or mubx-tbrutal is not running)", strings.TrimSpace(string(hdrBuf[:])))
+		}
 		return nil, ErrInvalidMagic
 	}
 	if hdrBuf[2] != Version1 {
