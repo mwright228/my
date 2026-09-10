@@ -5,6 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+Environment=GOMEMLIMIT=64MiB
+Environment=GOGC=50
 ExecStart=/usr/local/bin/mubx-tbrutal -listen 127.0.0.1:18999 -users /etc/mubx/users.json -rate 0
 Restart=always
 RestartSec=3s
@@ -12,6 +14,8 @@ TimeoutStopSec=5s
 KillMode=mixed
 LimitNOFILE=1048576
 Nice=-5
+MemoryMax=96M
+CPUQuota=100%
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

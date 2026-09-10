@@ -59,16 +59,28 @@ func (p *Pacer) Wait(n int) {
 	}
 
 	needed := int64(n)
-	if p.tokens >= needed {
-		p.tokens -= needed
+	p.tokens -= needed
+
+	// If tokens are still non-negative, proceed immediately with zero delay
+	if p.tokens >= 0 {
 		p.mu.Unlock()
 		return
 	}
 
-	// Deficit: calculate required sleep duration
-	deficit := needed - p.tokens
-	p.tokens = 0
+	deficit := -p.tokens
+	// Only sleep when deficit exceeds minimum scheduling threshold (20ms of bandwidth or 64KB)
+	// This prevents OS scheduler quantization micro-stutter (which collapses throughput to 10kb/s on Android)
+	minThreshold := p.rateBytesSec / 50
+	if minThreshold < 64*1024 {
+		minThreshold = 64 * 1024
+	}
+	if deficit < minThreshold {
+		p.mu.Unlock()
+		return
+	}
+
 	sleepDuration := time.Duration(float64(deficit) / float64(p.rateBytesSec) * float64(time.Second))
+	p.tokens = 0
 	p.lastUpdate = now.Add(sleepDuration)
 	p.mu.Unlock()
 

@@ -125,7 +125,29 @@ func (f *Frame) Encode() []byte {
 }
 
 func WriteFrame(w io.Writer, f *Frame) error {
-	_, err := w.Write(f.Encode())
+	var hdr [HeaderLen]byte
+	hdr[0] = f.Magic[0]
+	hdr[1] = f.Magic[1]
+	hdr[2] = f.Version
+	hdr[3] = f.Cmd
+	binary.BigEndian.PutUint32(hdr[4:8], f.StreamID)
+	binary.BigEndian.PutUint16(hdr[8:10], uint16(len(f.Payload)))
+
+	if len(f.Payload) == 0 {
+		_, err := w.Write(hdr[:])
+		return err
+	}
+
+	if cw, ok := w.(net.Conn); ok {
+		bufs := net.Buffers{hdr[:], f.Payload}
+		_, err := bufs.WriteTo(cw)
+		return err
+	}
+
+	if _, err := w.Write(hdr[:]); err != nil {
+		return err
+	}
+	_, err := w.Write(f.Payload)
 	return err
 }
 

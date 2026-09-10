@@ -34,8 +34,8 @@ case "$cmd" in
   client-config|config)
     user="${2:-admin}"
     bughost="${3:-images.vodafone.co.uk}"
-    rate="${4:-60}"
-    conns="${5:-4}"
+    rate="${4:-0}"
+    conns="${5:-1}"
     
     users_file="${MUBX_USERS_FILE:-/etc/mubx/users.json}"
     uuid=""

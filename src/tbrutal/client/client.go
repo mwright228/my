@@ -38,7 +38,7 @@ func NewClient(cfg Config) *Client {
 		cfg.LocalSocksAddr = "127.0.0.1:10808"
 	}
 	if cfg.NumConns <= 0 {
-		cfg.NumConns = 4
+		cfg.NumConns = 1
 	}
 	if cfg.Path == "" && !cfg.RawMode {
 		cfg.Path = "/tbrutal"

@@ -66,7 +66,7 @@ type Pool struct {
 
 func NewPool(serverAddr, sni, hostHeader, path, token string, numConns int, useTLS, insecureTLS, rawMode bool, p *pacer.Pacer) *Pool {
 	if numConns <= 0 {
-		numConns = 4
+		numConns = 1
 	}
 	if path == "" {
 		if !rawMode {
@@ -293,7 +293,7 @@ func (p *Pool) dialSingle(index int) (*PooledConn, error) {
 }
 
 func (p *Pool) heartbeat(pc *PooledConn) {
-	ticker := time.NewTicker(20 * time.Second)
+	ticker := time.NewTicker(12 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -320,6 +320,24 @@ func (p *Pool) readLoop(pc *PooledConn) {
 	defer func() {
 		pc.closed.Store(true)
 		_ = pc.rawConn.Close()
+
+		// Immediately clean up and reset all active streams attached to this dropped connection
+		// so browser / app connections don't hang indefinitely waiting for data.
+		p.streamsMu.Lock()
+		var orphaned []*StreamEntry
+		for id, st := range p.streams {
+			if st.pConn == pc {
+				orphaned = append(orphaned, st)
+				delete(p.streams, id)
+			}
+		}
+		p.streamsMu.Unlock()
+
+		for _, st := range orphaned {
+			if st.closed.CompareAndSwap(false, true) {
+				_ = st.clientConn.Close()
+			}
+		}
 	}()
 
 	for {
