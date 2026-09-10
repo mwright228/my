@@ -51,6 +51,10 @@ clear_existing_rules() {
     while iptables -t nat -D PREROUTING -p udp --dport 443 -j REDIRECT --to-ports 4433 2>/dev/null; do :; done
     while iptables -t nat -D PREROUTING -p udp --dport 443 -j REDIRECT --to-ports 8444 2>/dev/null; do :; done
   fi
+  if command -v ip6tables >/dev/null 2>&1; then
+    while ip6tables -t nat -D PREROUTING -p udp --dport 443 -j REDIRECT --to-ports 4433 2>/dev/null; do :; done
+    while ip6tables -t nat -D PREROUTING -p udp --dport 443 -j REDIRECT --to-ports 8444 2>/dev/null; do :; done
+  fi
 }
 
 persist_rules() {
@@ -58,10 +62,11 @@ persist_rules() {
     return 0
   fi
   mkdir -p "$CONF_DIR" 2>/dev/null || true
-  if command -v iptables-save >/dev/null 2>&1; then
-    if [ -d /etc/iptables ]; then
-      iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-    fi
+  if command -v iptables-save >/dev/null 2>&1 && [ -d /etc/iptables ]; then
+    iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+  fi
+  if command -v ip6tables-save >/dev/null 2>&1 && [ -d /etc/iptables ]; then
+    ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
   fi
 }
 
@@ -106,6 +111,9 @@ cmd_set_hy2() {
   check_root
   clear_existing_rules
   run_cmd iptables -t nat -A PREROUTING -p udp --dport 443 -j REDIRECT --to-ports 4433
+  if command -v ip6tables >/dev/null 2>&1; then
+    run_cmd ip6tables -t nat -A PREROUTING -p udp --dport 443 -j REDIRECT --to-ports 4433 2>/dev/null || true
+  fi
   mkdir -p "$CONF_DIR" 2>/dev/null || true
   cat <<EOF > "$STATE_FILE"
 TARGET=hy2
@@ -115,13 +123,16 @@ EOF
   chmod 0644 "$STATE_FILE" 2>/dev/null || true
   persist_rules
   echo -e "${C_MINT:-}[✓] Successfully mapped UDP 443 -> Hysteria 2 (Port 4433).${C_RESET:-}"
-  echo -e "${C_SLATE:-}    Zero-rated SNI bug-host connections can now connect directly to :443 over UDP.${C_RESET:-}"
+  echo -e "${C_SLATE:-}    Zero-rated SNI bug-host connections can now connect directly to :443 over UDP (dual-stack IPv4/IPv6).${C_RESET:-}"
 }
 
 cmd_set_tuic() {
   check_root
   clear_existing_rules
   run_cmd iptables -t nat -A PREROUTING -p udp --dport 443 -j REDIRECT --to-ports 8444
+  if command -v ip6tables >/dev/null 2>&1; then
+    run_cmd ip6tables -t nat -A PREROUTING -p udp --dport 443 -j REDIRECT --to-ports 8444 2>/dev/null || true
+  fi
   mkdir -p "$CONF_DIR" 2>/dev/null || true
   cat <<EOF > "$STATE_FILE"
 TARGET=tuic
@@ -131,7 +142,7 @@ EOF
   chmod 0644 "$STATE_FILE" 2>/dev/null || true
   persist_rules
   echo -e "${C_MINT:-}[✓] Successfully mapped UDP 443 -> TUIC v5 (Port 8444).${C_RESET:-}"
-  echo -e "${C_SLATE:-}    Zero-rated SNI bug-host connections can now connect directly to :443 over UDP.${C_RESET:-}"
+  echo -e "${C_SLATE:-}    Zero-rated SNI bug-host connections can now connect directly to :443 over UDP (dual-stack IPv4/IPv6).${C_RESET:-}"
 }
 
 cmd_set_off() {

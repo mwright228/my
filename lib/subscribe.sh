@@ -201,6 +201,18 @@ mubx_sub_links() { # $1 user  $2 uuid  $3 user index  -> links on stdout
       printf 'tuic://%s:%s@%s:443?congestion_control=bbr&alpn=h3&sni=%s&allow_insecure=1#MUBX-TUIC-BugHost\n' \
         "$uuid" "$uuid" "$myip" "$bughost"
     fi
+    if mubx_user_has_proto "$user" "vless_xhttp_tls" || mubx_user_has_proto "$user" "vless"; then
+      printf 'vless://%s@%s:443?encryption=none&security=tls&type=xhttp&host=%s&sni=%s&path=%%2Fvless-xhttp#MUBX-XHTTP-BugHost\n' \
+        "$uuid" "$myip" "$dom" "$bughost"
+    fi
+    if mubx_user_has_proto "$user" "vless_ws_tls" || mubx_user_has_proto "$user" "vless"; then
+      printf 'vless://%s@%s:443?encryption=none&security=tls&type=ws&host=%s&sni=%s&path=%%2Fvless-ws#MUBX-VLESS-WS-BugHost\n' \
+        "$uuid" "$myip" "$dom" "$bughost"
+    fi
+    if mubx_user_has_proto "$user" "vless_httpupgrade_tls" || mubx_user_has_proto "$user" "vless"; then
+      printf 'vless://%s@%s:443?encryption=none&security=tls&type=httpupgrade&host=%s&sni=%s&path=%%2Fvless-httpupgrade#MUBX-HTTPUpgrade-BugHost\n' \
+        "$uuid" "$myip" "$dom" "$bughost"
+    fi
   fi
 }
 
@@ -276,6 +288,18 @@ mubx_sub_clash() { # $1 user  $2 uuid  $3 user index -> JSON-YAML proxies on std
         uuid: \$uuid, password: \$uuid, \"congestion-controller\": \"bbr\",
         \"udp-relay-mode\": \"native\", \"reduce-rtt\": true,
         udp: true, tls: true, sni: \$bughost, alpn: [\"h3\"], \"skip-cert-verify\": true
+      }] else [] end)
+    + (if (\$bughost != \"\" and (cur_user | user_has_proto(\"vless-xhttp\"))) then [{
+        name: \"MUBX-XHTTP-BugHost\", type: \"vless\", server: \$myip, port: 443,
+        uuid: \$uuid, udp: true, tls: true, servername: \$bughost, network: \"xhttp\",
+        \"skip-cert-verify\": true,
+        \"xhttp-opts\": {path: \"/vless-xhttp\", mode: \"auto\", headers: {Host: \$dom}}
+      }] else [] end)
+    + (if (\$bughost != \"\" and (cur_user | user_has_proto(\"vless-ws\"))) then [{
+        name: \"MUBX-VLESS-WS-BugHost\", type: \"vless\", server: \$myip, port: 443,
+        uuid: \$uuid, udp: true, tls: true, servername: \$bughost, network: \"ws\",
+        \"skip-cert-verify\": true,
+        \"ws-opts\": {path: \"/vless-ws\", headers: {Host: \$dom}}
       }] else [] end)
     + (if (cur_user | user_has_proto(\"vless-ws\")) then [ vws(\"/vless-ws\"; \"MUBX-VLESS-WS\") ] else [] end)
     + (if (cur_user | user_has_proto(\"vless_grpc_tls\")) then [{
@@ -412,6 +436,16 @@ mubx_sub_singbox() { # $1 user  $2 uuid  $3 user index -> sing-box JSON on stdou
         type: \"tuic\", tag: \"MUBX-TUIC-BugHost\", server: \$myip, server_port: 443, uuid: \$uuid,
         password: \$uuid, congestion_control: \"bbr\", version: 5,
         tls: {enabled: true, server_name: \$bughost, insecure: true, alpn: [\"h3\"]}
+      }] else [] end)
+      + (if (\$bughost != \"\" and (cur_user | user_has_proto(\"vless-xhttp\"))) then [{
+        type: \"vless\", tag: \"MUBX-XHTTP-BugHost\", server: \$myip, server_port: 443, uuid: \$uuid,
+        tls: {enabled: true, server_name: \$bughost, insecure: true},
+        transport: {type: \"xhttp\", path: \"/vless-xhttp\", headers: {Host: \$dom}}
+      }] else [] end)
+      + (if (\$bughost != \"\" and (cur_user | user_has_proto(\"vless-ws\"))) then [{
+        type: \"vless\", tag: \"MUBX-VLESS-WS-BugHost\", server: \$myip, server_port: 443, uuid: \$uuid,
+        tls: {enabled: true, server_name: \$bughost, insecure: true},
+        transport: {type: \"ws\", path: \"/vless-ws\", headers: {Host: \$dom}}
       }] else [] end)
       + (if (cur_user | user_has_proto(\"vless-ws\")) then [{
         type: \"vless\", tag: \"MUBX-VLESS-WS\", server: \$dom, server_port: 443, uuid: \$uuid,

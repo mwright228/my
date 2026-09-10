@@ -1186,6 +1186,61 @@ class TestChameleonSSLMultiplexer(unittest.IsolatedAsyncioTestCase):
             await server.wait_closed()
             globals_dict["CHAMELEON_NGINX_PORT"] = orig_nginx_port
 
+    async def test_raw_passthrough_half_close_xhttp_streaming(self):
+        """When an XHTTP client sends request and closes upload side (half-close),
+        Chameleon must NOT cancel the download pipe and must deliver the full response."""
+        received_by_backend = bytearray()
+
+        async def xhttp_backend_handler(b_reader, b_writer):
+            while True:
+                chunk = await b_reader.read(4096)
+                if not chunk:
+                    break
+                received_by_backend.extend(chunk)
+            # Send response after client has half-closed its upload
+            await asyncio.sleep(0.05)
+            b_writer.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\npong\r\n0\r\n\r\n")
+            await b_writer.drain()
+            b_writer.close()
+            await b_writer.wait_closed()
+
+        server = await asyncio.start_server(xhttp_backend_handler, "127.0.0.1", 0)
+        backend_port = server.sockets[0].getsockname()[1]
+        globals_dict = chameleon["handle_client"].__globals__
+        orig_nginx_port = globals_dict["CHAMELEON_NGINX_PORT"]
+        globals_dict["CHAMELEON_NGINX_PORT"] = backend_port
+
+        try:
+            reader = asyncio.StreamReader()
+            writer_transport = asyncio.StreamWriter(
+                transport=mock.MagicMock(),
+                protocol=asyncio.StreamReaderProtocol(reader),
+                reader=reader,
+                loop=asyncio.get_running_loop()
+            )
+            client_written = bytearray()
+            writer_transport.write = lambda d: client_written.extend(d)
+            writer_transport.wait_closed = mock.AsyncMock()
+            writer_transport.can_write_eof = lambda: True
+            writer_transport.write_eof = mock.MagicMock()
+            writer_transport.get_extra_info = lambda info: ("127.0.0.1", 54324) if info == "peername" else None
+
+            # Feed request and immediately close upload side (half-close)
+            reader.feed_data(b"POST /vless-xhttp HTTP/1.1\r\nHost: downloads.vodafone.co.uk\r\n\r\nping")
+            reader.feed_eof()
+
+            await handle_ssl_client(reader, writer_transport)
+
+            # Backend should have received the client request
+            self.assertIn(b"POST /vless-xhttp", bytes(received_by_backend))
+            # Client must have received the full 200 OK response despite upload half-close
+            self.assertIn(b"HTTP/1.1 200 OK", bytes(client_written))
+            self.assertIn(b"pong", bytes(client_written))
+        finally:
+            server.close()
+            await server.wait_closed()
+            globals_dict["CHAMELEON_NGINX_PORT"] = orig_nginx_port
+
 
 if __name__ == "__main__":
     unittest.main()

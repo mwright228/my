@@ -866,12 +866,15 @@ async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, count
             await writer.drain()
             if counter_key:
                 STATS[counter_key] += len(data)
-    except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
+    except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError, ssl.SSLError, OSError):
         pass
     finally:
         try:
-            writer.close()
-            await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
+            if writer.can_write_eof():
+                writer.write_eof()
+            else:
+                writer.close()
+                await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
         except (Exception, asyncio.CancelledError):
             pass
 
@@ -906,19 +909,21 @@ async def pipe_ssh_client_to_target(reader: asyncio.StreamReader, writer: asynci
 
         if ssh_started:
             await pipe(reader, writer, counter_key)
-    except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
+    except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError, ssl.SSLError, OSError):
         pass
     finally:
         try:
-            writer.close()
-            await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
+            if writer.can_write_eof():
+                writer.write_eof()
+            else:
+                writer.close()
+                await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
         except (Exception, asyncio.CancelledError):
             pass
 
 
 async def raw_passthrough(client_reader, client_writer, buffer: bytes, host: str, port: int):
-    """Straight TCP passthrough for protocols we don't (and shouldn't) try
-    to parse as HTTP — raw TLS ClientHello, raw SSH banners."""
+    """Full-duplex TCP streaming passthrough with clean half-close handling."""
     STATS["connections_accepted"] += 1
     STATS["routes_local"] += 1
     try:
@@ -943,9 +948,7 @@ async def raw_passthrough(client_reader, client_writer, buffer: bytes, host: str
 
     pipe_client = asyncio.create_task(pipe(client_reader, target_writer, "bytes_out"))
     pipe_target = asyncio.create_task(pipe(target_reader, client_writer, "bytes_in"))
-    done, pending = await asyncio.wait([pipe_client, pipe_target], return_when=asyncio.FIRST_COMPLETED)
-    for task in pending:
-        task.cancel()
+    await asyncio.gather(pipe_client, pipe_target, return_exceptions=True)
     for w in (client_writer, target_writer):
         try:
             w.close()
@@ -1599,9 +1602,7 @@ async def _handle_client_inner(client_reader, client_writer, client_addr, initia
     else:
         pipe_client = asyncio.create_task(pipe(client_reader, target_writer, "bytes_out"))
     pipe_target = asyncio.create_task(pipe(target_reader, client_writer, "bytes_in"))
-    done, pending = await asyncio.wait([pipe_client, pipe_target], return_when=asyncio.FIRST_COMPLETED)
-    for task in pending:
-        task.cancel()
+    await asyncio.gather(pipe_client, pipe_target, return_exceptions=True)
     for writer in (client_writer, target_writer):
         try:
             writer.close()

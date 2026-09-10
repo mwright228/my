@@ -144,6 +144,8 @@ class TestSubscribeBugHostNodes(unittest.TestCase):
         self.assertIn("MUBX-HY2-BugHost", proxy_names)
         self.assertIn("MUBX-TUIC-v5", proxy_names)
         self.assertIn("MUBX-TUIC-BugHost", proxy_names)
+        self.assertIn("MUBX-XHTTP-BugHost", proxy_names)
+        self.assertIn("MUBX-VLESS-WS-BugHost", proxy_names)
 
         # Check BugHost properties
         hy2_bg = next(p for p in proxies if p["name"] == "MUBX-HY2-BugHost")
@@ -155,6 +157,11 @@ class TestSubscribeBugHostNodes(unittest.TestCase):
         self.assertEqual(tuic_bg["port"], 443)
         self.assertEqual(tuic_bg["sni"], carrier_bug)
         self.assertTrue(tuic_bg["skip-cert-verify"])
+
+        xhttp_bg = next(p for p in proxies if p["name"] == "MUBX-XHTTP-BugHost")
+        self.assertEqual(xhttp_bg["port"], 443)
+        self.assertEqual(xhttp_bg["servername"], carrier_bug)
+        self.assertTrue(xhttp_bg["skip-cert-verify"])
 
     def test_singbox_subscription_includes_bughost_when_active(self):
         carrier_bug = "portal.ncnd.jazz.com.pk"
@@ -176,6 +183,8 @@ class TestSubscribeBugHostNodes(unittest.TestCase):
         self.assertIn("MUBX-HY2-BugHost", tags)
         self.assertIn("MUBX-TUIC-v5", tags)
         self.assertIn("MUBX-TUIC-BugHost", tags)
+        self.assertIn("MUBX-XHTTP-BugHost", tags)
+        self.assertIn("MUBX-VLESS-WS-BugHost", tags)
 
         hy2_bg = next(o for o in outbounds if o.get("tag") == "MUBX-HY2-BugHost")
         self.assertEqual(hy2_bg["server_port"], 443)
@@ -186,6 +195,11 @@ class TestSubscribeBugHostNodes(unittest.TestCase):
         self.assertEqual(tuic_bg["server_port"], 443)
         self.assertEqual(tuic_bg["tls"]["server_name"], carrier_bug)
         self.assertTrue(tuic_bg["tls"]["insecure"])
+
+        xhttp_bg = next(o for o in outbounds if o.get("tag") == "MUBX-XHTTP-BugHost")
+        self.assertEqual(xhttp_bg["server_port"], 443)
+        self.assertEqual(xhttp_bg["tls"]["server_name"], carrier_bug)
+        self.assertTrue(xhttp_bg["tls"]["insecure"])
 
     def test_links_subscription_includes_bughost_when_active(self):
         carrier_bug = "portal.ncnd.jazz.com.pk"
@@ -203,6 +217,8 @@ class TestSubscribeBugHostNodes(unittest.TestCase):
         links = res.stdout
         self.assertIn(f"/?sni={carrier_bug}&insecure=1#MUBX-HY2-BugHost", links)
         self.assertIn(f"&sni={carrier_bug}&allow_insecure=1#MUBX-TUIC-BugHost", links)
+        self.assertIn(f"&sni={carrier_bug}&path=%2Fvless-xhttp#MUBX-XHTTP-BugHost", links)
+        self.assertIn(f"&sni={carrier_bug}&path=%2Fvless-ws#MUBX-VLESS-WS-BugHost", links)
 
 
 class TestMubxMasterCli(unittest.TestCase):
