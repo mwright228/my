@@ -227,6 +227,31 @@ class TestRenderConfigs(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"jq evaluation failed: {res.stderr}")
         self.assertEqual(res.stdout.strip(), "true")
 
+    def test_hysteria_render_with_sniguard_disable(self):
+        hy2_out = os.path.join(self.test_dir, "hysteria.yaml")
+        env = dict(os.environ)
+        env["DOMAIN"] = "vpn.example.com"
+        env["HY2_PASS"] = "my-secret-hy2-pass"
+
+        cmd = [
+            "bash",
+            "-c",
+            "source lib/render.sh && mubx_hysteria_render configs/hysteria.yaml \"$1\"",
+            "_",
+            hy2_out,
+        ]
+        res = subprocess.run(cmd, cwd=REPO_ROOT, env=env, capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"mubx_hysteria_render failed: {res.stderr}")
+
+        with open(hy2_out, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        self.assertIn("sniGuard: disable", content, "Hysteria 2 must disable sniGuard to support carrier bug-hosts")
+        self.assertIn("password: my-secret-hy2-pass", content)
+        self.assertIn("vpn.example.com", content)
+        self.assertNotIn("__DOMAIN__", content)
+        self.assertNotIn("__HY2_PASS__", content)
+
 
 if __name__ == "__main__":
     unittest.main()

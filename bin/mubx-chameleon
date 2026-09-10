@@ -591,7 +591,7 @@ def create_ssl_context() -> Optional[ssl.SSLContext]:
             "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305"
         )
         try:
-            ctx.set_alpn_protocols(["http/1.1", "h2"])
+            ctx.set_alpn_protocols(["http/1.1"])
         except (AttributeError, NotImplementedError):
             pass
         ctx.load_cert_chain(certfile=cert_file, keyfile=key_file)

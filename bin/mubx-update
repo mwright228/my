@@ -230,6 +230,9 @@ mubx_nginx_render configs/nginx.conf "$tmp/nginx.conf"
 if [ -f configs/singbox.json ]; then
   mubx_singbox_render configs/singbox.json "$tmp/singbox.json" || true
 fi
+if [ -f configs/hysteria.yaml ]; then
+  mubx_hysteria_render configs/hysteria.yaml "$tmp/hysteria.yaml" || true
+fi
 if ! xray_out="$(xray run -test -config "$tmp/xray.json" 2>&1)"; then
   echo "$xray_out" >&2
   echo "[!] New Xray config failed validation; nothing was changed." >&2
@@ -249,6 +252,9 @@ install -m 0644 "$tmp/nginx.conf" /etc/nginx/nginx.conf
 if [ -s "$tmp/singbox.json" ]; then
   install -d -m 0755 /etc/sing-box
   install -m 0600 "$tmp/singbox.json" /etc/sing-box/config.json
+fi
+if [ -s "$tmp/hysteria.yaml" ] && [ -d /etc/hysteria ]; then
+  install -m 0600 "$tmp/hysteria.yaml" /etc/hysteria/config.yaml
 fi
 rm -rf "$tmp"
 

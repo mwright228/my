@@ -545,6 +545,20 @@ mubx_singbox_render() { # $1 template  $2 out
   chmod 0600 "$out" 2>/dev/null || true
 }
 
+mubx_hysteria_render() { # $1 template  $2 out
+  local tpl="$1" out="$2" dom="${DOMAIN:-}" pass="${HY2_PASS:-}"
+  if [ -z "$dom" ] && [ -r /etc/mubx/domain ]; then
+    dom="$(cat /etc/mubx/domain)"
+  fi
+  if [ -z "$pass" ] && [ -r /etc/telecom-engine.env ]; then
+    pass="$(sed -n 's/^HY2_PASS=//p' /etc/telecom-engine.env | head -n1)"
+  fi
+  [ -n "$dom" ] || dom="example.com"
+  [ -n "$pass" ] || pass="mubx-secret-hy2"
+  sed -e "s|__DOMAIN__|$dom|g; s|__HY2_PASS__|$pass|g" "$tpl" > "$out"
+  chmod 0600 "$out" 2>/dev/null || true
+}
+
 # Render /etc/nginx/nginx.conf from the template: expand the shared
 # #MUBX_SS_LOCATIONS# marker (one /ss-<user> and /ss22-<user> location block
 # per user) in both the port-80 and the loopback-TLS server, and substitute

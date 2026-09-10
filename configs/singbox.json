@@ -58,7 +58,6 @@
             "congestion_control": "bbr",
             "tls": {
                 "enabled": true,
-                "server_name": "__DOMAIN__",
                 "certificate_path": "/etc/letsencrypt/live/__DOMAIN__/fullchain.pem",
                 "key_path": "/etc/letsencrypt/live/__DOMAIN__/privkey.pem"
             }

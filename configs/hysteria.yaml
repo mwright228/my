@@ -3,6 +3,7 @@ listen: :4433
 tls:
   cert: /etc/letsencrypt/live/__DOMAIN__/fullchain.pem
   key: /etc/letsencrypt/live/__DOMAIN__/privkey.pem
+  sniGuard: disable
 
 auth:
   type: password
