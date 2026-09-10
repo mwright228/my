@@ -33,6 +33,14 @@ if [ -z "${JQ_PROTO_DEF:-}" ]; then
   fi
 fi
 
+if ! command -v mubx_base64 >/dev/null 2>&1; then
+  if [ -r "$(dirname "${BASH_SOURCE[0]}")/common.sh" ]; then
+    source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+  elif [ -r /usr/local/lib/mubx/common.sh ]; then
+    source /usr/local/lib/mubx/common.sh
+  fi
+fi
+
 # --- Hysteria2 port hopping (shared with the DNAT in install.sh) ----------
 
 # The configured hopping range as "start:end" (empty when disabled).

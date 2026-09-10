@@ -10,6 +10,9 @@ say() { printf '== %s\n' "$*"; }
 say "shell syntax"
 for f in install.sh bin/* lib/*.sh .github/ci-check.sh; do
   [ -f "$f" ] || continue
+  if file "$f" | grep -qE 'ELF|Mach-O|binary' && ! file "$f" | grep -q 'text'; then
+    continue
+  fi
   if head -n 1 "$f" | grep -q 'python'; then
     if ! python3 -m py_compile "$f"; then
       echo "PYTHON SYNTAX FAIL: $f"
@@ -160,11 +163,11 @@ PY
 # to the nginx loopback terminator, and a raw/SS fallback to the 17000
 # inbound. The template is installed verbatim by the renderer.
 check_haproxy_split() { # $1 haproxy config
-  grep -q 'use_backend srv_singbox if { req.ssl_sni -i ' "$1" || {
+  (grep -q 'use_backend srv_singbox if { req.ssl_sni -i ' "$1" || grep -q 'use_backend srv_singbox if is_stls_sni' "$1") || {
     echo "HAProxy ShadowTLS SNI -> singbox rule missing"
     fail=1
   }
-  grep -q 'use_backend srv_nginx if { req_ssl_hello_type 1 }' "$1" || {
+  (grep -q 'use_backend srv_nginx if { req_ssl_hello_type 1 }' "$1" || grep -q 'use_backend srv_nginx if is_tls_hello' "$1") || {
     echo "HAProxy TLS -> nginx rule missing"
     fail=1
   }

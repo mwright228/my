@@ -787,6 +787,7 @@ def is_local_target(host: str, port: int) -> bool:
     local_ids = load_local_identifiers()
     if h in local_ids:
         return True
+    return False
 
 async def is_safe_external_target(host: str) -> bool:
     """Validates that an outbound external target does not resolve to
