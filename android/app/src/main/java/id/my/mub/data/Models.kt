@@ -47,6 +47,7 @@ data class VpnProfile(
     val wsHost: String = "",
     val ssCipher: String = "2022-blake3-aes-128-gcm",
     val vlessFlow: String = "",
+    val tuicPassword: String = "",
     val realityPublicKey: String = "",
     val realityShortId: String = "",
     val killSwitchEnabled: Boolean = false
@@ -80,9 +81,7 @@ data class BugHostProbeResult(
         get() = statusCode in 200..399 && errorMessage == null
 }
 
-enum class LogLevel {
-    INFO, SUCCESS, WARN, ERROR, NET
-}
+enum class LogLevel { INFO, SUCCESS, WARN, ERROR, NET }
 
 data class LogEntry(
     val timestamp: Long = System.currentTimeMillis(),
@@ -94,8 +93,4 @@ data class LogEntry(
         get() = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(timestamp))
 }
 
-data class RealTelemetry(
-    val rxBytes: Long,
-    val txBytes: Long,
-    val activeConns: Int
-)
+data class RealTelemetry(val rxBytes: Long, val txBytes: Long, val activeConns: Int)
