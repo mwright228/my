@@ -248,6 +248,23 @@ object ConfigParser {
             val isShadowTls = plugin.contains("shadow-tls", ignoreCase = true)
             val is2022 = fragment.contains("2022", ignoreCase = true) || fragment.contains("SS22", ignoreCase = true)
 
+            // Extract plugin options (e.g. host=xxx;path=yyy;password=zzz)
+            var extractedSni = host
+            var extractedPath = ""
+            var extractedPass = ""
+            if (plugin.isNotBlank()) {
+                val decodedPlugin = Uri.decode(plugin)
+                for (part in decodedPlugin.split(";")) {
+                    val key = part.substringBefore("=").trim()
+                    val value = part.substringAfter("=").trim()
+                    when {
+                        key.equals("host", ignoreCase = true) -> extractedSni = value
+                        key.equals("path", ignoreCase = true) -> extractedPath = value
+                        key.equals("password", ignoreCase = true) -> extractedPass = value
+                    }
+                }
+            }
+
             val proto = when {
                 isShadowTls -> ProtocolType.SHADOWTLS_V3
                 is2022 -> ProtocolType.SHADOWSOCKS_2022
@@ -259,11 +276,13 @@ object ConfigParser {
                 serverHost = host,
                 serverIp = host,
                 serverPort = port,
-                bugHostSNI = "",
+                bugHostSNI = extractedSni,
                 userUUID = uri.userInfo ?: "",
                 protocol = proto,
                 poolConcurrency = 2,
-                brutalRateMbps = 0
+                brutalRateMbps = 0,
+                customPayload = extractedPath,
+                udpObfsPassword = if (extractedPass.isNotBlank()) extractedPass else "zivpn"
             )
         } catch (e: Exception) {
             null
