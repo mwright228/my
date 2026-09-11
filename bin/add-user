@@ -22,40 +22,31 @@ p="${2:-}"
 d="${3:-}"
 q="${4:-}"
 protos_arg="${5:-}"
-
 selected_protos='["all"]'
 
 if [ -z "$u" ]; then
   mubx_clear
-  # Step 1: Protocol Selection
   if [ -n "$protos_arg" ]; then
-    if [[ "$protos_arg" =~ ^\[.*\]$ ]]; then
-      selected_protos="$protos_arg"
-    elif declare -F mubx_proto_normalize >/dev/null 2>&1; then
-      selected_protos="$(mubx_proto_normalize "$protos_arg")"
-    fi
+    if [[ "$protos_arg" =~ ^\[.*\]$ ]]; then selected_protos="$protos_arg";
+    elif declare -F mubx_proto_normalize >/dev/null 2>&1; then selected_protos="$(mubx_proto_normalize "$protos_arg")"; fi
   elif declare -F mubx_proto_picker >/dev/null 2>&1; then
     selected_protos="$(mubx_proto_picker)"
   fi
-
-  # Step 2: Username
-  printf '\n'
-  printf '  %sUsername:         %s' "$C_PURPLE" "$C_RESET"
+  printf '\n  %sUsername:         %s' "$C_PURPLE" "$C_RESET"
   read -r u
 else
   if [ -n "$protos_arg" ]; then
-    if [[ "$protos_arg" =~ ^\[.*\]$ ]]; then
-      selected_protos="$protos_arg"
-    elif declare -F mubx_proto_normalize >/dev/null 2>&1; then
-      selected_protos="$(mubx_proto_normalize "$protos_arg")"
-    fi
+    if [[ "$protos_arg" =~ ^\[.*\]$ ]]; then selected_protos="$protos_arg";
+    elif declare -F mubx_proto_normalize >/dev/null 2>&1; then selected_protos="$(mubx_proto_normalize "$protos_arg")"; fi
   fi
 fi
 
 [[ "$u" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]] || die "Bad username (must be 3-32 chars, lowercase, [a-z0-9_-])"
 [ "$u" != "admin" ] || die "The 'admin' account is reserved for the primary system identity."
+if id "$u" >/dev/null 2>&1; then
+  die "Linux account '$u' already exists; use the user-management command to modify an existing account."
+fi
 
-# Check if SSH or system authentication is needed
 has_ssh=true
 if [ "$selected_protos" != '["all"]' ] && [ "$selected_protos" != '["0"]' ]; then
   if ! jq -e 'def user_has_proto($p): if (. == null or . == [] or (. | index("all") != null)) then true elif (. | index($p) != null) then true else false end; (user_has_proto("ssh") or user_has_proto("openvpn") or user_has_proto("squid") or user_has_proto("chameleon"))' <<< "$selected_protos" >/dev/null 2>&1; then
@@ -70,9 +61,7 @@ if [ "$has_ssh" = true ]; then
     if [ -z "$p" ]; then
       p="$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 10)"
       printf '  %s↳ Auto-generated password: %s%s%s\n' "$C_SLATE" "$C_BRIGHT" "$p" "$C_RESET"
-    elif [ "${#p}" -lt 6 ]; then
-      die "Password must be at least 6 characters"
-    fi
+    elif [ "${#p}" -lt 6 ]; then die "Password must be at least 6 characters"; fi
   fi
 else
   printf '  %sSSH Password:     %s(Disabled - Proxy UUID only)%s\n' "$C_SLATE" "$C_AMBER" "$C_RESET"
@@ -91,93 +80,72 @@ if [ -z "$q" ]; then
   read -r q || q=""
   q="${q:-0}"
 fi
+[[ "$q" =~ ^[0-9]+$ ]] || die "Quota must be a non-negative integer in GB"
 EXP=$(date -d "+${d} days" +%Y-%m-%d 2>/dev/null || date -v+"${d}"d +%Y-%m-%d)
 if [ "$(id -u)" -eq 0 ]; then
   grep -qxF '/bin/false' /etc/shells 2>/dev/null || echo '/bin/false' >> /etc/shells 2>/dev/null || true
 fi
 
-# Create Linux system user
-if id "$u" >/dev/null 2>&1; then
-  usermod -s /bin/false -e "$EXP" "$u" 2>/dev/null || true
-else
-  useradd -M -s /bin/false -e "$EXP" "$u" 2>/dev/null || true
-fi
+useradd -M -s /bin/false -e "$EXP" "$u"
+rollback_user() { userdel "$u" >/dev/null 2>&1 || true; }
+trap rollback_user ERR
 
 if [ "$has_ssh" = true ]; then
   printf '%s:%s\n' "$u" "$p" | chpasswd
 else
-  passwd -l "$u" >/dev/null 2>&1 || true
+  passwd -l "$u" >/dev/null 2>&1
 fi
 
-# Provision in MUB-X user store with selected protocols
 mubx_users_bin="/usr/local/bin/mubx-users"
 [ -x "$mubx_users_bin" ] || mubx_users_bin="$(dirname "${BASH_SOURCE[0]}")/mubx-users"
 user_store="${MUBX_USERS_FILE:-/etc/mubx/users.json}"
+[ -x "$mubx_users_bin" ] || die "mubx-users command not found; refusing to leave a partial Linux account"
+[ -f "$user_store" ] || die "MUB-X user store missing at $user_store; refusing to leave a partial Linux account"
 
-if [ -x "$mubx_users_bin" ] && [ -f "$user_store" ]; then
-  "$mubx_users_bin" add "$u" "$d" "$q" "$selected_protos" >/dev/null ||
-    warn "Xray identity for $u was not created"
-fi
+"$mubx_users_bin" add "$u" "$d" "$q" "$selected_protos" >/dev/null || die "MUB-X identity provisioning failed; Linux account rolled back"
 
+trap - ERR
 printf '\n'
 mubx_box_top "PROVISIONING RECEIPT" "SUCCESS"
 mubx_kvrow "Gateway Host"   "${DOMAIN:-<server domain>}"
 mubx_kvrow "Account User"   "$u"
-if [ "$has_ssh" = true ]; then
-  mubx_kvrow "Account Pass"   "$p"
-else
-  mubx_kvrow "Account Pass"   "(Proxy UUID only; SSH disabled)"
-fi
+if [ "$has_ssh" = true ]; then mubx_kvrow "Account Pass" "$p"; else mubx_kvrow "Account Pass" "(Proxy UUID only; SSH disabled)"; fi
 mubx_kvrow "Validity"       "$d days"
 mubx_kvrow "Expiry Date"    "$EXP"
-if [ "$q" -gt 0 ]; then
-  mubx_kvrow "Data Quota"     "${q} GB"
-else
-  mubx_kvrow "Data Quota"     "Unlimited"
-fi
-
+if [ "$q" -gt 0 ]; then mubx_kvrow "Data Quota" "${q} GB"; else mubx_kvrow "Data Quota" "Unlimited"; fi
 proto_badge="ALL PROTOCOLS"
-if declare -F mubx_proto_summary >/dev/null 2>&1; then
-  proto_badge="$(mubx_proto_summary "$selected_protos")"
-fi
-mubx_kvrow "Protocols"      "$proto_badge"
+if declare -F mubx_proto_summary >/dev/null 2>&1; then proto_badge="$(mubx_proto_summary "$selected_protos")"; fi
+mubx_kvrow "Protocols" "$proto_badge"
 
 mubx_box_div "ENABLED PROTOCOLS & PORTS"
-show_p() { # $1 proto $2 label $3 port
-  if [ "$selected_protos" = '["all"]' ] || jq -e --arg p "$1" 'def user_has_proto($p): if (. == null or . == [] or (. | index("all") != null)) then true elif (. | index($p) != null) then true else false end; user_has_proto($p)' <<< "$selected_protos" >/dev/null 2>&1; then
-    mubx_kvrow "$2" "$3"
-  fi
+show_p() {
+  if [ "$selected_protos" = '["all"]' ] || jq -e --arg p "$1" 'def user_has_proto($p): if (. == null or . == [] or (. | index("all") != null)) then true elif (. | index($p) != null) then true else false end; user_has_proto($p)' <<< "$selected_protos" >/dev/null 2>&1; then mubx_kvrow "$2" "$3"; fi
 }
-show_p "ssh"                    "SSH Dropbear / WS"  "2222, 109, 53 / 443 wss, 80 ws"
-show_p "chameleon"              "Chameleon Proxy"    "8080, 3128, 8888, 443"
-show_p "openvpn"                "OpenVPN Server"     "1194 (TCP), 2200 (UDP)"
-show_p "wireguard"              "WireGuard VPN"      "51820 (UDP)"
-show_p "amneziawg"              "AmneziaWG Obfs"     "51821 (UDP Obfuscated)"
-show_p "hysteria2"              "Hysteria 2"         "4433 (UDP QUIC)"
-show_p "shadowtls"              "ShadowTLS v3"       "443 (Decoy SNI)"
-show_p "ss_ws_tls"              "Shadowsocks WS"     "443 TLS / 80 Plain"
-show_p "ss_tcp"                 "Shadowsocks TCP"    "8388+ (Dedicated)"
-show_p "ss_2022"                "Shadowsocks 2022"   "443 (BLAKE3)"
-show_p "vless_ws_tls"           "VLESS WS & UPG"     "443 TLS / 80 Plain"
-show_p "vless_grpc_tls"         "VLESS gRPC"         "443 (HTTP/2 Ingress)"
-show_p "vmess_ws_tls"           "VMess WS"           "443 TLS / 80 Plain"
-show_p "trojan_ws_tls"          "Trojan WS"          "443 TLS / 80 Plain"
-show_p "tuic"                   "TUIC v5 Native QUIC" "8444 (UDP QUIC 0-RTT)"
+show_p "ssh" "SSH Dropbear / WS" "2222, 109, 53 / 443 wss, 80 ws"
+show_p "chameleon" "Chameleon Proxy" "8080, 3128, 8888, 443"
+show_p "openvpn" "OpenVPN Server" "1194 (TCP), 2200 (UDP)"
+show_p "wireguard" "WireGuard VPN" "51820 (UDP)"
+show_p "amneziawg" "AmneziaWG Obfs" "51821 (UDP Obfuscated)"
+show_p "hysteria2" "Hysteria 2" "4433 (UDP QUIC)"
+show_p "shadowtls" "ShadowTLS v3" "443 (Decoy SNI)"
+show_p "ss_ws_tls" "Shadowsocks WS" "443 TLS / 80 Plain"
+show_p "ss_tcp" "Shadowsocks TCP" "8388+ (Dedicated)"
+show_p "ss_2022" "Shadowsocks 2022" "443 (BLAKE3)"
+show_p "vless_ws_tls" "VLESS WS & UPG" "443 TLS / 80 Plain"
+show_p "vless_grpc_tls" "VLESS gRPC" "443 (HTTP/2 Ingress)"
+show_p "vmess_ws_tls" "VMess WS" "443 TLS / 80 Plain"
+show_p "trojan_ws_tls" "Trojan WS" "443 TLS / 80 Plain"
+show_p "tuic" "TUIC v5 Native QUIC" "8444 (UDP QUIC 0-RTT)"
 mubx_box_bot
 
 if [ -t 0 ]; then
   printf '\n'
   read -r -p "  Print client connection links for $u? [Y/n] " ans
   if [[ ! "$ans" =~ ^[nN] ]]; then
-    if [ -x /usr/local/bin/link-gen ]; then
-      /usr/local/bin/link-gen "${DOMAIN:-}" "$u"
-    else
-      warn "link-gen not installed"
-    fi
+    if [ -x /usr/local/bin/link-gen ]; then /usr/local/bin/link-gen "${DOMAIN:-}" "$u"; else warn "link-gen not installed"; fi
   else
     printf '  %s↳ Client links: run '\''link-gen [bug-host] %s'\'' or menu option 2.%s\n' "$C_SLATE" "$u" "$C_RESET"
   fi
 else
   echo "[+] $u expires $EXP"
 fi
-
