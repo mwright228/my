@@ -159,6 +159,9 @@ func (c *SingBoxClient) Start() (int, error) {
 	}
 
 	path := c.cfg.Path
+	if path == "" && c.cfg.CustomPayload != "" && strings.HasPrefix(c.cfg.CustomPayload, "/") {
+		path = c.cfg.CustomPayload
+	}
 	if path == "" {
 		path = "/vless-ws"
 	}
@@ -251,7 +254,7 @@ func (c *SingBoxClient) Start() (int, error) {
 			},
 		}
 
-	case strings.Contains(protoUpper, "SHADOWSOCKS") || strings.Contains(protoUpper, "SS"):
+	case strings.Contains(protoUpper, "SHADOWSOCKS") || protoUpper == "SS" || strings.HasPrefix(protoUpper, "SS_") || strings.HasPrefix(protoUpper, "SHADOWSOCKS"):
 		cipher := c.cfg.ObfsKey
 		if cipher == "" {
 			cipher = "2022-blake3-aes-128-gcm"
@@ -375,7 +378,8 @@ func (c *SingBoxClient) Start() (int, error) {
 
 	fullConfig := map[string]any{
 		"log": map[string]any{
-			"level":     "info",
+			"level":     "debug",
+			"output":    "stdout",
 			"timestamp": true,
 		},
 		// DNS: always use local/system resolver. Routing DNS via the proxy
@@ -434,13 +438,12 @@ func (c *SingBoxClient) Start() (int, error) {
 	c.cancel = cancel
 
 	platformBridge := &SingBoxPlatformBridge{}
-	logWriter := &SingBoxLogWriter{}
 
 	boxInstance, err := box.New(box.Options{
 		Context:           ctx,
 		Options:           options,
 		PlatformInterface: platformBridge,
-		PlatformLogWriter: logWriter,
+		PlatformLogWriter: nil,
 	})
 	if err != nil {
 		cancel()

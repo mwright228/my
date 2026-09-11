@@ -87,6 +87,7 @@ object NativeCoreBridge {
             val effectivePayload = when (profile.protocol) {
                 id.my.mub.data.ProtocolType.SHADOWTLS_V3 -> profile.ssCipher.ifBlank { "2022-blake3-aes-256-gcm" }
                 id.my.mub.data.ProtocolType.T_BRUTAL -> if (profile.wsPath.isNotBlank()) profile.wsPath else if (profile.customPayload.isNotBlank()) profile.customPayload else "/tbrutal"
+                id.my.mub.data.ProtocolType.VLESS_WS, id.my.mub.data.ProtocolType.TROJAN, id.my.mub.data.ProtocolType.VMESS -> if (profile.wsPath.isNotBlank()) profile.wsPath else if (profile.customPayload.isNotBlank()) profile.customPayload else "/vless-ws"
                 else -> profile.customPayload
             }
 
