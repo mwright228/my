@@ -25,7 +25,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -79,9 +78,7 @@ class MubxVpnService : VpnService() {
                         stopSelf(); return START_NOT_STICKY
                     }
                 }
-                if (disconnectRequested.compareAndSet(true, false)) {
-                    LogRepository.log("VPN", "New connection requested after disconnect")
-                }
+                if (disconnectRequested.compareAndSet(true, false)) LogRepository.log("VPN", "New connection requested after disconnect")
                 connect()
             }
             ACTION_DISCONNECT -> disconnect()
@@ -129,7 +126,11 @@ class MubxVpnService : VpnService() {
                 if (tunFd < 0) throw IllegalStateException("Invalid TUN file descriptor")
                 val routerStarted = NativeCoreBridge.startTunRouter(tunFd, socksPort, "$dns1:53")
                 if (!routerStarted) throw IllegalStateException("TUN router failed to start")
-                _vpnState.value = VpnState.Connected(0.0, 0.0, 0L, currentProfile.poolConcurrency, 0L, 0L, 0L)
+                _vpnState.value = VpnState.Connected(
+                    rxSpeedMbps = 0.0, txSpeedMbps = 0.0, pingMs = 0L,
+                    activeLanes = currentProfile.poolConcurrency, totalRxBytes = 0L, totalTxBytes = 0L,
+                    connectedDurationSecs = 0L
+                )
                 LogRepository.log("VPN", "TUN interface active and router confirmed running", LogLevel.SUCCESS)
                 startTelemetryMonitor()
             } catch (e: Exception) {
@@ -170,10 +171,7 @@ class MubxVpnService : VpnService() {
             cleanupResources()
             _vpnState.value = VpnState.Disconnected
             LogRepository.log("VPN", "Tunnel disconnected cleanly", LogLevel.INFO)
-            withContext(Dispatchers.Main) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
+            withContext(Dispatchers.Main) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
         }
     }
 
@@ -196,8 +194,8 @@ class MubxVpnService : VpnService() {
         _vpnState.value = VpnState.Disconnected
         disconnectRequested.set(true)
         if (instance == this) instance = null
-        // Do not block Android's main lifecycle thread waiting on native/TUN I/O here.
-        serviceScope.cancel()
+        // Never block Android's main lifecycle thread on native/TUN I/O.
+        serviceScope.coroutineContext[Job]?.cancel()
         super.onDestroy()
     }
 }
