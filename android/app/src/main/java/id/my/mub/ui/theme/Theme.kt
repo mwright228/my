@@ -24,3 +24,7 @@ fun MubxTheme(content: @Composable () -> Unit) {
         content = content
     )
 }
+
+@Composable
+fun MubxVpnTheme(content: @Composable () -> Unit) = MubxTheme(content)
+
