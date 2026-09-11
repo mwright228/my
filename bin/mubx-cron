@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # MUB-X weekly maintenance: refresh GeoIP/GeoSite databases, renew the
-# Let's Encrypt certificate (restarting Hysteria/ZivPN only on a real
-# renewal), and revive any service that should be running but died.
+# Let's Encrypt certificate, and revive any service that should be running
+# but died. Managed-service failures abort the run so monitoring can detect
+# a degraded host instead of receiving a false-success exit status.
 set -Eeuo pipefail
-
 
 DOMAIN="$(cat /etc/mubx/domain 2>/dev/null || cat /usr/local/etc/xray/domain 2>/dev/null || true)"
 if [ -z "$DOMAIN" ]; then
@@ -15,9 +15,6 @@ if [ -z "$DOMAIN" ]; then
   load_mubx_env 2>/dev/null || true
 fi
 
-# Every daemon MUB-X manages. Only services that were active when the
-# maintenance run started are revived afterwards, so an operator that
-# deliberately stopped something keeps it stopped.
 SERVICES=(
   haproxy nginx xray dropbear wstunnel hysteria zivpn singbox mubx-chameleon mubx-tbrutal
   openvpn-server@tcp openvpn-server@udp wg-quick@wg0 awg-quick@awg0
@@ -43,8 +40,6 @@ for svc in "${SERVICES[@]}"; do
   systemctl is-active --quiet "$svc" && was_active["$svc"]=1 || was_active["$svc"]=0
 done
 
-# Restore the exact pre-run service state. Used both after the maintenance
-# window (nginx/haproxy were stopped for certbot) and on rollback.
 restore_services() {
   local svc
   for svc in "${SERVICES[@]}"; do
@@ -63,8 +58,7 @@ cleanup() {
   if [ "$maintenance_success" -eq 0 ]; then
     for file in geoip.dat geosite.dat; do
       if [ -e "$tmpdir/$file.previous" ]; then
-        cp -a "$tmpdir/$file.previous" "/usr/local/share/xray/$file" ||
-          status=1
+        cp -a "$tmpdir/$file.previous" "/usr/local/share/xray/$file" || status=1
       elif [ "${database_was_present[$file]}" -eq 0 ]; then
         rm -f "/usr/local/share/xray/$file" || status=1
       fi
@@ -73,6 +67,7 @@ cleanup() {
   restore_services || status=1
   return "$status"
 }
+
 on_exit() {
   local status=$?
   cleanup || status=$?
@@ -81,7 +76,6 @@ on_exit() {
 }
 trap on_exit EXIT
 
-# Dynamic GeoIP / GeoSite updates: verify against upstream published .sha256sum files
 db_updated=0
 if curl --fail --silent --location --retry 3 -o "$tmpdir/geoip.dat" \
      "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat" 2>/dev/null && \
@@ -103,28 +97,33 @@ if curl --fail --silent --location --retry 3 -o "$tmpdir/geosite.dat" \
   db_updated=1
 fi
 
-# Xray keeps the databases in memory, so reload it if updated.
 if [ "$db_updated" -eq 1 ] && [ "${was_active[xray]}" -eq 1 ]; then
-  systemctl restart xray 2>/dev/null || true
+  systemctl restart xray
+  systemctl is-active --quiet xray || { echo "xray restart failed" >&2; exit 1; }
 fi
 
-# Zero-downtime certificate renewal via webroot (Nginx proxies /.well-known/acme-challenge/)
 install -d -m 0755 /var/www/html
 cert_file="/etc/letsencrypt/live/${DOMAIN:-}/fullchain.pem"
 cert_serial_before="$(openssl x509 -in "$cert_file" -noout -serial 2>/dev/null || echo "none")"
-renew_hook='systemctl reload nginx 2>/dev/null || true; for s in hysteria zivpn singbox; do systemctl is-active --quiet "$s" 2>/dev/null && systemctl restart "$s"; done; exit 0'
-certbot renew --quiet --webroot -w /var/www/html --deploy-hook "$renew_hook" 2>/dev/null || \
-  certbot renew --quiet --deploy-hook "$renew_hook" 2>/dev/null || true
+renew_hook='systemctl reload nginx; for s in hysteria zivpn singbox; do systemctl is-active --quiet "$s" 2>/dev/null && systemctl restart "$s"; done'
+if ! certbot renew --quiet --webroot -w /var/www/html --deploy-hook "$renew_hook" 2>/dev/null; then
+  if ! certbot renew --quiet --deploy-hook "$renew_hook" 2>/dev/null; then
+    echo "certbot renewal check failed" >&2
+    exit 1
+  fi
+fi
 cert_serial_after="$(openssl x509 -in "$cert_file" -noout -serial 2>/dev/null || echo "none")"
 if [ "$cert_serial_before" != "none" ] && [ "$cert_serial_after" != "none" ] && [ "$cert_serial_before" != "$cert_serial_after" ]; then
-  systemctl reload nginx 2>/dev/null || true
+  systemctl reload nginx
+  systemctl is-active --quiet nginx || { echo "nginx reload failed" >&2; exit 1; }
   for s in hysteria zivpn singbox; do
-    systemctl is-active --quiet "$s" 2>/dev/null && systemctl restart "$s" 2>/dev/null || true
+    if systemctl is-active --quiet "$s" 2>/dev/null; then
+      systemctl restart "$s"
+      systemctl is-active --quiet "$s" || { echo "$s restart failed after certificate renewal" >&2; exit 1; }
+    fi
   done
 fi
 
-# Refresh the per-user subscription files weekly (keeps links in sync with
-# the store even if an add/remove missed its hook).
 if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
   source /usr/local/lib/mubx/subscribe.sh
 elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/subscribe.sh" ]; then
@@ -139,18 +138,15 @@ if declare -F mubx_sub_generate >/dev/null 2>&1 && [ -f "$user_store" ]; then
   done < <(jq -r '.[].name' "$user_store" 2>/dev/null || true)
 fi
 
-# Quota & Expiry Enforcement: Auto-freeze any active users who exceeded their assigned GB limit or validity
 mubx_users_bin="/usr/local/bin/mubx-users"
 [ -x "$mubx_users_bin" ] || mubx_users_bin="$(dirname "${BASH_SOURCE[0]}")/mubx-users"
 
 if [ -x "$mubx_users_bin" ] && [ -f "$user_store" ]; then
   now_ts="$(date +%s)"
-  # Fetch all user traffic stats once from Xray API in a single query (O(1) instead of O(N))
   raw_stats="$(xray api statsquery --server=127.0.0.1:10085 --pattern="user>>>" 2>/dev/null || true)"
-  
+
   while IFS=$'\t' read -r q_user q_gb q_exp; do
     [ -n "$q_user" ] || continue
-    # 1. Expiry check
     if [ -n "$q_exp" ] && [ "$q_exp" != "never" ] && [ "$q_user" != "admin" ]; then
       exp_ts="$(date -d "$q_exp 23:59:59" +%s 2>/dev/null || date -jf '%Y-%m-%d %H:%M:%S' "$q_exp 23:59:59" +%s 2>/dev/null || date -d "$q_exp" +%s 2>/dev/null || echo 0)"
       if [ "$exp_ts" -gt 0 ] && [ "$now_ts" -ge "$exp_ts" ]; then
@@ -158,7 +154,6 @@ if [ -x "$mubx_users_bin" ] && [ -f "$user_store" ]; then
         continue
       fi
     fi
-    # 2. Quota check
     if [ "${q_gb:-0}" -gt 0 ]; then
       pat_up="user>>>${q_user}@${DOMAIN:-mubx}>>>traffic>>>uplink"
       pat_down="user>>>${q_user}@${DOMAIN:-mubx}>>>traffic>>>downlink"
@@ -175,29 +170,26 @@ if [ -x "$mubx_users_bin" ] && [ -f "$user_store" ]; then
   done < <(jq -r '.[] | select((.status // "active") != "frozen") | [.name, ((.quota_gb // 0)|tostring), (.expiry // "")] | @tsv' "$user_store" 2>/dev/null || true)
 fi
 
-# Self-heal: revive anything that should be running but is not.
 for svc in "${SERVICES[@]}"; do
   systemctl cat "$svc.service" >/dev/null 2>&1 || continue
   if [ "${was_active[$svc]}" -eq 1 ] || systemctl is-enabled --quiet "$svc" 2>/dev/null; then
     if ! systemctl is-active --quiet "$svc" 2>/dev/null; then
-      systemctl restart "$svc" 2>/dev/null || true
+      systemctl restart "$svc"
+      systemctl is-active --quiet "$svc" || { echo "$svc self-heal failed" >&2; exit 1; }
     fi
   fi
 done
 
-# The sing-box ShadowTLS route is optional on pre-upgrade hosts: it is
-# revived only when its unit and config exist.
 if [ -f /etc/systemd/system/singbox.service ] && [ -s /etc/sing-box/config.json ] &&
    ! systemctl is-active --quiet singbox 2>/dev/null; then
-  systemctl restart singbox 2>/dev/null || true
+  systemctl restart singbox
+  systemctl is-active --quiet singbox || { echo "singbox self-heal failed" >&2; exit 1; }
 fi
 
 maintenance_success=1
 rm -rf "$tmpdir"
 trap - EXIT
 
-# Refresh the carrier DPI fingerprint so chameleon picks up any carrier
-# policy changes without operator intervention.
 mubx_probe_bin="/usr/local/bin/mubx-probe"
 [ -x "$mubx_probe_bin" ] || mubx_probe_bin="$(dirname "${BASH_SOURCE[0]}")/mubx-probe"
 if [ -x "$mubx_probe_bin" ] && [ -n "${DOMAIN:-}" ]; then
