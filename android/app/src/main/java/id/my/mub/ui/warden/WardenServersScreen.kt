@@ -308,7 +308,7 @@ fun WardenServersScreen(
                                             WardenChip(text = "SNI: ${prof.bugHostSNI}", color = WardenAmber)
                                         }
                                         if (prof.allowInsecureTLS) {
-                                            WardenChip(text = "Insecure", color = WardenRose)
+                                            WardenChip(text = "Insecure", color = WardenRed)
                                         }
                                     }
                                 }
