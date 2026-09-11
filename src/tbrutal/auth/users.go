@@ -17,9 +17,9 @@ type User struct {
 }
 
 type Store struct {
-	mu         sync.RWMutex
-	filePath   string
-	lastMod    time.Time
+	mu          sync.RWMutex
+	filePath    string
+	lastMod     time.Time
 	usersByUUID map[string]User
 }
 
@@ -34,28 +34,41 @@ func NewStore(filePath string) *Store {
 
 func (s *Store) reload() {
 	if s.filePath == "" {
+		s.mu.Lock()
+		s.usersByUUID = make(map[string]User)
+		s.lastMod = time.Time{}
+		s.mu.Unlock()
 		return
 	}
 
 	fi, err := os.Stat(s.filePath)
 	if err != nil {
+		// Never preserve stale authorization entries after the store disappears.
+		s.mu.Lock()
+		s.usersByUUID = make(map[string]User)
+		s.lastMod = time.Time{}
+		s.mu.Unlock()
 		return
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if !fi.ModTime().After(s.lastMod) && len(s.usersByUUID) > 0 {
+	if !fi.ModTime().After(s.lastMod) && s.lastMod != (time.Time{}) {
 		return
 	}
 
 	data, err := os.ReadFile(s.filePath)
 	if err != nil {
+		s.usersByUUID = make(map[string]User)
+		s.lastMod = fi.ModTime()
 		return
 	}
 
 	var users []User
 	if err := json.Unmarshal(data, &users); err != nil {
+		s.usersByUUID = make(map[string]User)
+		s.lastMod = fi.ModTime()
 		return
 	}
 
@@ -70,8 +83,22 @@ func (s *Store) reload() {
 	s.lastMod = fi.ModTime()
 }
 
+func isExpired(expiry string, now time.Time) bool {
+	if expiry == "" || expiry == "never" {
+		return false
+	}
+
+	// mubx-users stores YYYY-MM-DD dates. Treat malformed non-empty values as
+	// invalid/expired rather than accidentally granting access.
+	expiryTime, err := time.Parse("2006-01-02", expiry)
+	if err != nil {
+		return true
+	}
+	return !now.Before(expiryTime.Add(24 * time.Hour))
+}
+
 func (s *Store) Authenticate(token string) (bool, string) {
-	if token == "" {
+	if token == "" || s.filePath == "" {
 		return false, ""
 	}
 
@@ -80,24 +107,15 @@ func (s *Store) Authenticate(token string) (bool, string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// If no users configured in file, allow default admin token if file missing
-	if len(s.usersByUUID) == 0 {
-		if _, err := os.Stat(s.filePath); os.IsNotExist(err) {
-			return true, "default"
-		}
-		return false, ""
-	}
-
 	u, ok := s.usersByUUID[token]
 	if !ok {
 		return false, ""
 	}
 
-	if u.Status == "frozen" {
+	if u.Status == "frozen" || isExpired(u.Expiry, time.Now()) {
 		return false, ""
 	}
 
-	// Check protocols
 	if len(u.Protocols) == 0 {
 		return true, u.Name
 	}
