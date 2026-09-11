@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import id.my.mub.data.ConfigParser
@@ -28,9 +29,10 @@ fun ProfilesScreen(
     currentProfile: VpnProfile,
     onSelectProfile: (VpnProfile) -> Unit,
     onAddProfile: (VpnProfile) -> Unit,
+    onEditProfile: (VpnProfile) -> Unit,
     onDeleteProfile: (String) -> Unit
 ) {
-    // Initial sample list of profiles representing the MUB-X fleet
+    // Initial fleet profiles
     var profiles by remember {
         mutableStateOf(
             listOf(
@@ -82,7 +84,7 @@ fun ProfilesScreen(
                     allowInsecureTLS = false
                 ),
                 VpnProfile(
-                    name = "AmneziaWG Steath WireGuard",
+                    name = "AmneziaWG Stealth WireGuard",
                     serverHost = "gr.mub.my.id",
                     serverIp = "212.60.151.69",
                     serverPort = 51820,
@@ -104,7 +106,7 @@ fun ProfilesScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(BgObsidian)
-            .padding(horizontal = 20.dp, vertical = 24.dp)
+            .padding(horizontal = 20.dp, vertical = 20.dp)
     ) {
         // --- Header Bar ---
         Row(
@@ -114,13 +116,13 @@ fun ProfilesScreen(
         ) {
             Column {
                 Text(
-                    text = "Profiles & Vault",
-                    fontSize = 22.sp,
+                    text = "Profiles Vault",
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = PureWhite
                 )
                 Text(
-                    text = "${profiles.size} Nodes Configured",
+                    text = "${profiles.size} Nodes Available",
                     fontSize = 12.sp,
                     color = SlateGray
                 )
@@ -136,7 +138,7 @@ fun ProfilesScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
         // --- Subscription Sync Banner ---
         Card(
@@ -148,21 +150,21 @@ fun ProfilesScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .padding(14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Auto-Subscription Active",
+                        text = "Config Import & Subscription",
                         color = PureWhite,
-                        fontSize = 14.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Synced from gr.mub.my.id/sub/...",
+                        text = "Supports vless://, tbrutal://, zivpn://, ss://, http://",
                         color = SlateGray,
-                        fontSize = 12.sp
+                        fontSize = 11.sp
                     )
                 }
 
@@ -172,9 +174,9 @@ fun ProfilesScreen(
                         .background(Color(0x2200F0FF))
                         .border(1.dp, Color(0x5500F0FF), RoundedCornerShape(8.dp))
                         .padding(horizontal = 10.dp, vertical = 6.dp)
-                        .clickable { /* Trigger re-sync */ }
+                        .clickable { showImportDialog = true }
                 ) {
-                    Text(text = "Sync Now", color = ElectricCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text(text = "Paste Link", color = ElectricCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -184,7 +186,7 @@ fun ProfilesScreen(
         // --- Profiles List ---
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             items(profiles, key = { it.id }) { item ->
                 val isSelected = item.id == currentProfile.id
@@ -194,6 +196,9 @@ fun ProfilesScreen(
                     isSelected = isSelected,
                     onSelect = {
                         onSelectProfile(item)
+                    },
+                    onEdit = {
+                        onEditProfile(item)
                     },
                     onDelete = {
                         if (profiles.size > 1) {
@@ -222,7 +227,7 @@ fun ProfilesScreen(
             text = {
                 Column {
                     Text(
-                        text = "Paste your subscription URL (e.g., https://gr.mub.my.id/sub/<token>/links.txt) or raw config URL (vless://, tbrutal://, ss://):",
+                        text = "Paste your subscription URL or raw config link (vless://, tbrutal://, zivpn://, ss://, vmess://):",
                         color = SlateGray,
                         fontSize = 13.sp
                     )
@@ -240,7 +245,7 @@ fun ProfilesScreen(
                             cursorColor = ElectricCyan
                         ),
                         singleLine = false,
-                        maxLines = 3
+                        maxLines = 4
                     )
                 }
             },
@@ -291,6 +296,7 @@ fun ProfileCard(
     profile: VpnProfile,
     isSelected: Boolean,
     onSelect: () -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     val borderColor = if (isSelected) ElectricCyan else SurfaceCardBorder
@@ -303,10 +309,10 @@ fun ProfileCard(
             .border(borderWidth, borderColor, RoundedCornerShape(16.dp))
             .clickable { onSelect() },
         colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) Color(0xFF171E33) else SurfaceCard
+            containerColor = if (isSelected) Color(0xFF151D2E) else SurfaceCard
         )
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -319,10 +325,10 @@ fun ProfileCard(
                     // Radio indicator
                     Box(
                         modifier = Modifier
-                            .size(20.dp)
+                            .size(18.dp)
                             .clip(CircleShape)
                             .border(2.dp, if (isSelected) ElectricCyan else SlateGray, CircleShape)
-                            .padding(3.dp),
+                            .padding(2.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         if (isSelected) {
@@ -339,8 +345,10 @@ fun ProfileCard(
                         Text(
                             text = profile.name,
                             color = PureWhite,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = "${profile.serverHost}:${profile.serverPort}",
@@ -350,44 +358,60 @@ fun ProfileCard(
                     }
                 }
 
-                // Active badge
-                if (isSelected) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Edit Button
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0x3300FFA3))
-                            .border(1.dp, Color(0x6600FFA3), RoundedCornerShape(8.dp))
+                            .background(SurfaceCardElevated)
+                            .clickable { onEdit() }
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
-                        Text(
-                            text = "ACTIVE",
-                            color = CyberMint,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Text("Edit", color = ElectricCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    // Active badge
+                    if (isSelected) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0x3300FFA3))
+                                .border(1.dp, Color(0x6600FFA3), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "ACTIVE",
+                                color = CyberMint,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Metadata pills
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Protocol pill
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0x22FFFFFF))
+                        .background(SurfaceCardElevated)
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(
                         text = profile.protocol.displayName,
                         color = PureWhite,
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.Medium
                     )
                 }
@@ -396,15 +420,18 @@ fun ProfileCard(
                 if (profile.bugHostSNI.isNotBlank()) {
                     Box(
                         modifier = Modifier
+                            .weight(1f, fill = false)
                             .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0x339D4EDD))
+                            .background(Color(0x338B5CF6))
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
                             text = "SNI: ${profile.bugHostSNI}",
                             color = PureWhite,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -420,7 +447,7 @@ fun ProfileCard(
                         Text(
                             text = "${profile.poolConcurrency}x · ${profile.brutalRateMbps}M",
                             color = ElectricCyan,
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold
                         )
                     }

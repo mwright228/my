@@ -259,6 +259,12 @@ func (zc *ZiVPNClient) handleSocks5(conn net.Conn) {
 	}
 	defer udpConn.Close()
 
+	if raw, err := udpConn.SyscallConn(); err == nil {
+		_ = raw.Control(func(fd uintptr) {
+			ProtectSocket(int(fd))
+		})
+	}
+
 	// 4. Send Connect Success
 	if _, err := conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0}); err != nil {
 		return

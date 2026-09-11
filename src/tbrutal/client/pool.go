@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/mwright228/my/src/tbrutal/pacer"
@@ -164,7 +165,17 @@ func (p *Pool) maintainConnection(index int) {
 }
 
 func (p *Pool) dialSingle(index int) (*PooledConn, error) {
-	rawConn, err := net.DialTimeout("tcp", p.serverAddr, 10*time.Second)
+	dialer := &net.Dialer{
+		Timeout: 10 * time.Second,
+		Control: func(network, address string, c syscall.RawConn) error {
+			return c.Control(func(fd uintptr) {
+				if SocketProtector != nil {
+					SocketProtector(int(fd))
+				}
+			})
+		},
+	}
+	rawConn, err := dialer.Dial("tcp", p.serverAddr)
 	if err != nil {
 		return nil, err
 	}

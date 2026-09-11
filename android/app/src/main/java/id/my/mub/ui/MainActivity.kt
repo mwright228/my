@@ -21,18 +21,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
+import id.my.mub.data.LogRepository
 import id.my.mub.data.VpnProfile
 import id.my.mub.data.VpnState
 import id.my.mub.service.MubxVpnService
-import id.my.mub.ui.bughost.BugHostLabScreen
+import id.my.mub.ui.config.ConfigEditorScreen
 import id.my.mub.ui.dashboard.DashboardScreen
+import id.my.mub.ui.logs.LogsScreen
 import id.my.mub.ui.profiles.ProfilesScreen
 import id.my.mub.ui.theme.*
 
 enum class NavigationTab(val title: String, val icon: String) {
     DASHBOARD("Tunnel", "⚡"),
-    BUG_HOST_LAB("Lab Tuner", "🧪"),
-    PROFILES("Vault", "📁")
+    CONFIG("Config", "⚙️"),
+    PROFILES("Vault", "📁"),
+    LOGS("Logs", "📜")
 }
 
 class MainActivity : ComponentActivity() {
@@ -42,6 +45,8 @@ class MainActivity : ComponentActivity() {
     ) { result ->
         if (result.resultCode == RESULT_OK) {
             startVpnService()
+        } else {
+            LogRepository.log("VPN", "VPN permission was declined by user", id.my.mub.data.LogLevel.WARN)
         }
     }
 
@@ -79,22 +84,33 @@ class MainActivity : ComponentActivity() {
                                         if (vpnState is VpnState.Connected || vpnState is VpnState.Connecting) {
                                             stopVpnService()
                                         } else {
+                                            MubxVpnService.setProfile(activeProfile)
                                             requestAndStartVpn()
                                         }
                                     },
-                                    onNavigateToLab = {
-                                        selectedTab = NavigationTab.BUG_HOST_LAB
+                                    onNavigateToConfig = {
+                                        selectedTab = NavigationTab.CONFIG
+                                    },
+                                    onNavigateToLogs = {
+                                        selectedTab = NavigationTab.LOGS
                                     }
                                 )
                             }
-                            NavigationTab.BUG_HOST_LAB -> {
-                                BugHostLabScreen(
+                            NavigationTab.CONFIG -> {
+                                ConfigEditorScreen(
                                     currentProfile = activeProfile,
-                                    onSaveProfile = { updated ->
+                                    onSaveAndDeploy = { updated ->
                                         activeProfile = updated
+                                        MubxVpnService.setProfile(updated)
                                         selectedTab = NavigationTab.DASHBOARD
+                                        if (vpnState is VpnState.Connected || vpnState is VpnState.Connecting) {
+                                            stopVpnService()
+                                        }
+                                        requestAndStartVpn()
                                     },
-                                    onNavigateBack = {
+                                    onSaveAsNew = { updated ->
+                                        activeProfile = updated
+                                        MubxVpnService.setProfile(updated)
                                         selectedTab = NavigationTab.DASHBOARD
                                     }
                                 )
@@ -104,13 +120,22 @@ class MainActivity : ComponentActivity() {
                                     currentProfile = activeProfile,
                                     onSelectProfile = { selected ->
                                         activeProfile = selected
+                                        MubxVpnService.setProfile(selected)
                                         selectedTab = NavigationTab.DASHBOARD
                                     },
                                     onAddProfile = { added ->
                                         activeProfile = added
+                                        MubxVpnService.setProfile(added)
+                                    },
+                                    onEditProfile = { editTarget ->
+                                        activeProfile = editTarget
+                                        selectedTab = NavigationTab.CONFIG
                                     },
                                     onDeleteProfile = { _ -> }
                                 )
+                            }
+                            NavigationTab.LOGS -> {
+                                LogsScreen()
                             }
                         }
                     }
@@ -167,15 +192,15 @@ fun MubxBottomBar(
         modifier = Modifier
             .fillMaxWidth()
             .background(BgObsidian)
-            .padding(horizontal = 20.dp, vertical = 12.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(24.dp))
+                .clip(RoundedCornerShape(20.dp))
                 .background(SurfaceCard)
-                .border(1.dp, SurfaceCardBorder, RoundedCornerShape(24.dp))
-                .padding(vertical = 8.dp, horizontal = 12.dp),
+                .border(1.dp, SurfaceCardBorder, RoundedCornerShape(20.dp))
+                .padding(vertical = 6.dp, horizontal = 8.dp),
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -186,22 +211,22 @@ fun MubxBottomBar(
 
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .background(bgTab)
                         .clickable { onTabSelected(tab) }
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(text = tab.icon, fontSize = 16.sp)
+                        Text(text = tab.icon, fontSize = 15.sp)
                         if (isSelected) {
                             Text(
                                 text = tab.title,
                                 color = contentColor,
-                                fontSize = 13.sp,
+                                fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }

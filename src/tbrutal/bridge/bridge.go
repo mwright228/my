@@ -20,7 +20,45 @@ var (
 	activeMu      sync.Mutex
 	runningStatus atomic.Bool
 	socksPort     int
+
+	protectHook func(fd int) bool
+	logHook     func(tag, msg string)
+
+	TotalRxBytes atomic.Uint64
+	TotalTxBytes atomic.Uint64
+	ActiveConns  atomic.Int32
 )
+
+// SetSocketProtector registers the Android VpnService socket protection callback.
+func SetSocketProtector(fn func(fd int) bool) {
+	protectHook = fn
+	client.SetSocketProtector(fn)
+}
+
+// ProtectSocket protects an outbound socket descriptor from VPN routing loop.
+func ProtectSocket(fd int) bool {
+	if protectHook != nil {
+		return protectHook(fd)
+	}
+	return false
+}
+
+// SetLogger registers a native log callback.
+func SetLogger(fn func(tag, msg string)) {
+	logHook = fn
+}
+
+// LogMsg dispatches a log message to the registered logger.
+func LogMsg(tag, msg string) {
+	if logHook != nil {
+		logHook(tag, msg)
+	}
+}
+
+// GetTelemetry returns atomically tracked RX bytes, TX bytes, and active connection count.
+func GetTelemetry() (uint64, uint64, int32) {
+	return TotalRxBytes.Load(), TotalTxBytes.Load(), ActiveConns.Load()
+}
 
 type BridgeConfig struct {
 	Protocol        string
@@ -37,6 +75,8 @@ type BridgeConfig struct {
 	ObfsKey         string
 	PortHopRange    string
 	SocksListenAddr string
+	DNSServer       string
+	CustomPayload   string
 }
 
 type BugHostResult struct {
@@ -55,6 +95,9 @@ func StartTunnel(cfg BridgeConfig) (int, error) {
 	if runningStatus.Load() {
 		return socksPort, errors.New("mubx tunnel is already running")
 	}
+
+	client.SetSocketProtector(ProtectSocket)
+	LogMsg("TUNNEL", fmt.Sprintf("Initializing %s tunnel to %s...", cfg.Protocol, cfg.ServerAddr))
 
 	if cfg.SocksListenAddr == "" {
 		cfg.SocksListenAddr = "127.0.0.1:0" // Dynamic ephemeral port

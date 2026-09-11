@@ -26,6 +26,15 @@ type Config struct {
 	RawMode        bool
 }
 
+var (
+	SocketProtector func(fd int) bool
+)
+
+// SetSocketProtector registers the Android VpnService socket protection callback.
+func SetSocketProtector(fn func(fd int) bool) {
+	SocketProtector = fn
+}
+
 type Client struct {
 	cfg      Config
 	pacer    *pacer.Pacer

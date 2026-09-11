@@ -31,9 +31,11 @@ fi
 
 echo "[*] Using NDK at: $NDK_PATH"
 
-HOST_TAG="darwin-x86_64"
-if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
-    HOST_TAG="darwin-x86_64" # Clang toolchain directory in modern NDK
+HOST_TAG="linux-x86_64"
+if [[ "$(uname -s)" == "Linux" ]]; then
+    HOST_TAG="linux-x86_64"
+elif [[ "$(uname -s)" == "Darwin" ]]; then
+    HOST_TAG="darwin-x86_64"
 fi
 if [[ ! -d "$NDK_PATH/toolchains/llvm/prebuilt/$HOST_TAG" ]]; then
     HOST_TAG=$(ls "$NDK_PATH/toolchains/llvm/prebuilt" | head -n 1)

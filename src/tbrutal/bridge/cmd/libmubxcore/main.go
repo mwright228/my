@@ -4,6 +4,16 @@ package main
 #include <jni.h>
 #include <stdlib.h>
 
+static JavaVM* g_vm = NULL;
+static jclass g_bridgeClass = NULL;
+static jmethodID g_protectMid = NULL;
+static jmethodID g_logMid = NULL;
+
+jint JNI_OnLoad(JavaVM* vm, void* reserved) {
+    g_vm = vm;
+    return JNI_VERSION_1_6;
+}
+
 static char* getStringUTFChars(JNIEnv* env, jstring jstr) {
     if (!jstr) return NULL;
     return (char*)(*env)->GetStringUTFChars(env, jstr, NULL);
@@ -19,6 +29,64 @@ static jstring newStringUTF(JNIEnv* env, const char* str) {
     if (!str) return NULL;
     return (*env)->NewStringUTF(env, str);
 }
+
+static int callProtectSocket(int fd) {
+    if (!g_vm) return 0;
+    JNIEnv* env = NULL;
+    int attached = 0;
+    int status = (*g_vm)->GetEnv(g_vm, (void**)&env, JNI_VERSION_1_6);
+    if (status != JNI_OK) {
+        status = (*g_vm)->AttachCurrentThread(g_vm, &env, NULL);
+        if (status != JNI_OK || !env) return 0;
+        attached = 1;
+    }
+    if (!g_bridgeClass || !g_protectMid) {
+        jclass clazz = (*env)->FindClass(env, "id/my/mub/service/NativeCoreBridge");
+        if (clazz) {
+            g_bridgeClass = (jclass)(*env)->NewGlobalRef(env, clazz);
+            g_protectMid = (*env)->GetStaticMethodID(env, g_bridgeClass, "protectSocket", "(I)Z");
+            g_logMid = (*env)->GetStaticMethodID(env, g_bridgeClass, "onNativeLog", "(Ljava/lang/String;Ljava/lang/String;)V");
+        }
+    }
+    jboolean res = 0;
+    if (g_bridgeClass && g_protectMid) {
+        res = (*env)->CallStaticBooleanMethod(env, g_bridgeClass, g_protectMid, (jint)fd);
+    }
+    if (attached) {
+        (*g_vm)->DetachCurrentThread(g_vm);
+    }
+    return res ? 1 : 0;
+}
+
+static void callNativeLog(const char* tag, const char* msg) {
+    if (!g_vm) return;
+    JNIEnv* env = NULL;
+    int attached = 0;
+    int status = (*g_vm)->GetEnv(g_vm, (void**)&env, JNI_VERSION_1_6);
+    if (status != JNI_OK) {
+        status = (*g_vm)->AttachCurrentThread(g_vm, &env, NULL);
+        if (status != JNI_OK || !env) return;
+        attached = 1;
+    }
+    if (!g_bridgeClass || !g_logMid) {
+        jclass clazz = (*env)->FindClass(env, "id/my/mub/service/NativeCoreBridge");
+        if (clazz) {
+            g_bridgeClass = (jclass)(*env)->NewGlobalRef(env, clazz);
+            g_protectMid = (*env)->GetStaticMethodID(env, g_bridgeClass, "protectSocket", "(I)Z");
+            g_logMid = (*env)->GetStaticMethodID(env, g_bridgeClass, "onNativeLog", "(Ljava/lang/String;Ljava/lang/String;)V");
+        }
+    }
+    if (g_bridgeClass && g_logMid) {
+        jstring jTag = (*env)->NewStringUTF(env, tag);
+        jstring jMsg = (*env)->NewStringUTF(env, msg);
+        (*env)->CallStaticVoidMethod(env, g_bridgeClass, g_logMid, jTag, jMsg);
+        if (jTag) (*env)->DeleteLocalRef(env, jTag);
+        if (jMsg) (*env)->DeleteLocalRef(env, jMsg);
+    }
+    if (attached) {
+        (*g_vm)->DetachCurrentThread(g_vm);
+    }
+}
 */
 import "C"
 import (
@@ -28,6 +96,26 @@ import (
 
 	"github.com/mwright228/my/src/tbrutal/bridge"
 )
+
+func init() {
+	bridge.SetSocketProtector(func(fd int) bool {
+		return C.callProtectSocket(C.int(fd)) != 0
+	})
+	bridge.SetLogger(func(tag, msg string) {
+		cTag := C.CString(tag)
+		cMsg := C.CString(msg)
+		defer C.free(unsafe.Pointer(cTag))
+		defer C.free(unsafe.Pointer(cMsg))
+		C.callNativeLog(cTag, cMsg)
+	})
+}
+
+func safeGoString(cStr *C.char) string {
+	if cStr == nil {
+		return ""
+	}
+	return C.GoString(cStr)
+}
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel
 func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel(
@@ -45,6 +133,8 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel(
 	jRawMode C.jboolean,
 	jObfsKey C.jstring,
 	jPortHopRange C.jstring,
+	jDNSServer C.jstring,
+	jCustomPayload C.jstring,
 ) C.jint {
 	cProtocol := C.getStringUTFChars(env, jProtocol)
 	defer C.releaseStringUTFChars(env, jProtocol, cProtocol)
@@ -67,26 +157,36 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel(
 	cPortHopRange := C.getStringUTFChars(env, jPortHopRange)
 	defer C.releaseStringUTFChars(env, jPortHopRange, cPortHopRange)
 
+	cDNSServer := C.getStringUTFChars(env, jDNSServer)
+	defer C.releaseStringUTFChars(env, jDNSServer, cDNSServer)
+
+	cCustomPayload := C.getStringUTFChars(env, jCustomPayload)
+	defer C.releaseStringUTFChars(env, jCustomPayload, cCustomPayload)
+
 	cfg := bridge.BridgeConfig{
-		Protocol:        C.GoString(cProtocol),
-		ServerAddr:      C.GoString(cServerAddr),
-		SNI:             C.GoString(cSNI),
-		HostHeader:      C.GoString(cHostHeader),
-		Token:           C.GoString(cToken),
+		Protocol:        safeGoString(cProtocol),
+		ServerAddr:      safeGoString(cServerAddr),
+		SNI:             safeGoString(cSNI),
+		HostHeader:      safeGoString(cHostHeader),
+		Token:           safeGoString(cToken),
 		PoolSize:        int(jPoolSize),
 		RateMbps:        int(jRateMbps),
 		UseTLS:          jUseTLS != 0,
 		InsecureTLS:     jInsecureTLS != 0,
 		RawMode:         jRawMode != 0,
-		ObfsKey:         C.GoString(cObfsKey),
-		PortHopRange:    C.GoString(cPortHopRange),
+		ObfsKey:         safeGoString(cObfsKey),
+		PortHopRange:    safeGoString(cPortHopRange),
+		DNSServer:       safeGoString(cDNSServer),
+		CustomPayload:   safeGoString(cCustomPayload),
 		SocksListenAddr: "127.0.0.1:0",
 	}
 
 	port, err := bridge.StartTunnel(cfg)
 	if err != nil {
+		bridge.LogMsg("ERR", fmt.Sprintf("Tunnel start error: %v", err))
 		return C.jint(-1)
 	}
+	bridge.LogMsg("SUCCESS", fmt.Sprintf("Tunnel operational on SOCKS5 loopback port %d", port))
 	return C.jint(port)
 }
 
@@ -101,17 +201,33 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunRouter(
 	clazz C.jclass,
 	jTunFd C.jint,
 	jSocksPort C.jint,
+	jDNSServer C.jstring,
 ) C.jboolean {
-	err := bridge.StartTunRouter(int(jTunFd), int(jSocksPort))
+	cDNSServer := C.getStringUTFChars(env, jDNSServer)
+	defer C.releaseStringUTFChars(env, jDNSServer, cDNSServer)
+
+	dnsStr := safeGoString(cDNSServer)
+	err := bridge.StartTunRouterWithDNS(int(jTunFd), int(jSocksPort), dnsStr)
 	if err != nil {
+		bridge.LogMsg("ERR", fmt.Sprintf("TunRouter failed to start: %v", err))
 		return C.JNI_FALSE
 	}
+	bridge.LogMsg("SUCCESS", "Layer 3 TunRouter connected and active")
 	return C.JNI_TRUE
 }
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeStopTunRouter
 func Java_id_my_mub_service_NativeCoreBridge_nativeStopTunRouter(env *C.JNIEnv, clazz C.jclass) {
 	bridge.StopTunRouter()
+}
+
+//export Java_id_my_mub_service_NativeCoreBridge_nativeGetTelemetry
+func Java_id_my_mub_service_NativeCoreBridge_nativeGetTelemetry(env *C.JNIEnv, clazz C.jclass) C.jstring {
+	rx, tx, conns := bridge.GetTelemetry()
+	formatted := fmt.Sprintf("%d|%d|%d", rx, tx, conns)
+	cFormatted := C.CString(formatted)
+	defer C.free(unsafe.Pointer(cFormatted))
+	return C.newStringUTF(env, cFormatted)
 }
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeProbeBugHost
@@ -128,8 +244,8 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeProbeBugHost(
 	cSNI := C.getStringUTFChars(env, jSNI)
 	defer C.releaseStringUTFChars(env, jSNI, cSNI)
 
-	urlStr := C.GoString(cURL)
-	sniStr := C.GoString(cSNI)
+	urlStr := safeGoString(cURL)
+	sniStr := safeGoString(cSNI)
 
 	res := bridge.ProbeBugHost(urlStr, sniStr, int(jTimeoutMs))
 
