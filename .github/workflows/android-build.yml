@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-apk:
@@ -53,7 +53,7 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --stacktrace
 
-      - name: Prepare Release Artifacts
+      - name: Prepare Debug Artifact
         run: |
           cp android/app/build/outputs/apk/debug/app-debug.apk QuickNotes.apk
 
@@ -63,20 +63,3 @@ jobs:
           name: QuickNotes-Android15-Debug-APK
           path: QuickNotes.apk
           retention-days: 14
-
-      - name: Publish Direct Download Release
-        uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main'
-        with:
-          tag_name: quicknotes-latest
-          name: "QuickNotes v2.1 (Stealth Edition)"
-          body: |
-            ### QuickNotes • Notes & Cloud Sync Relay Suite
-            - **Authentic Camouflage**: Opens as a genuine, local note-taking app with search, markdown notes, and local storage.
-            - **Discreet Unlock**: Long-press "QuickNotes" title or tap "Cloud Sync & Backup" to reveal the proxy controls.
-            - **Minimalist One-Button UI**: Clean status card, large Start/Stop switch, and 1-tap clipboard import.
-            - **Every MUB-X Protocol Supported**: Native client dialers for VLESS (WS & TCP), Trojan, VMess, Shadowsocks, SSH HTTP Custom, ZiVPN UDP, and T-Brutal.
-            - **DNS-over-Tunnel**: Resolves hostnames through the encrypted proxy tunnel, solving "connected but no internet" on restricted mobile networks.
-          files: QuickNotes.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
