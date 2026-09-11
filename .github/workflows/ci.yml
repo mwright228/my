@@ -7,6 +7,9 @@ on:
 permissions:
   contents: read
 
+env:
+  GOFLAGS: "-ldflags=-checklinkname=0"
+
 jobs:
   ci-pipeline:
     runs-on: ubuntu-latest
