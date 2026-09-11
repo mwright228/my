@@ -123,6 +123,18 @@ func safeGoString(cStr *C.char) string {
 	return C.GoString(cStr)
 }
 
+//export Java_id_my_mub_service_NativeCoreBridge_nativeSetSSHHostKeySHA256
+func Java_id_my_mub_service_NativeCoreBridge_nativeSetSSHHostKeySHA256(
+	env *C.JNIEnv,
+	clazz C.jclass,
+	jFingerprint C.jstring,
+) {
+	C.initJavaVM(env)
+	cFingerprint := C.getStringUTFChars(env, jFingerprint)
+	defer C.releaseStringUTFChars(env, jFingerprint, cFingerprint)
+	bridge.SetSSHHostKeySHA256(safeGoString(cFingerprint))
+}
+
 //export Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel
 func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel(
 	env *C.JNIEnv,
@@ -264,7 +276,6 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeProbeBugHost(
 
 	res := bridge.ProbeBugHost(urlStr, sniStr, int(jTimeoutMs))
 
-	// Format: "STATUS|LATENCY|CN|SANS|ERR"
 	sansStr := strings.Join(res.CertSANs, ",")
 	formatted := fmt.Sprintf("%d|%d|%s|%s|%s", res.StatusCode, res.LatencyMs, res.CertCN, sansStr, res.ErrorMsg)
 
