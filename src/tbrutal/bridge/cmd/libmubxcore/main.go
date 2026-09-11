@@ -9,28 +9,37 @@ static jclass g_bridgeClass = NULL;
 static jmethodID g_protectMid = NULL;
 static jmethodID g_logMid = NULL;
 
-jint JNI_OnLoad(JavaVM* vm, void* reserved) {
-    g_vm = vm;
-    return JNI_VERSION_1_6;
+static inline void initJavaVM(JNIEnv* env) {
+    if (!g_vm && env) {
+        (*env)->GetJavaVM(env, &g_vm);
+    }
+    if (g_vm && env && !g_bridgeClass) {
+        jclass clazz = (*env)->FindClass(env, "id/my/mub/service/NativeCoreBridge");
+        if (clazz) {
+            g_bridgeClass = (jclass)(*env)->NewGlobalRef(env, clazz);
+            g_protectMid = (*env)->GetStaticMethodID(env, g_bridgeClass, "protectSocket", "(I)Z");
+            g_logMid = (*env)->GetStaticMethodID(env, g_bridgeClass, "onNativeLog", "(Ljava/lang/String;Ljava/lang/String;)V");
+        }
+    }
 }
 
-static char* getStringUTFChars(JNIEnv* env, jstring jstr) {
+static inline char* getStringUTFChars(JNIEnv* env, jstring jstr) {
     if (!jstr) return NULL;
     return (char*)(*env)->GetStringUTFChars(env, jstr, NULL);
 }
 
-static void releaseStringUTFChars(JNIEnv* env, jstring jstr, char* str) {
+static inline void releaseStringUTFChars(JNIEnv* env, jstring jstr, char* str) {
     if (jstr && str) {
         (*env)->ReleaseStringUTFChars(env, jstr, str);
     }
 }
 
-static jstring newStringUTF(JNIEnv* env, const char* str) {
+static inline jstring newStringUTF(JNIEnv* env, const char* str) {
     if (!str) return NULL;
     return (*env)->NewStringUTF(env, str);
 }
 
-static int callProtectSocket(int fd) {
+static inline int callProtectSocket(int fd) {
     if (!g_vm) return 0;
     JNIEnv* env = NULL;
     int attached = 0;
@@ -58,7 +67,7 @@ static int callProtectSocket(int fd) {
     return res ? 1 : 0;
 }
 
-static void callNativeLog(const char* tag, const char* msg) {
+static inline void callNativeLog(const char* tag, const char* msg) {
     if (!g_vm) return;
     JNIEnv* env = NULL;
     int attached = 0;
@@ -136,6 +145,8 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel(
 	jDNSServer C.jstring,
 	jCustomPayload C.jstring,
 ) C.jint {
+	C.initJavaVM(env)
+
 	cProtocol := C.getStringUTFChars(env, jProtocol)
 	defer C.releaseStringUTFChars(env, jProtocol, cProtocol)
 
@@ -192,6 +203,7 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel(
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeStopTunnel
 func Java_id_my_mub_service_NativeCoreBridge_nativeStopTunnel(env *C.JNIEnv, clazz C.jclass) {
+	C.initJavaVM(env)
 	bridge.StopTunnel()
 }
 
@@ -203,6 +215,8 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunRouter(
 	jSocksPort C.jint,
 	jDNSServer C.jstring,
 ) C.jboolean {
+	C.initJavaVM(env)
+
 	cDNSServer := C.getStringUTFChars(env, jDNSServer)
 	defer C.releaseStringUTFChars(env, jDNSServer, cDNSServer)
 
@@ -218,11 +232,13 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunRouter(
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeStopTunRouter
 func Java_id_my_mub_service_NativeCoreBridge_nativeStopTunRouter(env *C.JNIEnv, clazz C.jclass) {
+	C.initJavaVM(env)
 	bridge.StopTunRouter()
 }
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeGetTelemetry
 func Java_id_my_mub_service_NativeCoreBridge_nativeGetTelemetry(env *C.JNIEnv, clazz C.jclass) C.jstring {
+	C.initJavaVM(env)
 	rx, tx, conns := bridge.GetTelemetry()
 	formatted := fmt.Sprintf("%d|%d|%d", rx, tx, conns)
 	cFormatted := C.CString(formatted)
@@ -238,6 +254,8 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeProbeBugHost(
 	jSNI C.jstring,
 	jTimeoutMs C.jint,
 ) C.jstring {
+	C.initJavaVM(env)
+
 	cURL := C.getStringUTFChars(env, jURL)
 	defer C.releaseStringUTFChars(env, jURL, cURL)
 
