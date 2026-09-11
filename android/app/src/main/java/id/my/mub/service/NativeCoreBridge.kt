@@ -73,12 +73,27 @@ object NativeCoreBridge {
             }
             val effectiveSni = if (profile.bugHostSNI.isNotBlank()) profile.bugHostSNI else profile.serverHost
             val effectiveHostHeader = if (profile.wsHost.isNotBlank()) profile.wsHost else profile.serverHost
-            val effectiveToken = if (profile.protocol == id.my.mub.data.ProtocolType.SHADOWSOCKS_2022) {
+            val effectiveToken = if (profile.protocol == id.my.mub.data.ProtocolType.SHADOWSOCKS_2022 || profile.protocol == id.my.mub.data.ProtocolType.SHADOWTLS_V3) {
                 profile.userUUID
             } else if (profile.protocol == id.my.mub.data.ProtocolType.SSH_PAYLOAD) {
                 "${profile.sshUser}:${profile.sshPassword}"
             } else {
                 profile.userUUID
+            }
+
+            val isRawMode = profile.protocol == id.my.mub.data.ProtocolType.T_BRUTAL &&
+                    (profile.customPayload.equals("raw", ignoreCase = true) || profile.wsPath.equals("raw", ignoreCase = true))
+
+            val effectivePayload = when (profile.protocol) {
+                id.my.mub.data.ProtocolType.SHADOWTLS_V3 -> profile.ssCipher.ifBlank { "2022-blake3-aes-256-gcm" }
+                id.my.mub.data.ProtocolType.T_BRUTAL -> if (profile.wsPath.isNotBlank()) profile.wsPath else if (profile.customPayload.isNotBlank()) profile.customPayload else "/tbrutal"
+                else -> profile.customPayload
+            }
+
+            val effectiveObfsKey = when (profile.protocol) {
+                id.my.mub.data.ProtocolType.SHADOWSOCKS_2022 -> profile.ssCipher.ifBlank { "2022-blake3-aes-128-gcm" }
+                id.my.mub.data.ProtocolType.SHADOWTLS_V3 -> profile.udpObfsPassword // ShadowTLS handshake password
+                else -> profile.udpObfsPassword
             }
 
             LogRepository.log("TUNNEL", "Initiating ${profile.protocol.displayName} to $dialAddr")
@@ -92,11 +107,11 @@ object NativeCoreBridge {
                 rateMbps = profile.brutalRateMbps,
                 useTLS = profile.serverPort == 443 || profile.serverPort == 8443,
                 insecureTLS = profile.allowInsecureTLS,
-                rawMode = profile.protocol == id.my.mub.data.ProtocolType.T_BRUTAL,
-                obfsKey = profile.udpObfsPassword,
+                rawMode = isRawMode,
+                obfsKey = effectiveObfsKey,
                 portHopRange = profile.udpPortHopRange,
                 dnsServer = profile.dnsServer,
-                customPayload = profile.customPayload
+                customPayload = effectivePayload
             )
             if (port > 0) {
                 // Pre-flight probe: verify SOCKS port is truly listening and accepting TCP

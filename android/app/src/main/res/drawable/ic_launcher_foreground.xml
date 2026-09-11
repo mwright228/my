@@ -4,35 +4,91 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Cyber Shield Outer Border -->
+
+    <!-- Notepad Document Base Shadow -->
     <path
-        android:strokeColor="#00F0FF"
-        android:strokeWidth="2.5"
+        android:fillColor="#080C14"
+        android:pathData="M38,25 L65,25 L79,39 L79,83 C79,86.31 76.31,89 73,89 L37,89 C33.69,89 31,86.31 31,83 L31,31 C31,27.69 33.69,25 37,25 Z" />
+
+    <!-- Notepad Document Body -->
+    <path
+        android:fillColor="#1E293B"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="1.5"
         android:strokeLineJoin="round"
-        android:fillColor="#00000000"
-        android:pathData="M54,24 L80,36 L80,62 C80,76 68,86 54,90 C40,86 28,76 28,62 L28,36 Z" />
+        android:pathData="M36,22 L64,22 L78,36 L78,80 C78,83.31 75.31,86 72,86 L36,86 C32.69,86 30,83.31 30,80 L30,28 C30,24.69 32.69,22 36,22 Z" />
 
-    <!-- Cyber Shield Inner Glow Accent -->
+    <!-- Document Fold Corner Flap -->
     <path
-        android:strokeColor="#9D4EDD"
+        android:fillColor="#334155"
+        android:strokeColor="#38BDF8"
         android:strokeWidth="1.2"
-        android:fillColor="#2200F0FF"
-        android:pathData="M54,30 L74,39 L74,60 C74,71 64,79 54,83 C44,79 34,71 34,60 L34,39 Z" />
+        android:strokeLineJoin="round"
+        android:pathData="M64,22 L64,36 L78,36 Z" />
 
-    <!-- Stylized Futuristic 'X' -->
+    <!-- Document Header Accent Bar -->
     <path
-        android:strokeColor="#00F0FF"
-        android:strokeWidth="4"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="3.2"
         android:strokeLineCap="round"
-        android:pathData="M42,42 L66,66" />
-    <path
-        android:strokeColor="#00FFA3"
-        android:strokeWidth="4"
-        android:strokeLineCap="round"
-        android:pathData="M66,42 L42,66" />
+        android:pathData="M38,34 L56,34" />
 
-    <!-- Center Energy Core -->
+    <!-- Memo Ruled Line 1 -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,51 L57,54 L54,57 L51,54 Z" />
+        android:strokeColor="#94A3B8"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M38,44 L70,44" />
+
+    <!-- Memo Ruled Line 2 -->
+    <path
+        android:strokeColor="#64748B"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M38,52 L70,52" />
+
+    <!-- Memo Ruled Line 3 -->
+    <path
+        android:strokeColor="#475569"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M38,60 L58,60" />
+
+    <!-- Memo Checkmark Bullet -->
+    <path
+        android:strokeColor="#10B981"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M38,70 L40.5,72.5 L45,67" />
+
+    <!-- Memo Checkmark Line -->
+    <path
+        android:strokeColor="#64748B"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M48,70 L66,70" />
+
+    <!-- Quick Stylus Pen Body -->
+    <path
+        android:fillColor="#0284C7"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="1"
+        android:pathData="M69,45 L76,38 C77.5,36.5 80,36.5 81.5,38 C83,39.5 83,42 81.5,43.5 L74.5,50.5 Z" />
+
+    <!-- Quick Stylus Nib Tip -->
+    <path
+        android:fillColor="#F59E0B"
+        android:strokeColor="#FBBF24"
+        android:strokeWidth="0.8"
+        android:pathData="M69,45 L64,55 L74.5,50.5 Z" />
+
+    <!-- Speed Lightning Spark Accent at Nib -->
+    <path
+        android:strokeColor="#FBBF24"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M63,58 L59,64 L64,63 L61,71" />
+
 </vector>

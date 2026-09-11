@@ -80,6 +80,7 @@ object ConfigParser {
             val sni = uri.getQueryParameter("sni") ?: host
             val rate = uri.getQueryParameter("rate")?.toIntOrNull() ?: 80
             val conns = uri.getQueryParameter("conns")?.toIntOrNull() ?: 4
+            val path = uri.getQueryParameter("path") ?: "/tbrutal"
             val fragment = uri.fragment ?: "MUBX-T-Brutal"
 
             VpnProfile(
@@ -91,7 +92,9 @@ object ConfigParser {
                 userUUID = token,
                 protocol = ProtocolType.T_BRUTAL,
                 poolConcurrency = conns,
-                brutalRateMbps = rate
+                brutalRateMbps = rate,
+                wsPath = path,
+                customPayload = path
             )
         } catch (e: Exception) {
             null
@@ -288,6 +291,29 @@ object ConfigParser {
                 }
             }
 
+            // Decode userInfo (SIP002 Base64 format e.g. base64(cipher:password))
+            val rawUserInfo = uri.userInfo ?: ""
+            var cipher = if (is2022 || isShadowTls) "2022-blake3-aes-256-gcm" else "aes-256-gcm"
+            var pass = rawUserInfo
+            if (rawUserInfo.isNotBlank()) {
+                if (!rawUserInfo.contains(":")) {
+                    try {
+                        val decoded = String(android.util.Base64.decode(rawUserInfo, android.util.Base64.DEFAULT or android.util.Base64.URL_SAFE))
+                        if (decoded.contains(":")) {
+                            cipher = decoded.substringBefore(":")
+                            pass = decoded.substringAfter(":")
+                        } else {
+                            pass = decoded
+                        }
+                    } catch (e: Exception) {
+                        pass = rawUserInfo
+                    }
+                } else {
+                    cipher = rawUserInfo.substringBefore(":")
+                    pass = rawUserInfo.substringAfter(":")
+                }
+            }
+
             val proto = when {
                 isShadowTls -> ProtocolType.SHADOWTLS_V3
                 is2022 -> ProtocolType.SHADOWSOCKS_2022
@@ -300,7 +326,8 @@ object ConfigParser {
                 serverIp = host,
                 serverPort = port,
                 bugHostSNI = extractedSni,
-                userUUID = uri.userInfo ?: "",
+                userUUID = pass,
+                ssCipher = cipher,
                 protocol = proto,
                 poolConcurrency = 2,
                 brutalRateMbps = 0,

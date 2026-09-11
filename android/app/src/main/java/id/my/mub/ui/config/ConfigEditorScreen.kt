@@ -49,6 +49,11 @@ fun ConfigEditorScreen(
     var bugHostSNI by remember { mutableStateOf(currentProfile.bugHostSNI) }
     var userUUID by remember { mutableStateOf(currentProfile.userUUID) }
     var customPayload by remember { mutableStateOf(currentProfile.customPayload) }
+    var udpObfsPassword by remember { mutableStateOf(currentProfile.udpObfsPassword) }
+    var ssCipher by remember { mutableStateOf(currentProfile.ssCipher) }
+    var brutalRateMbps by remember { mutableStateOf(currentProfile.brutalRateMbps.toString()) }
+    var poolConcurrency by remember { mutableStateOf(currentProfile.poolConcurrency.toString()) }
+    var wsPath by remember { mutableStateOf(currentProfile.wsPath) }
     var dnsPrimary by remember { mutableStateOf(currentProfile.dnsServer) }
 
     // Latency probe state
@@ -71,6 +76,11 @@ fun ConfigEditorScreen(
             bugHostSNI = bugHostSNI.trim(),
             userUUID = userUUID.trim(),
             customPayload = customPayload.trim(),
+            udpObfsPassword = udpObfsPassword.trim(),
+            ssCipher = ssCipher.trim().ifBlank { "2022-blake3-aes-256-gcm" },
+            brutalRateMbps = brutalRateMbps.toIntOrNull() ?: 50,
+            poolConcurrency = poolConcurrency.toIntOrNull() ?: 2,
+            wsPath = wsPath.trim().ifBlank { "/tbrutal" },
             dnsServer = dnsPrimary.trim().ifBlank { "1.1.1.1" }
         )
     }
@@ -121,6 +131,11 @@ fun ConfigEditorScreen(
                             bugHostSNI = parsed.bugHostSNI
                             userUUID = parsed.userUUID
                             customPayload = parsed.customPayload
+                            udpObfsPassword = parsed.udpObfsPassword
+                            ssCipher = parsed.ssCipher
+                            brutalRateMbps = parsed.brutalRateMbps.toString()
+                            poolConcurrency = parsed.poolConcurrency.toString()
+                            wsPath = parsed.wsPath
                             pasteMessage = "Imported ${parsed.protocol.displayName} configuration!"
                         } else {
                             pasteMessage = "No valid vless://, vmess://, or ss:// link found in clipboard"
@@ -172,10 +187,12 @@ fun ConfigEditorScreen(
                 val selectableProtocols = listOf(
                     ProtocolType.VLESS_WS,
                     ProtocolType.VLESS_TCP,
+                    ProtocolType.SHADOWTLS_V3,
+                    ProtocolType.T_BRUTAL,
                     ProtocolType.SHADOWSOCKS_2022,
-                    ProtocolType.ZIVPN_UDP,
+                    ProtocolType.HYSTERIA_2,
                     ProtocolType.SSH_PAYLOAD,
-                    ProtocolType.T_BRUTAL
+                    ProtocolType.ZIVPN_UDP
                 )
 
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -370,17 +387,160 @@ fun ConfigEditorScreen(
             }
         }
 
+        // Section 2b: Protocol-Specific High-Performance Tuners
+        if (protocol == ProtocolType.SHADOWTLS_V3) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, AccentPrimary.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
+                colors = CardDefaults.cardColors(containerColor = SurfaceCard),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "ShadowTLS v3 Camouflage Settings",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AccentPrimary
+                    )
+                    Text(
+                        text = "Dual-layer anti-censorship: Outer TLS ClientHello connects to a genuine decoy domain, encapsulating Shadowsocks 2022 inside.",
+                        fontSize = 11.sp,
+                        color = TextMuted
+                    )
+                    OutlinedTextField(
+                        value = udpObfsPassword,
+                        onValueChange = { udpObfsPassword = it },
+                        label = { Text("ShadowTLS Handshake Password", fontSize = 12.sp) },
+                        placeholder = { Text("Server sing-box shadowtls password", color = TextMuted, fontSize = 12.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = AccentPrimary,
+                            unfocusedBorderColor = SurfaceCardBorder,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    OutlinedTextField(
+                        value = userUUID,
+                        onValueChange = { userUUID = it },
+                        label = { Text("Shadowsocks Inner Key / Password", fontSize = 12.sp) },
+                        placeholder = { Text("SS-2022 key or password", color = TextMuted, fontSize = 12.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = AccentPrimary,
+                            unfocusedBorderColor = SurfaceCardBorder,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    OutlinedTextField(
+                        value = ssCipher,
+                        onValueChange = { ssCipher = it },
+                        label = { Text("Shadowsocks AEAD Cipher", fontSize = 12.sp) },
+                        placeholder = { Text("2022-blake3-aes-256-gcm", color = TextMuted, fontSize = 12.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = AccentPrimary,
+                            unfocusedBorderColor = SurfaceCardBorder,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                }
+            }
+        }
+
+        if (protocol == ProtocolType.T_BRUTAL) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, AccentPrimary.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
+                colors = CardDefaults.cardColors(containerColor = SurfaceCard),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "T-Brutal Wire-Speed Pacing Settings",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AccentPrimary
+                    )
+                    Text(
+                        text = "Aggressive congestion pacing with multi-stream connection pooling designed for heavy carrier throttling.",
+                        fontSize = 11.sp,
+                        color = TextMuted
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = brutalRateMbps,
+                            onValueChange = { brutalRateMbps = it },
+                            label = { Text("Pacing Rate (Mbps)", fontSize = 12.sp) },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = AccentPrimary,
+                                unfocusedBorderColor = SurfaceCardBorder,
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary
+                            ),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        OutlinedTextField(
+                            value = poolConcurrency,
+                            onValueChange = { poolConcurrency = it },
+                            label = { Text("Pool Lanes", fontSize = 12.sp) },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = AccentPrimary,
+                                unfocusedBorderColor = SurfaceCardBorder,
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary
+                            ),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                    }
+                    OutlinedTextField(
+                        value = wsPath,
+                        onValueChange = { wsPath = it },
+                        label = { Text("WebSocket Upgrade Path", fontSize = 12.sp) },
+                        placeholder = { Text("/tbrutal", color = TextMuted, fontSize = 12.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = AccentPrimary,
+                            unfocusedBorderColor = SurfaceCardBorder,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                }
+            }
+        }
+
         // Section 3: HTTP Custom / Injector Payload (Only when relevant or requested)
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, SurfaceCardBorder, RoundedCornerShape(12.dp)),
-            colors = CardDefaults.cardColors(containerColor = SurfaceCard),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "HTTP Payload (Custom Injection)",
+        if (protocol == ProtocolType.SSH_PAYLOAD || customPayload.isNotBlank()) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, SurfaceCardBorder, RoundedCornerShape(12.dp)),
+                colors = CardDefaults.cardColors(containerColor = SurfaceCard),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "HTTP Payload (Custom Injection)",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = TextSecondary
@@ -439,6 +599,7 @@ fun ConfigEditorScreen(
                 )
             }
         }
+    }
 
         // Action Buttons
         Row(

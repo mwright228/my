@@ -127,7 +127,7 @@ func StartTunnel(cfg BridgeConfig) (int, error) {
 		return socksPort, nil
 	}
 
-	// 2. Production-Grade Sing-Box Core (VLESS, Reality, Hysteria2, TUIC, Shadowsocks, Trojan, VMess)
+	// 2. Production-Grade Sing-Box Core (VLESS, Reality, Hysteria2, TUIC, Shadowsocks, ShadowTLS, Trojan, VMess)
 	protoUpper := strings.ToUpper(strings.TrimSpace(cfg.Protocol))
 	if strings.Contains(protoUpper, "VLESS") ||
 		strings.Contains(protoUpper, "REALITY") ||
@@ -136,6 +136,8 @@ func StartTunnel(cfg BridgeConfig) (int, error) {
 		strings.Contains(protoUpper, "TROJAN") ||
 		strings.Contains(protoUpper, "VMESS") ||
 		strings.Contains(protoUpper, "SHADOWSOCKS") ||
+		strings.Contains(protoUpper, "SHADOWTLS") ||
+		strings.Contains(protoUpper, "STLS") ||
 		strings.Contains(protoUpper, "SS") {
 
 		sbc := NewSingBoxClient(cfg)
@@ -178,7 +180,11 @@ func StartTunnel(cfg BridgeConfig) (int, error) {
 		cfg.PoolSize = 1
 	}
 	if cfg.Path == "" && !cfg.RawMode {
-		cfg.Path = "/tbrutal"
+		if cfg.CustomPayload != "" && strings.HasPrefix(cfg.CustomPayload, "/") {
+			cfg.Path = cfg.CustomPayload
+		} else {
+			cfg.Path = "/tbrutal"
+		}
 	}
 
 	c := client.NewClient(client.Config{

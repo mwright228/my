@@ -169,45 +169,85 @@ func (c *SingBoxClient) Start() (int, error) {
 	protoUpper := strings.ToUpper(strings.TrimSpace(c.cfg.Protocol))
 
 	// 3. Build outbound configuration
-	var outboundMap map[string]any
+	var outboundsList []map[string]any
 
 	switch {
+	case strings.Contains(protoUpper, "SHADOWTLS") || strings.Contains(protoUpper, "STLS"):
+		stlsPass := c.cfg.ObfsKey
+		if stlsPass == "" {
+			stlsPass = c.cfg.Token
+		}
+		ssPass := c.cfg.Token
+		cipher := "2022-blake3-aes-256-gcm"
+		if c.cfg.CustomPayload != "" && !strings.HasPrefix(c.cfg.CustomPayload, "/") {
+			cipher = c.cfg.CustomPayload
+		}
+
+		outboundsList = []map[string]any{
+			{
+				"type":        "shadowtls",
+				"tag":         "shadowtls-out",
+				"server":      host,
+				"server_port": serverPort,
+				"version":     3,
+				"password":    stlsPass,
+				"tls": map[string]any{
+					"enabled":     true,
+					"server_name": effectiveSni,
+					"insecure":    insecure,
+				},
+			},
+			{
+				"type":        "shadowsocks",
+				"tag":         "proxy",
+				"server":      host,
+				"server_port": serverPort,
+				"method":      cipher,
+				"password":    ssPass,
+				"detour":      "shadowtls-out",
+			},
+		}
+
 	case strings.Contains(protoUpper, "HYSTERIA2") || strings.Contains(protoUpper, "HYSTERIA_2"):
 		rate := c.cfg.RateMbps
 		if rate <= 0 {
 			rate = 50
 		}
-		outboundMap = map[string]any{
-			"type":        "hysteria2",
-			"tag":         "proxy",
-			"server":      host,
-			"server_port": serverPort,
-			"password":    c.cfg.Token,
-			"tls": map[string]any{
-				"enabled":     true,
-				"server_name": effectiveSni,
-				"insecure":    insecure,
-			},
-			"brutal": map[string]any{
-				"enabled":   true,
-				"up_mbps":   rate,
-				"down_mbps": rate * 2,
+		outboundsList = []map[string]any{
+			{
+				"type":        "hysteria2",
+				"tag":         "proxy",
+				"server":      host,
+				"server_port": serverPort,
+				"password":    c.cfg.Token,
+				"tls": map[string]any{
+					"enabled":     true,
+					"server_name": effectiveSni,
+					"insecure":    insecure,
+				},
+				"brutal": map[string]any{
+					"enabled":   true,
+					"up_mbps":   rate,
+					"down_mbps": rate * 2,
+				},
 			},
 		}
 
 	case strings.Contains(protoUpper, "TUIC"):
-		outboundMap = map[string]any{
-			"type":               "tuic",
-			"tag":                "proxy",
-			"server":             host,
-			"server_port":        serverPort,
-			"uuid":               c.cfg.Token,
-			"password":           c.cfg.Token,
-			"congestion_control": "bbr",
-			"tls": map[string]any{
-				"enabled":     true,
-				"server_name": effectiveSni,
-				"insecure":    insecure,
+		outboundsList = []map[string]any{
+			{
+				"type":               "tuic",
+				"tag":                "proxy",
+				"server":             host,
+				"server_port":        serverPort,
+				"uuid":               c.cfg.Token,
+				"password":           c.cfg.Token,
+				"congestion_control": "bbr",
+				"tls": map[string]any{
+					"enabled":     true,
+					"server_name": effectiveSni,
+					"insecure":    insecure,
+				},
 			},
 		}
 
@@ -216,106 +256,123 @@ func (c *SingBoxClient) Start() (int, error) {
 		if cipher == "" {
 			cipher = "2022-blake3-aes-128-gcm"
 		}
-		outboundMap = map[string]any{
-			"type":        "shadowsocks",
-			"tag":         "proxy",
-			"server":      host,
-			"server_port": serverPort,
-			"method":      cipher,
-			"password":    c.cfg.Token,
+		outboundsList = []map[string]any{
+			{
+				"type":        "shadowsocks",
+				"tag":         "proxy",
+				"server":      host,
+				"server_port": serverPort,
+				"method":      cipher,
+				"password":    c.cfg.Token,
+			},
 		}
 
 	case strings.Contains(protoUpper, "TROJAN"):
-		outboundMap = map[string]any{
-			"type":        "trojan",
-			"tag":         "proxy",
-			"server":      host,
-			"server_port": serverPort,
-			"password":    c.cfg.Token,
-			"tls": map[string]any{
-				"enabled":     true,
-				"server_name": effectiveSni,
-				"insecure":    insecure,
-			},
-			"transport": map[string]any{
-				"type": "ws",
-				"path": path,
-				"headers": map[string]any{
-					"Host": effectiveHostHeader,
+		outboundsList = []map[string]any{
+			{
+				"type":        "trojan",
+				"tag":         "proxy",
+				"server":      host,
+				"server_port": serverPort,
+				"password":    c.cfg.Token,
+				"tls": map[string]any{
+					"enabled":     true,
+					"server_name": effectiveSni,
+					"insecure":    insecure,
+				},
+				"transport": map[string]any{
+					"type": "ws",
+					"path": path,
+					"headers": map[string]any{
+						"Host": effectiveHostHeader,
+					},
 				},
 			},
 		}
 
 	case strings.Contains(protoUpper, "VMESS"):
-		outboundMap = map[string]any{
-			"type":        "vmess",
-			"tag":         "proxy",
-			"server":      host,
-			"server_port": serverPort,
-			"uuid":        c.cfg.Token,
-			"alter_id":    0,
-			"security":    "auto",
-			"transport": map[string]any{
-				"type": "ws",
-				"path": path,
-				"headers": map[string]any{
-					"Host": effectiveHostHeader,
+		outboundsList = []map[string]any{
+			{
+				"type":        "vmess",
+				"tag":         "proxy",
+				"server":      host,
+				"server_port": serverPort,
+				"uuid":        c.cfg.Token,
+				"alter_id":    0,
+				"security":    "auto",
+				"transport": map[string]any{
+					"type": "ws",
+					"path": path,
+					"headers": map[string]any{
+						"Host": effectiveHostHeader,
+					},
 				},
 			},
 		}
 
 	case strings.Contains(protoUpper, "REALITY") || strings.Contains(protoUpper, "VLESS_TCP"):
 		// VLESS Reality
-		outboundMap = map[string]any{
-			"type":        "vless",
-			"tag":         "proxy",
-			"server":      host,
-			"server_port": serverPort,
-			"uuid":        c.cfg.Token,
-			"flow":        "xtls-rprx-vision",
-			"tls": map[string]any{
-				"enabled":     true,
-				"server_name": effectiveSni,
-				"reality": map[string]any{
-					"enabled":    true,
-					"public_key": "8sV9mQ1xkZ2p8sV9mQ1xkZ2p8sV9mQ1xkZ2p8sV9mQ1x",
-					"short_id":   "4a2e",
-				},
-				"utls": map[string]any{
+		outboundsList = []map[string]any{
+			{
+				"type":        "vless",
+				"tag":         "proxy",
+				"server":      host,
+				"server_port": serverPort,
+				"uuid":        c.cfg.Token,
+				"flow":        "xtls-rprx-vision",
+				"tls": map[string]any{
 					"enabled":     true,
-					"fingerprint": "chrome",
+					"server_name": effectiveSni,
+					"reality": map[string]any{
+						"enabled":    true,
+						"public_key": "8sV9mQ1xkZ2p8sV9mQ1xkZ2p8sV9mQ1xkZ2p8sV9mQ1x",
+						"short_id":   "4a2e",
+					},
+					"utls": map[string]any{
+						"enabled":     true,
+						"fingerprint": "chrome",
+					},
 				},
 			},
 		}
 
 	default:
 		// Default: VLESS WebSocket over TLS/Cloudflare CDN
-		outboundMap = map[string]any{
-			"type":        "vless",
-			"tag":         "proxy",
-			"server":      host,
-			"server_port": serverPort,
-			"uuid":        c.cfg.Token,
-			"tls": map[string]any{
-				"enabled":     true,
-				"server_name": effectiveSni,
-				"insecure":    insecure,
-				"utls": map[string]any{
+		outboundsList = []map[string]any{
+			{
+				"type":        "vless",
+				"tag":         "proxy",
+				"server":      host,
+				"server_port": serverPort,
+				"uuid":        c.cfg.Token,
+				"tls": map[string]any{
 					"enabled":     true,
-					"fingerprint": "chrome",
+					"server_name": effectiveSni,
+					"insecure":    insecure,
+					"utls": map[string]any{
+						"enabled":     true,
+						"fingerprint": "chrome",
+					},
 				},
-			},
-			"transport": map[string]any{
-				"type": "ws",
-				"path": path,
-				"headers": map[string]any{
-					"Host": effectiveHostHeader,
+				"transport": map[string]any{
+					"type": "ws",
+					"path": path,
+					"headers": map[string]any{
+						"Host": effectiveHostHeader,
+					},
 				},
 			},
 		}
 	}
 
 	// 4. Construct complete sing-box configuration
+	fullOutbounds := make([]map[string]any, 0, len(outboundsList)+2)
+	fullOutbounds = append(fullOutbounds, outboundsList...)
+	fullOutbounds = append(fullOutbounds,
+		map[string]any{"type": "direct", "tag": "direct"},
+		map[string]any{"type": "block", "tag": "block"},
+	)
+
 	fullConfig := map[string]any{
 		"log": map[string]any{
 			"level":     "info",
@@ -333,7 +390,7 @@ func (c *SingBoxClient) Start() (int, error) {
 					"detour":  "direct",
 				},
 			},
-			"strategy": "prefer_ipv4",
+			"strategy":          "prefer_ipv4",
 			"independent_cache": true,
 		},
 		"inbounds": []map[string]any{
@@ -344,19 +401,10 @@ func (c *SingBoxClient) Start() (int, error) {
 				"listen_port": port,
 			},
 		},
-		"outbounds": []map[string]any{
-			outboundMap,
-			{
-				"type": "direct",
-				"tag":  "direct",
-			},
-			{
-				"type": "block",
-				"tag":  "block",
-			},
-		},
+		"outbounds": fullOutbounds,
 		"route": map[string]any{
 			"auto_detect_interface": true,
+			"final":                 "proxy",
 			"rules": []map[string]any{
 				// Private/loopback ranges go direct — never proxy local traffic.
 				{
