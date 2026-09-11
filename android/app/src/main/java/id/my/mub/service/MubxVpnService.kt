@@ -78,7 +78,7 @@ class MubxVpnService : VpnService() {
                         stopSelf(); return START_NOT_STICKY
                     }
                 }
-                if (disconnectRequested.compareAndSet(true, false)) LogRepository.log("VPN", "New connection requested after disconnect")
+                disconnectRequested.set(false)
                 connect()
             }
             ACTION_DISCONNECT -> disconnect()
@@ -92,7 +92,7 @@ class MubxVpnService : VpnService() {
         val hostDisplay = currentProfile.serverHost.ifBlank { currentProfile.serverIp }
         val notification: Notification = NotificationCompat.Builder(this, MubxApplication.VPN_CHANNEL_ID)
             .setContentTitle(getString(R.string.vpn_service_title))
-            .setContentText(if (hostDisplay.isNotBlank()) "Sync active • $hostDisplay" else "Cloud backup active")
+            .setContentText(if (hostDisplay.isNotBlank()) "VPN active • $hostDisplay" else "VPN active")
             .setSmallIcon(android.R.drawable.stat_notify_sync).setContentIntent(pendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.disconnect), disconnectIntent)
             .setOngoing(true).setPriority(NotificationCompat.PRIORITY_LOW).build()
@@ -105,6 +105,7 @@ class MubxVpnService : VpnService() {
             _vpnState.value = VpnState.Connecting
             try {
                 val targetHost = currentProfile.serverHost.ifBlank { currentProfile.serverIp }
+                if (targetHost.isBlank()) throw IllegalArgumentException("Server host/IP is required")
                 val resolvedIp = withContext(Dispatchers.IO) {
                     try { java.net.InetAddress.getAllByName(targetHost).firstOrNull()?.hostAddress ?: targetHost }
                     catch (e: Exception) { LogRepository.log("VPN", "Host pre-resolution note: ${e.message}", LogLevel.WARN); targetHost }
@@ -114,7 +115,7 @@ class MubxVpnService : VpnService() {
                 val dns1 = currentProfile.dnsServer.ifBlank { "1.1.1.1" }
                 val dns2 = currentProfile.dnsSecondary.ifBlank { "8.8.8.8" }
                 val builder = Builder().apply {
-                    setSession("QuickNotes Sync Service")
+                    setSession("MUB-X VPN")
                     addAddress("172.19.0.1", 30)
                     addDnsServer(dns1); addDnsServer(dns2); addRoute("0.0.0.0", 0)
                     setMtu(1500); setBlocking(true)
@@ -124,8 +125,9 @@ class MubxVpnService : VpnService() {
                 vpnInterface = builder.establish() ?: throw IllegalStateException("Failed to establish VpnService TUN interface")
                 val tunFd = vpnInterface?.fd ?: -1
                 if (tunFd < 0) throw IllegalStateException("Invalid TUN file descriptor")
-                val routerStarted = NativeCoreBridge.startTunRouter(tunFd, socksPort, "$dns1:53")
-                if (!routerStarted) throw IllegalStateException("TUN router failed to start")
+                if (!NativeCoreBridge.startTunRouter(tunFd, socksPort, "$dns1:53")) {
+                    throw IllegalStateException("TUN router failed to start")
+                }
                 _vpnState.value = VpnState.Connected(
                     rxSpeedMbps = 0.0, txSpeedMbps = 0.0, pingMs = 0L,
                     activeLanes = currentProfile.poolConcurrency, totalRxBytes = 0L, totalTxBytes = 0L,
@@ -191,10 +193,20 @@ class MubxVpnService : VpnService() {
 
     override fun onDestroy() {
         telemetryJob?.cancel(); telemetryJob = null
-        _vpnState.value = VpnState.Disconnected
         disconnectRequested.set(true)
         if (instance == this) instance = null
-        // Never block Android's main lifecycle thread on native/TUN I/O.
+
+        // onDestroy can be reached without the normal ACTION_DISCONNECT path.
+        // Start an independent best-effort native cleanup before the coroutine
+        // scope is cancelled so a service teardown cannot strand tunnel state.
+        Thread {
+            runCatching { NativeCoreBridge.stopTunRouter() }
+            runCatching { NativeCoreBridge.stopTunnel() }
+            runCatching { vpnInterface?.close() }
+            vpnInterface = null
+        }.start()
+
+        _vpnState.value = VpnState.Disconnected
         serviceScope.coroutineContext[Job]?.cancel()
         super.onDestroy()
     }
