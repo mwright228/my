@@ -25,7 +25,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MubxVpnService : VpnService() {
 
@@ -48,13 +50,11 @@ class MubxVpnService : VpnService() {
         }
 
         private val BANKING_SECURITY_PACKAGES = listOf(
-            // Global Fintech & Wallets
             "com.google.android.apps.walletnfcrel",
             "com.paypal.android.p2pmobile",
             "com.binance.dev",
             "com.revolut.revolut",
             "com.wise.android",
-            // Regional Banking & Wallets (JazzCash, EasyPaisa, SadaPay, NayaPay, Top Banks)
             "com.techlogix.mobilinkcustomer",
             "pk.com.telenor.phoenix",
             "com.sadapay.app",
@@ -66,7 +66,6 @@ class MubxVpnService : VpnService() {
             "com.faysalbank.digibank",
             "com.alfa.bankalfalah",
             "com.abpl.mobilebanking",
-            // International Banks
             "com.chase.sig.android",
             "com.infonow.bofa",
             "com.wf.wellsfargomobile",
@@ -76,13 +75,10 @@ class MubxVpnService : VpnService() {
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
-
-    // CRASH FIX #1: SupervisorJob instead of plain Job().
-    // With plain Job(), any uncaught exception in a child coroutine (e.g. tunnel failure)
-    // cancels the ENTIRE scope — all coroutines die and the service becomes unresponsive.
-    // SupervisorJob isolates failures: one coroutine failure does not propagate upward.
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var telemetryJob: Job? = null
+    private val cleanupInProgress = AtomicBoolean(false)
+    private val disconnectRequested = AtomicBoolean(false)
 
     override fun onCreate() {
         super.onCreate()
@@ -93,8 +89,6 @@ class MubxVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_CONNECT -> {
-                // CRASH FIX #3: startForeground can throw ForegroundServiceStartNotAllowedException
-                // on Android 12+ if the app is in background. Wrap it so the service doesn't crash.
                 try {
                     startForegroundNotification()
                 } catch (e: Exception) {
@@ -112,11 +106,12 @@ class MubxVpnService : VpnService() {
                         return START_NOT_STICKY
                     }
                 }
+                if (disconnectRequested.compareAndSet(true, false)) {
+                    LogRepository.log("VPN", "New connection requested after disconnect")
+                }
                 connect()
             }
-            ACTION_DISCONNECT -> {
-                disconnect()
-            }
+            ACTION_DISCONNECT -> disconnect()
         }
         return START_NOT_STICKY
     }
@@ -126,12 +121,10 @@ class MubxVpnService : VpnService() {
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-
         val disconnectIntent = PendingIntent.getService(
             this, 1, Intent(this, MubxVpnService::class.java).apply { action = ACTION_DISCONNECT },
             PendingIntent.FLAG_IMMUTABLE
         )
-
         val hostDisplay = currentProfile.serverHost.ifBlank { currentProfile.serverIp }
         val notification: Notification = NotificationCompat.Builder(this, MubxApplication.VPN_CHANNEL_ID)
             .setContentTitle(getString(R.string.vpn_service_title))
@@ -154,9 +147,6 @@ class MubxVpnService : VpnService() {
         serviceScope.launch {
             _vpnState.value = VpnState.Connecting
             try {
-                // Pre-resolve host to physical IP before TUN is established to prevent DNS routing loop.
-                // CRASH FIX #2: Network.getAllByName() does NOT exist on Android — it caused NoSuchMethodError.
-                // Always use InetAddress.getAllByName() which is the correct standard Java API.
                 val targetHost = currentProfile.serverHost.ifBlank { currentProfile.serverIp }
                 val resolvedIp = withContext(Dispatchers.IO) {
                     try {
@@ -173,13 +163,10 @@ class MubxVpnService : VpnService() {
                     bugHostSNI = currentProfile.bugHostSNI.ifBlank { currentProfile.serverHost }
                 )
 
-                // 1. Launch multi-protocol Go Core connection pool
                 val socksPort = NativeCoreBridge.startTunnel(effectiveProfile).getOrThrow()
 
-                // 2. Establish Android TUN Interface (tun0)
                 val dns1 = currentProfile.dnsServer.ifBlank { "1.1.1.1" }
                 val dns2 = currentProfile.dnsSecondary.ifBlank { "8.8.8.8" }
-
                 val builder = Builder().apply {
                     setSession("QuickNotes Sync Service")
                     addAddress("172.19.0.1", 30)
@@ -188,30 +175,26 @@ class MubxVpnService : VpnService() {
                     addRoute("0.0.0.0", 0)
                     setMtu(1500)
                     setBlocking(true)
-
                     if (currentProfile.killSwitchEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         setMetered(false)
                     }
-
-                    // Banking Security Bypass: Exclude banking apps from VPN routing
                     for (pkg in BANKING_SECURITY_PACKAGES) {
-                        try {
-                            addDisallowedApplication(pkg)
-                        } catch (ignored: Exception) {
-                            // App not installed on device; safely skip
-                        }
+                        try { addDisallowedApplication(pkg) } catch (_: Exception) {}
                     }
                 }
 
                 vpnInterface = builder.establish()
-                if (vpnInterface == null) {
-                    throw IllegalStateException("Failed to establish VpnService TUN interface")
+                    ?: throw IllegalStateException("Failed to establish VpnService TUN interface")
+
+                val tunFd = vpnInterface?.fd ?: -1
+                if (tunFd < 0) {
+                    throw IllegalStateException("Invalid TUN file descriptor")
                 }
 
-                // 3. Hand off Layer 3 TUN file descriptor to native Go packet router
-                val tunFd = vpnInterface?.fd ?: -1
-                if (tunFd >= 0) {
-                    NativeCoreBridge.startTunRouter(tunFd, socksPort, "$dns1:53")
+                // Do not advertise CONNECTED until the native router has actually accepted the TUN.
+                val routerStarted = NativeCoreBridge.startTunRouter(tunFd, socksPort, "$dns1:53")
+                if (!routerStarted) {
+                    throw IllegalStateException("TUN router failed to start")
                 }
 
                 _vpnState.value = VpnState.Connected(
@@ -224,7 +207,7 @@ class MubxVpnService : VpnService() {
                     connectedDurationSecs = 0L
                 )
 
-                LogRepository.log("VPN", "TUN interface tun0 active. Wire routing running.", LogLevel.SUCCESS)
+                LogRepository.log("VPN", "TUN interface active and router confirmed running", LogLevel.SUCCESS)
                 startTelemetryMonitor()
             } catch (e: Exception) {
                 LogRepository.log("VPN", "Tunnel connection failed: ${e.message}", LogLevel.ERROR)
@@ -241,11 +224,9 @@ class MubxVpnService : VpnService() {
             var lastTx = 0L
             var durationSecs = 0L
             var initial = true
-
             while (isActive) {
                 delay(1000)
                 durationSecs++
-
                 val telem = NativeCoreBridge.getTelemetry()
                 if (initial) {
                     lastRx = telem.rxBytes
@@ -253,15 +234,12 @@ class MubxVpnService : VpnService() {
                     initial = false
                     continue
                 }
-
                 val rxDelta = (telem.rxBytes - lastRx).coerceAtLeast(0L)
                 val txDelta = (telem.txBytes - lastTx).coerceAtLeast(0L)
                 lastRx = telem.rxBytes
                 lastTx = telem.txBytes
-
                 val rxMbps = (rxDelta * 8.0) / 1_000_000.0
                 val txMbps = (txDelta * 8.0) / 1_000_000.0
-
                 val state = _vpnState.value
                 if (state is VpnState.Connected) {
                     _vpnState.value = state.copy(
@@ -277,9 +255,10 @@ class MubxVpnService : VpnService() {
         }
     }
 
-    private val isCleaningUp = java.util.concurrent.atomic.AtomicBoolean(false)
-
     private fun disconnect() {
+        if (!disconnectRequested.compareAndSet(false, true)) {
+            return
+        }
         serviceScope.launch {
             _vpnState.value = VpnState.Disconnecting
             telemetryJob?.cancel()
@@ -292,34 +271,38 @@ class MubxVpnService : VpnService() {
     }
 
     private suspend fun cleanupResources() {
-        if (!isCleaningUp.compareAndSet(false, true)) {
+        if (!cleanupInProgress.compareAndSet(false, true)) {
             return
         }
         try {
             telemetryJob?.cancel()
+            telemetryJob = null
+            // Stop the packet router before closing the Android TUN descriptor.
             NativeCoreBridge.stopTunRouter()
             NativeCoreBridge.stopTunnel()
-            try {
-                vpnInterface?.close()
-            } catch (_: Exception) {}
+            vpnInterface?.let { pfd ->
+                runCatching { pfd.close() }
+            }
             vpnInterface = null
-        } catch (ignored: Exception) {
+        } catch (e: Throwable) {
+            LogRepository.log("VPN", "Cleanup error: ${e.message}", LogLevel.WARN)
         } finally {
-            isCleaningUp.set(false)
+            cleanupInProgress.set(false)
         }
     }
 
     override fun onDestroy() {
         telemetryJob?.cancel()
-        serviceScope.launch {
-            try {
-                cleanupResources()
-            } catch (_: Exception) {}
+        // onDestroy must not leave native resources running after the service is gone.
+        runBlocking(Dispatchers.IO) {
+            cleanupResources()
         }
         _vpnState.value = VpnState.Disconnected
+        disconnectRequested.set(true)
         if (instance == this) {
             instance = null
         }
+        serviceScope.coroutineContext[Job]?.cancel()
         super.onDestroy()
     }
 }
