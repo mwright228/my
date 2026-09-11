@@ -99,8 +99,8 @@ func (s *Session) Handle() {
 }
 
 func isBlockedIP(ip net.IP) bool {
-	addr, ok := netip.ParseAddr(ip.String())
-	if !ok {
+	addr, err := netip.ParseAddr(ip.String())
+	if err != nil {
 		return true
 	}
 	if addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsMulticast() || addr.IsUnspecified() {
@@ -111,25 +111,25 @@ func isBlockedIP(ip net.IP) bool {
 		if a[0] == 0 || a[0] >= 240 {
 			return true
 		}
-		if a[0] == 100 && a[1] >= 64 && a[1] <= 127 { // RFC 6598 CGNAT
+		if a[0] == 100 && a[1] >= 64 && a[1] <= 127 {
 			return true
 		}
-		if a[0] == 192 && a[1] == 0 && a[2] == 0 { // IETF protocol assignments
+		if a[0] == 192 && a[1] == 0 && a[2] == 0 {
 			return true
 		}
-		if a[0] == 192 && a[1] == 0 && a[2] == 2 { // TEST-NET-1
+		if a[0] == 192 && a[1] == 0 && a[2] == 2 {
 			return true
 		}
-		if a[0] == 198 && a[1] == 18 { // benchmarking
+		if a[0] == 198 && a[1] == 18 {
 			return true
 		}
-		if a[0] == 198 && a[1] == 19 { // benchmarking
+		if a[0] == 198 && a[1] == 19 {
 			return true
 		}
-		if a[0] == 198 && a[1] == 51 && a[2] == 100 { // TEST-NET-2
+		if a[0] == 198 && a[1] == 51 && a[2] == 100 {
 			return true
 		}
-		if a[0] == 203 && a[1] == 0 && a[2] == 113 { // TEST-NET-3
+		if a[0] == 203 && a[1] == 0 && a[2] == 113 {
 			return true
 		}
 	}
