@@ -144,6 +144,15 @@ object NativeCoreBridge {
         }
     }
 
+    /** Best-effort synchronous cleanup entry point for service destruction. */
+    fun forceStop() {
+        if (!nativeLoaded) return
+        runCatching { nativeStopTunRouter() }
+            .onFailure { LogRepository.log("ROUTER", "Emergency TUN stop error: ${it.message}", LogLevel.WARN) }
+        runCatching { nativeStopTunnel() }
+            .onFailure { LogRepository.log("TUNNEL", "Emergency tunnel stop error: ${it.message}", LogLevel.WARN) }
+    }
+
     suspend fun startTunRouter(tunFd: Int, socksPort: Int, dnsServer: String = "1.1.1.1:53"): Boolean = withContext(Dispatchers.IO) {
         if (!nativeLoaded) {
             LogRepository.log("ROUTER", "Native VPN core is unavailable", LogLevel.ERROR)
