@@ -46,7 +46,6 @@ func TestProbeBugHostTLSCertificate(t *testing.T) {
 }
 
 func TestStartAndStopTunnel(t *testing.T) {
-	// 1. Setup mock users file
 	tmpDir := t.TempDir()
 	usersFile := filepath.Join(tmpDir, "users.json")
 	usersJSON := `[{"name":"testuser","uuid":"valid-secret-token-123","status":"active","protocols":["all"]}]`
@@ -54,7 +53,6 @@ func TestStartAndStopTunnel(t *testing.T) {
 		t.Fatalf("failed to write users.json: %v", err)
 	}
 
-	// 2. Start mock T-Brutal Server
 	serverLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen for server: %v", err)
@@ -76,8 +74,8 @@ func TestStartAndStopTunnel(t *testing.T) {
 		_ = srv.Stop(ctx)
 	}()
 
-	// 3. Test StartTunnel with BridgeConfig
 	cfg := BridgeConfig{
+		Protocol:        "T_BRUTAL",
 		ServerAddr:      serverLn.Addr().String(),
 		SNI:             "test.example.com",
 		HostHeader:      "test.example.com",
@@ -98,16 +96,13 @@ func TestStartAndStopTunnel(t *testing.T) {
 		t.Fatalf("expected valid port, got %d", port)
 	}
 
-	// Verify duplicate start returns error
 	_, err = StartTunnel(cfg)
 	if err == nil {
 		t.Errorf("expected duplicate StartTunnel to fail")
 	}
 
-	// Clean stop
 	StopTunnel()
 
-	// Verify can start again after stop
 	port2, err := StartTunnel(cfg)
 	if err != nil {
 		t.Fatalf("StartTunnel after stop failed: %v", err)
