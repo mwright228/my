@@ -41,13 +41,13 @@ static inline jstring newStringUTF(JNIEnv* env, const char* str) {
 
 static inline JNIEnv* getJNIEnv() {
     if (!g_vm) return NULL;
-    JNIEnv* env = NULL;
-    int status = (*g_vm)->GetEnv(g_vm, &env, JNI_VERSION_1_6);
+    void* raw_env = NULL;
+    int status = (*g_vm)->GetEnv(g_vm, (void**)&raw_env, JNI_VERSION_1_6);
     if (status != JNI_OK) {
-        status = (*g_vm)->AttachCurrentThreadAsDaemon(g_vm, &env, NULL);
+        status = (*g_vm)->AttachCurrentThreadAsDaemon(g_vm, (void**)&raw_env, NULL);
         if (status != JNI_OK) return NULL;
     }
-    return env;
+    return (JNIEnv*)raw_env;
 }
 
 static inline int callProtectSocket(int fd) {
@@ -96,193 +96,143 @@ static inline void callNativeLog(const char* tag, const char* msg) {
 */
 import "C"
 import (
-	"fmt"
-	"strings"
-	"unsafe"
+    "fmt"
+    "strings"
+    "unsafe"
 
-	"github.com/mwright228/my/src/tbrutal/bridge"
+    "github.com/mwright228/my/src/tbrutal/bridge"
 )
 
 func init() {
-	bridge.SetSocketProtector(func(fd int) bool {
-		return C.callProtectSocket(C.int(fd)) != 0
-	})
-	bridge.SetLogger(func(tag, msg string) {
-		cTag := C.CString(tag)
-		cMsg := C.CString(msg)
-		defer C.free(unsafe.Pointer(cTag))
-		defer C.free(unsafe.Pointer(cMsg))
-		C.callNativeLog(cTag, cMsg)
-	})
+    bridge.SetSocketProtector(func(fd int) bool {
+        return C.callProtectSocket(C.int(fd)) != 0
+    })
+    bridge.SetLogger(func(tag, msg string) {
+        cTag := C.CString(tag)
+        cMsg := C.CString(msg)
+        defer C.free(unsafe.Pointer(cTag))
+        defer C.free(unsafe.Pointer(cMsg))
+        C.callNativeLog(cTag, cMsg)
+    })
 }
 
 func safeGoString(cStr *C.char) string {
-	if cStr == nil {
-		return ""
-	}
-	return C.GoString(cStr)
+    if cStr == nil {
+        return ""
+    }
+    return C.GoString(cStr)
 }
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeSetSSHHostKeySHA256
 func Java_id_my_mub_service_NativeCoreBridge_nativeSetSSHHostKeySHA256(
-	env *C.JNIEnv,
-	clazz C.jclass,
-	jFingerprint C.jstring,
+    env *C.JNIEnv,
+    clazz C.jclass,
+    jFingerprint C.jstring,
 ) {
-	C.initJavaVM(env)
-	cFingerprint := C.getStringUTFChars(env, jFingerprint)
-	defer C.releaseStringUTFChars(env, jFingerprint, cFingerprint)
-	bridge.SetSSHHostKeySHA256(safeGoString(cFingerprint))
+    C.initJavaVM(env)
+    cFingerprint := C.getStringUTFChars(env, jFingerprint)
+    defer C.releaseStringUTFChars(env, jFingerprint, cFingerprint)
+    bridge.SetSSHHostKeySHA256(safeGoString(cFingerprint))
 }
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel
 func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel(
-	env *C.JNIEnv,
-	clazz C.jclass,
-	jProtocol C.jstring,
-	jServerAddr C.jstring,
-	jSNI C.jstring,
-	jHostHeader C.jstring,
-	jToken C.jstring,
-	jPoolSize C.jint,
-	jRateMbps C.jint,
-	jUseTLS C.jboolean,
-	jInsecureTLS C.jboolean,
-	jRawMode C.jboolean,
-	jObfsKey C.jstring,
-	jPortHopRange C.jstring,
-	jDNSServer C.jstring,
-	jCustomPayload C.jstring,
+    env *C.JNIEnv,
+    clazz C.jclass,
+    jProtocol C.jstring,
+    jServerAddr C.jstring,
+    jSNI C.jstring,
+    jHostHeader C.jstring,
+    jToken C.jstring,
+    jPoolSize C.jint,
+    jRateMbps C.jint,
+    jUseTLS C.jboolean,
+    jInsecureTLS C.jboolean,
+    jRawMode C.jboolean,
+    jObfsKey C.jstring,
+    jPortHopRange C.jstring,
+    jDNSServer C.jstring,
+    jCustomPayload C.jstring,
 ) C.jint {
-	C.initJavaVM(env)
+    C.initJavaVM(env)
 
-	cProtocol := C.getStringUTFChars(env, jProtocol)
-	defer C.releaseStringUTFChars(env, jProtocol, cProtocol)
+    cProtocol := C.getStringUTFChars(env, jProtocol)
+    defer C.releaseStringUTFChars(env, jProtocol, cProtocol)
+    cServerAddr := C.getStringUTFChars(env, jServerAddr)
+    defer C.releaseStringUTFChars(env, jServerAddr, cServerAddr)
+    cSNI := C.getStringUTFChars(env, jSNI)
+    defer C.releaseStringUTFChars(env, jSNI, cSNI)
+    cHostHeader := C.getStringUTFChars(env, jHostHeader)
+    defer C.releaseStringUTFChars(env, jHostHeader, cHostHeader)
+    cToken := C.getStringUTFChars(env, jToken)
+    defer C.releaseStringUTFChars(env, jToken, cToken)
+    cObfsKey := C.getStringUTFChars(env, jObfsKey)
+    defer C.releaseStringUTFChars(env, jObfsKey, cObfsKey)
+    cPortHopRange := C.getStringUTFChars(env, jPortHopRange)
+    defer C.releaseStringUTFChars(env, jPortHopRange, cPortHopRange)
+    cDNSServer := C.getStringUTFChars(env, jDNSServer)
+    defer C.releaseStringUTFChars(env, jDNSServer, cDNSServer)
+    cCustomPayload := C.getStringUTFChars(env, jCustomPayload)
+    defer C.releaseStringUTFChars(env, jCustomPayload, cCustomPayload)
 
-	cServerAddr := C.getStringUTFChars(env, jServerAddr)
-	defer C.releaseStringUTFChars(env, jServerAddr, cServerAddr)
-
-	cSNI := C.getStringUTFChars(env, jSNI)
-	defer C.releaseStringUTFChars(env, jSNI, cSNI)
-
-	cHostHeader := C.getStringUTFChars(env, jHostHeader)
-	defer C.releaseStringUTFChars(env, jHostHeader, cHostHeader)
-
-	cToken := C.getStringUTFChars(env, jToken)
-	defer C.releaseStringUTFChars(env, jToken, cToken)
-
-	cObfsKey := C.getStringUTFChars(env, jObfsKey)
-	defer C.releaseStringUTFChars(env, jObfsKey, cObfsKey)
-
-	cPortHopRange := C.getStringUTFChars(env, jPortHopRange)
-	defer C.releaseStringUTFChars(env, jPortHopRange, cPortHopRange)
-
-	cDNSServer := C.getStringUTFChars(env, jDNSServer)
-	defer C.releaseStringUTFChars(env, jDNSServer, cDNSServer)
-
-	cCustomPayload := C.getStringUTFChars(env, jCustomPayload)
-	defer C.releaseStringUTFChars(env, jCustomPayload, cCustomPayload)
-
-	cfg := bridge.BridgeConfig{
-		Protocol:        safeGoString(cProtocol),
-		ServerAddr:      safeGoString(cServerAddr),
-		SNI:             safeGoString(cSNI),
-		HostHeader:      safeGoString(cHostHeader),
-		Token:           safeGoString(cToken),
-		PoolSize:        int(jPoolSize),
-		RateMbps:        int(jRateMbps),
-		UseTLS:          jUseTLS != 0,
-		InsecureTLS:     jInsecureTLS != 0,
-		RawMode:         jRawMode != 0,
-		ObfsKey:         safeGoString(cObfsKey),
-		PortHopRange:    safeGoString(cPortHopRange),
-		DNSServer:       safeGoString(cDNSServer),
-		CustomPayload:   safeGoString(cCustomPayload),
-		SocksListenAddr: "127.0.0.1:0",
-	}
-
-	port, err := bridge.StartTunnel(cfg)
-	if err != nil {
-		bridge.LogMsg("ERR", fmt.Sprintf("Tunnel start error: %v", err))
-		return C.jint(-1)
-	}
-	bridge.LogMsg("SUCCESS", fmt.Sprintf("Tunnel operational on SOCKS5 loopback port %d", port))
-	return C.jint(port)
+    cfg := bridge.BridgeConfig{
+        Protocol: safeGoString(cProtocol), ServerAddr: safeGoString(cServerAddr), SNI: safeGoString(cSNI), HostHeader: safeGoString(cHostHeader),
+        PoolSize: int(jPoolSize), RateMbps: int(jRateMbps), UseTLS: jUseTLS != 0, InsecureTLS: jInsecureTLS != 0, RawMode: jRawMode != 0,
+        ObfsKey: safeGoString(cObfsKey), PortHopRange: safeGoString(cPortHopRange), DNSServer: safeGoString(cDNSServer), CustomPayload: safeGoString(cCustomPayload),
+        SocksListenAddr: "127.0.0.1:0",
+    }
+    port, err := bridge.StartTunnel(cfg)
+    if err != nil { bridge.LogMsg("ERR", fmt.Sprintf("Tunnel start error: %v", err)); return C.jint(-1) }
+    bridge.LogMsg("SUCCESS", fmt.Sprintf("Tunnel operational on SOCKS5 loopback port %d", port))
+    return C.jint(port)
 }
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeStopTunnel
 func Java_id_my_mub_service_NativeCoreBridge_nativeStopTunnel(env *C.JNIEnv, clazz C.jclass) {
-	C.initJavaVM(env)
-	bridge.StopTunnel()
+    C.initJavaVM(env)
+    bridge.StopTunnel()
 }
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeStartTunRouter
-func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunRouter(
-	env *C.JNIEnv,
-	clazz C.jclass,
-	jTunFd C.jint,
-	jSocksPort C.jint,
-	jDNSServer C.jstring,
-) C.jboolean {
-	C.initJavaVM(env)
-
-	cDNSServer := C.getStringUTFChars(env, jDNSServer)
-	defer C.releaseStringUTFChars(env, jDNSServer, cDNSServer)
-
-	dnsStr := safeGoString(cDNSServer)
-	err := bridge.StartTunRouterWithDNS(int(jTunFd), int(jSocksPort), dnsStr)
-	if err != nil {
-		bridge.LogMsg("ERR", fmt.Sprintf("TunRouter failed to start: %v", err))
-		return C.JNI_FALSE
-	}
-	bridge.LogMsg("SUCCESS", "Layer 3 TunRouter connected and active")
-	return C.JNI_TRUE
+func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunRouter(env *C.JNIEnv, clazz C.jclass, jTunFd C.jint, jSocksPort C.jint, jDNSServer C.jstring) C.jboolean {
+    C.initJavaVM(env)
+    cDNSServer := C.getStringUTFChars(env, jDNSServer)
+    defer C.releaseStringUTFChars(env, jDNSServer, cDNSServer)
+    err := bridge.StartTunRouterWithDNS(int(jTunFd), int(jSocksPort), safeGoString(cDNSServer))
+    if err != nil { bridge.LogMsg("ERR", fmt.Sprintf("TunRouter failed to start: %v", err)); return C.JNI_FALSE }
+    bridge.LogMsg("SUCCESS", "Layer 3 TunRouter connected and active")
+    return C.JNI_TRUE
 }
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeStopTunRouter
 func Java_id_my_mub_service_NativeCoreBridge_nativeStopTunRouter(env *C.JNIEnv, clazz C.jclass) {
-	C.initJavaVM(env)
-	bridge.StopTunRouter()
+    C.initJavaVM(env)
+    bridge.StopTunRouter()
 }
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeGetTelemetry
 func Java_id_my_mub_service_NativeCoreBridge_nativeGetTelemetry(env *C.JNIEnv, clazz C.jclass) C.jstring {
-	C.initJavaVM(env)
-	rx, tx, conns := bridge.GetTelemetry()
-	formatted := fmt.Sprintf("%d|%d|%d", rx, tx, conns)
-	cFormatted := C.CString(formatted)
-	defer C.free(unsafe.Pointer(cFormatted))
-	return C.newStringUTF(env, cFormatted)
+    C.initJavaVM(env)
+    rx, tx, conns := bridge.GetTelemetry()
+    formatted := fmt.Sprintf("%d|%d|%d", rx, tx, conns)
+    cFormatted := C.CString(formatted)
+    defer C.free(unsafe.Pointer(cFormatted))
+    return C.newStringUTF(env, cFormatted)
 }
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeProbeBugHost
-func Java_id_my_mub_service_NativeCoreBridge_nativeProbeBugHost(
-	env *C.JNIEnv,
-	clazz C.jclass,
-	jURL C.jstring,
-	jSNI C.jstring,
-	jTimeoutMs C.jint,
-) C.jstring {
-	C.initJavaVM(env)
-
-	cURL := C.getStringUTFChars(env, jURL)
-	defer C.releaseStringUTFChars(env, jURL, cURL)
-
-	cSNI := C.getStringUTFChars(env, jSNI)
-	defer C.releaseStringUTFChars(env, jSNI, cSNI)
-
-	urlStr := safeGoString(cURL)
-	sniStr := safeGoString(cSNI)
-
-	res := bridge.ProbeBugHost(urlStr, sniStr, int(jTimeoutMs))
-
-	sansStr := strings.Join(res.CertSANs, ",")
-	formatted := fmt.Sprintf("%d|%d|%s|%s|%s", res.StatusCode, res.LatencyMs, res.CertCN, sansStr, res.ErrorMsg)
-
-	cFormatted := C.CString(formatted)
-	defer C.free(unsafe.Pointer(cFormatted))
-
-	return C.newStringUTF(env, cFormatted)
+func Java_id_my_mub_service_NativeCoreBridge_nativeProbeBugHost(env *C.JNIEnv, clazz C.jclass, jURL C.jstring, jSNI C.jstring, jTimeoutMs C.jint) C.jstring {
+    C.initJavaVM(env)
+    cURL := C.getStringUTFChars(env, jURL)
+    defer C.releaseStringUTFChars(env, jURL, cURL)
+    cSNI := C.getStringUTFChars(env, jSNI)
+    defer C.releaseStringUTFChars(env, jSNI, cSNI)
+    res := bridge.ProbeBugHost(safeGoString(cURL), safeGoString(cSNI), int(jTimeoutMs))
+    sansStr := strings.Join(res.CertSANs, ",")
+    formatted := fmt.Sprintf("%d|%d|%s|%s|%s", res.StatusCode, res.LatencyMs, res.CertCN, sansStr, res.ErrorMsg)
+    cFormatted := C.CString(formatted)
+    defer C.free(unsafe.Pointer(cFormatted))
+    return C.newStringUTF(env, cFormatted)
 }
 
 func main() {}
