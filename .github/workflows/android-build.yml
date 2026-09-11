@@ -54,10 +54,15 @@ jobs:
           chmod +x android/build-native.sh
           ./android/build-native.sh
 
-      - name: Build optimized Android release APK
+      - name: Run Android unit tests and lint
         working-directory: ./android
         run: |
           chmod +x gradlew
+          ./gradlew testReleaseUnitTest lintRelease --stacktrace
+
+      - name: Build optimized Android release APK
+        working-directory: ./android
+        run: |
           ./gradlew clean assembleRelease --stacktrace
 
       - name: Prepare release artifact
