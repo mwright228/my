@@ -13,7 +13,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -336,9 +335,7 @@ fun PayloadGeneratorDialog(
                             copiedToast = true
                         }
                     ) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = null, tint = CyberMint, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(if (copiedToast) "Copied!" else "Copy", fontSize = 11.sp, color = CyberMint)
+                        Text(if (copiedToast) "✓ Copied" else "Copy", fontSize = 11.sp, color = CyberMint, fontWeight = FontWeight.Bold)
                     }
                 }
 

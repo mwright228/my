@@ -46,7 +46,7 @@ fun ProtocolSelectionDialog(
             title = "VLESS (WebSocket)",
             badge = "CDN / Cloudflare",
             description = "WebSocket reverse proxy with SNI spoofing and CDN edge routing",
-            icon = Icons.Default.Cloud,
+            icon = Icons.Default.Send,
             accentColor = CyberMint
         ),
         ProtocolItem(
@@ -54,7 +54,7 @@ fun ProtocolSelectionDialog(
             title = "VLESS (Direct TCP)",
             badge = "Direct TLS",
             description = "Direct TLS stream with minimal overhead and Vision flow control",
-            icon = Icons.Default.FlashOn,
+            icon = Icons.Default.PlayArrow,
             accentColor = AccentPrimary
         ),
         ProtocolItem(

@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import id.my.mub.data.ConfigParser
 import id.my.mub.data.ProfileStore
+import id.my.mub.data.ProtocolType
 import id.my.mub.data.VpnProfile
 import id.my.mub.data.VpnState
 import id.my.mub.ui.theme.*
@@ -74,9 +75,10 @@ fun RelayDashboardScreen(
         )
     }
 
-    if (addingWithProtocol != null) {
+    val protoToAdd = addingWithProtocol
+    if (protoToAdd != null) {
         ProtocolConfigDialog(
-            initialProtocol = addingWithProtocol!!,
+            initialProtocol = protoToAdd,
             initialProfile = null,
             onDismiss = { addingWithProtocol = null },
             onSave = { newProfile ->
@@ -89,10 +91,11 @@ fun RelayDashboardScreen(
         )
     }
 
-    if (editingProfile != null) {
+    val currentEditing = editingProfile
+    if (currentEditing != null) {
         ProtocolConfigDialog(
-            initialProtocol = editingProfile!!.protocol,
-            initialProfile = editingProfile,
+            initialProtocol = currentEditing.protocol,
+            initialProfile = currentEditing,
             onDismiss = { editingProfile = null },
             onSave = { updatedProfile ->
                 ProfileStore.saveProfile(updatedProfile)
