@@ -18,6 +18,7 @@ var (
 	activeClient    *client.Client
 	activeZiVPN     *ZiVPNClient
 	activeUniversal *UniversalClient
+	activeSingBox   *SingBoxClient
 	activeMu        sync.Mutex
 	runningStatus   atomic.Bool
 	socksPort       int
@@ -126,21 +127,45 @@ func StartTunnel(cfg BridgeConfig) (int, error) {
 		return socksPort, nil
 	}
 
-	// 2. Universal Protocol Mode (VLESS, Trojan, VMess, SSH, Custom HTTP Payload, Shadowsocks)
+	// 2. Production-Grade Sing-Box Core (VLESS, Reality, Hysteria2, TUIC, Shadowsocks, Trojan, VMess)
 	protoUpper := strings.ToUpper(strings.TrimSpace(cfg.Protocol))
 	if strings.Contains(protoUpper, "VLESS") ||
+		strings.Contains(protoUpper, "REALITY") ||
+		strings.Contains(protoUpper, "HYSTERIA") ||
+		strings.Contains(protoUpper, "TUIC") ||
 		strings.Contains(protoUpper, "TROJAN") ||
 		strings.Contains(protoUpper, "VMESS") ||
-		strings.Contains(protoUpper, "SSH") ||
-		strings.Contains(protoUpper, "CUSTOM") ||
-		strings.Contains(protoUpper, "INJECTOR") ||
 		strings.Contains(protoUpper, "SHADOWSOCKS") ||
 		strings.Contains(protoUpper, "SS") {
+
+		sbc := NewSingBoxClient(cfg)
+		p, err := sbc.Start()
+		if err != nil {
+			LogMsg("WARN", fmt.Sprintf("Sing-Box start note: %v. Falling back to universal client...", err))
+			uc := NewUniversalClient(cfg)
+			p2, err2 := uc.Start()
+			if err2 != nil {
+				return 0, fmt.Errorf("failed to start %s client: %w", cfg.Protocol, err2)
+			}
+			socksPort = p2
+			activeUniversal = uc
+		} else {
+			socksPort = p
+			activeSingBox = sbc
+		}
+		runningStatus.Store(true)
+		return socksPort, nil
+	}
+
+	// 2b. SSH / HTTP Injector Mode
+	if strings.Contains(protoUpper, "SSH") ||
+		strings.Contains(protoUpper, "CUSTOM") ||
+		strings.Contains(protoUpper, "INJECTOR") {
 
 		uc := NewUniversalClient(cfg)
 		p, err := uc.Start()
 		if err != nil {
-			return 0, fmt.Errorf("failed to start %s universal client: %w", cfg.Protocol, err)
+			return 0, fmt.Errorf("failed to start %s injector client: %w", cfg.Protocol, err)
 		}
 		socksPort = p
 		activeUniversal = uc
@@ -198,6 +223,10 @@ func StopTunnel() {
 		return
 	}
 
+	if activeSingBox != nil {
+		activeSingBox.Stop()
+		activeSingBox = nil
+	}
 	if activeUniversal != nil {
 		activeUniversal.Stop()
 		activeUniversal = nil

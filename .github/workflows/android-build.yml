@@ -5,6 +5,8 @@ on:
     paths:
       - 'android/**'
       - 'src/tbrutal/**'
+      - 'go.mod'
+      - 'go.sum'
       - '.github/workflows/android-build.yml'
   workflow_dispatch:
 

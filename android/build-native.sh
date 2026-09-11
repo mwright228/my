@@ -53,6 +53,7 @@ CGO_ENABLED=1 \
 GOOS=android \
 GOARCH=arm64 \
 go build -buildmode=c-shared \
+    -tags "with_quic,with_utls,with_reality,with_shadowsocks,with_gvisor" \
     -ldflags="-s -w -extldflags '-Wl,-z,max-page-size=16384'" \
     -o "$JNI_LIBS_DIR/arm64-v8a/libmubxcore.so" \
     "$WORKSPACE_ROOT/src/tbrutal/bridge/cmd/libmubxcore"
@@ -68,6 +69,7 @@ CGO_ENABLED=1 \
 GOOS=android \
 GOARCH=amd64 \
 go build -buildmode=c-shared \
+    -tags "with_quic,with_utls,with_reality,with_shadowsocks,with_gvisor" \
     -ldflags="-s -w -extldflags '-Wl,-z,max-page-size=16384'" \
     -o "$JNI_LIBS_DIR/x86_64/libmubxcore.so" \
     "$WORKSPACE_ROOT/src/tbrutal/bridge/cmd/libmubxcore"
