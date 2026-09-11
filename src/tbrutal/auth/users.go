@@ -19,7 +19,6 @@ type User struct {
 type Store struct {
 	mu          sync.RWMutex
 	filePath    string
-	lastMod     time.Time
 	usersByUUID map[string]User
 }
 
@@ -36,39 +35,25 @@ func (s *Store) reload() {
 	if s.filePath == "" {
 		s.mu.Lock()
 		s.usersByUUID = make(map[string]User)
-		s.lastMod = time.Time{}
 		s.mu.Unlock()
-		return
-	}
-
-	fi, err := os.Stat(s.filePath)
-	if err != nil {
-		// Never preserve stale authorization entries after the store disappears.
-		s.mu.Lock()
-		s.usersByUUID = make(map[string]User)
-		s.lastMod = time.Time{}
-		s.mu.Unlock()
-		return
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !fi.ModTime().After(s.lastMod) && s.lastMod != (time.Time{}) {
 		return
 	}
 
 	data, err := os.ReadFile(s.filePath)
 	if err != nil {
+		// Never preserve stale authorization entries after the store disappears
+		// or becomes unreadable.
+		s.mu.Lock()
 		s.usersByUUID = make(map[string]User)
-		s.lastMod = fi.ModTime()
+		s.mu.Unlock()
 		return
 	}
 
 	var users []User
 	if err := json.Unmarshal(data, &users); err != nil {
+		s.mu.Lock()
 		s.usersByUUID = make(map[string]User)
-		s.lastMod = fi.ModTime()
+		s.mu.Unlock()
 		return
 	}
 
@@ -79,8 +64,9 @@ func (s *Store) reload() {
 		}
 	}
 
+	s.mu.Lock()
 	s.usersByUUID = newMap
-	s.lastMod = fi.ModTime()
+	s.mu.Unlock()
 }
 
 func isExpired(expiry string, now time.Time) bool {
@@ -102,6 +88,9 @@ func (s *Store) Authenticate(token string) (bool, string) {
 		return false, ""
 	}
 
+	// Reload on every authorization decision. Provisioning/quota jobs rewrite
+	// the store atomically; relying on filesystem mtime can leave stale access
+	// when multiple writes happen inside one timestamp-resolution window.
 	s.reload()
 
 	s.mu.RLock()
