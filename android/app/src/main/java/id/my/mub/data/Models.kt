@@ -17,8 +17,7 @@ enum class ProtocolType(val displayName: String, val badge: String) {
     T_BRUTAL("T-Brutal", "Congestion Pacing"),
     HYSTERIA_2("Hysteria 2", "QUIC Protocol"),
     TUIC("TUIC", "QUIC Protocol"),
-    SHADOWTLS_V3("ShadowTLS", "TLS Camouflage"),
-    AMNEZIA_WG("AmneziaWG", "WireGuard Obfs")
+    SHADOWTLS_V3("ShadowTLS", "TLS Camouflage")
 }
 
 data class VpnProfile(
