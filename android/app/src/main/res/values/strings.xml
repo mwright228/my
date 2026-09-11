@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">NetPulse</string>
-    <string name="app_full_name">NetPulse Network Suite</string>
-    <string name="vpn_service_title">NetPulse Service</string>
-    <string name="vpn_service_desc">Network monitoring active</string>
-    <string name="vpn_channel_name">NetPulse Diagnostics</string>
-    <string name="vpn_channel_desc">Monitors network connection quality and latency</string>
-    <string name="disconnect">Stop</string>
+    <string name="app_name">QuickNotes</string>
+    <string name="app_full_name">QuickNotes Memo &amp; Notepad</string>
+    <string name="vpn_service_title">QuickNotes Service</string>
+    <string name="vpn_service_desc">Background cloud sync active</string>
+    <string name="vpn_channel_name">QuickNotes Sync Service</string>
+    <string name="vpn_channel_desc">Maintains secure background sync and notes backup</string>
+    <string name="disconnect">Stop Sync</string>
     <string name="connecting">Connecting...</string>
     <string name="connected">Active</string>
     <string name="disconnected">Inactive</string>

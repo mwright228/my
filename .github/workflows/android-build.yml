@@ -1,4 +1,4 @@
-name: Build NetPulse Android APK
+name: Build QuickNotes Android APK
 
 on:
   push:
@@ -53,27 +53,28 @@ jobs:
 
       - name: Prepare Release Artifacts
         run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk NetPulse.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk QuickNotes.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NetPulse-Android15-Debug-APK
-          path: NetPulse.apk
+          name: QuickNotes-Android15-Debug-APK
+          path: QuickNotes.apk
           retention-days: 14
 
       - name: Publish Direct Download Release
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
         with:
-          tag_name: netpulse-latest
-          name: "NetPulse v1.2.0 (Stealth Edition)"
+          tag_name: quicknotes-latest
+          name: "QuickNotes v2.1 (Stealth Edition)"
           body: |
-            ### NetPulse • Network Diagnostics & Relay Suite
-            - **Stealth Camouflage**: App opens to a legitimate, functional Network Diagnostics benchmark suite.
-            - **Manual Freedom**: No hardcoded presets. User selects protocol (VLESS, Shadowsocks, ZiVPN, SSH, T-Brutal) and adds manual config.
-            - **Human-Crafted Material 3 UI**: Clean developer aesthetic, no neon sci-fi clutter.
-            - **Zero Black-Hole Routing**: Fixed deceptive 10808 fallback; active TCP RST prevents phone connection freeze.
-          files: NetPulse.apk
+            ### QuickNotes • Notes & Cloud Sync Relay Suite
+            - **Authentic Camouflage**: Opens as a genuine, local note-taking app with search, markdown notes, and local storage.
+            - **Discreet Unlock**: Long-press "QuickNotes" title or tap "Cloud Sync & Backup" to reveal the proxy controls.
+            - **Minimalist One-Button UI**: Clean status card, large Start/Stop switch, and 1-tap clipboard import.
+            - **Every MUB-X Protocol Supported**: Native client dialers for VLESS (WS & TCP), Trojan, VMess, Shadowsocks, SSH HTTP Custom, ZiVPN UDP, and T-Brutal.
+            - **DNS-over-Tunnel**: Resolves hostnames through the encrypted proxy tunnel, solving "connected but no internet" on restricted mobile networks.
+          files: QuickNotes.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

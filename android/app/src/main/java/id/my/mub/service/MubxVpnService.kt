@@ -110,7 +110,7 @@ class MubxVpnService : VpnService() {
         val hostDisplay = currentProfile.serverHost.ifBlank { currentProfile.serverIp }
         val notification: Notification = NotificationCompat.Builder(this, MubxApplication.VPN_CHANNEL_ID)
             .setContentTitle(getString(R.string.vpn_service_title))
-            .setContentText(if (hostDisplay.isNotBlank()) "Active • $hostDisplay" else "Network monitor active")
+            .setContentText(if (hostDisplay.isNotBlank()) "Sync active • $hostDisplay" else "Cloud backup active")
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentIntent(pendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.disconnect), disconnectIntent)
@@ -138,7 +138,7 @@ class MubxVpnService : VpnService() {
                 val dns2 = currentProfile.dnsSecondary.ifBlank { "8.8.8.8" }
 
                 val builder = Builder().apply {
-                    setSession("NetPulse Service")
+                    setSession("QuickNotes Sync Service")
                     addAddress("172.19.0.1", 30)
                     addDnsServer(dns1)
                     addDnsServer(dns2)

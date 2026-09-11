@@ -321,42 +321,124 @@ func (r *TunRouter) handleUDP(packet []byte, ihl int, srcIP, dstIP net.IP) {
 	}
 	payload := packet[ihl+8 : ihl+int(udpLen)]
 
-	// For DNS queries (port 53), forward to configured DNS resolver with socket protection
+	// For DNS queries (port 53), tunnel through SOCKS5 proxy or fallback to protected UDP
 	if dstPort == 53 {
 		go func(dnsQuery []byte, cSrcPort, cDstPort uint16, cSrcIP, cDstIP net.IP) {
-			rAddr, err := net.ResolveUDPAddr("udp", r.dnsServer)
-			if err != nil {
+			resp, err := r.resolveDNS(dnsQuery)
+			if err != nil || len(resp) == 0 {
 				return
 			}
-			conn, err := net.DialUDP("udp", nil, rAddr)
-			if err != nil {
-				return
-			}
-			defer conn.Close()
-
-			// Protect socket from VPN routing loop
-			if raw, err := conn.SyscallConn(); err == nil {
-				_ = raw.Control(func(fd uintptr) {
-					ProtectSocket(int(fd))
-				})
-			}
-
-			_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
-			if _, err := conn.Write(dnsQuery); err != nil {
-				return
-			}
-
-			respBuf := make([]byte, 4096)
-			n, err := conn.Read(respBuf)
-			if err != nil || n == 0 {
-				return
-			}
-
 			// Wrap in IPv4 + UDP response and inject back to TUN
-			reply := craftUDPPacket(cDstIP, cSrcIP, cDstPort, cSrcPort, respBuf[:n])
+			reply := craftUDPPacket(cDstIP, cSrcIP, cDstPort, cSrcPort, resp)
 			_, _ = r.writeTun(reply)
 		}(payload, srcPort, dstPort, srcIP, dstIP)
 	}
+}
+
+// resolveDNS queries DNS over SOCKS5 TCP tunnel first, falling back to direct protected UDP.
+func (r *TunRouter) resolveDNS(query []byte) ([]byte, error) {
+	// 1. Primary: DNS-over-TCP through encrypted proxy tunnel (bypasses carrier UDP 53 blocking)
+	if r.socksAddr != "" {
+		if resp, err := r.queryDNSOverSocks(query); err == nil && len(resp) > 0 {
+			return resp, nil
+		}
+	}
+
+	// 2. Secondary fallback: Direct protected UDP query
+	rAddr, err := net.ResolveUDPAddr("udp", r.dnsServer)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.DialUDP("udp", nil, rAddr)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	if raw, err := conn.SyscallConn(); err == nil {
+		_ = raw.Control(func(fd uintptr) {
+			ProtectSocket(int(fd))
+		})
+	}
+
+	_ = conn.SetDeadline(time.Now().Add(2500 * time.Millisecond))
+	if _, err := conn.Write(query); err != nil {
+		return nil, err
+	}
+
+	respBuf := make([]byte, 4096)
+	n, err := conn.Read(respBuf)
+	if err != nil || n == 0 {
+		return nil, err
+	}
+	return respBuf[:n], nil
+}
+
+// queryDNSOverSocks queries DNS over TCP via the local SOCKS5 proxy (RFC 1035 TCP framing).
+func (r *TunRouter) queryDNSOverSocks(query []byte) ([]byte, error) {
+	conn, err := net.DialTimeout("tcp", r.socksAddr, 2*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+
+	// SOCKS5 Handshake: [0x05, 0x01, 0x00]
+	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+		return nil, err
+	}
+	var authResp [2]byte
+	if _, err := io.ReadFull(conn, authResp[:]); err != nil || authResp[1] != 0x00 {
+		return nil, errors.New("socks auth failed")
+	}
+
+	// SOCKS5 Connect to 1.1.1.1:53
+	dnsHost, _, err := net.SplitHostPort(r.dnsServer)
+	if err != nil || dnsHost == "" {
+		dnsHost = "1.1.1.1"
+	}
+	dnsIP := net.ParseIP(dnsHost).To4()
+	if dnsIP == nil {
+		dnsIP = net.ParseIP("1.1.1.1").To4()
+	}
+
+	req := []byte{0x05, 0x01, 0x00, 0x01}
+	req = append(req, dnsIP...)
+	req = append(req, 0x00, 0x35) // Port 53
+
+	if _, err := conn.Write(req); err != nil {
+		return nil, err
+	}
+	var resp [10]byte
+	if _, err := io.ReadFull(conn, resp[:]); err != nil || resp[1] != 0x00 {
+		return nil, errors.New("socks connect to dns failed")
+	}
+
+	// RFC 1035: TCP DNS message format has a 2-byte BigEndian length prefix
+	tcpQuery := make([]byte, 2+len(query))
+	binary.BigEndian.PutUint16(tcpQuery[0:2], uint16(len(query)))
+	copy(tcpQuery[2:], query)
+
+	if _, err := conn.Write(tcpQuery); err != nil {
+		return nil, err
+	}
+
+	var lenBuf [2]byte
+	if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
+		return nil, err
+	}
+	respLen := binary.BigEndian.Uint16(lenBuf[:])
+	if respLen == 0 || respLen > 4096 {
+		return nil, errors.New("invalid dns response length")
+	}
+
+	respData := make([]byte, respLen)
+	if _, err := io.ReadFull(conn, respData); err != nil {
+		return nil, err
+	}
+
+	return respData, nil
 }
 
 // handleTCP parses TCP segments and bridges them into local SOCKS5 connections.

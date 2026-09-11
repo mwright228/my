@@ -65,5 +65,6 @@ func TestTunRouterLifecycle(t *testing.T) {
 		t.Fatalf("Expected error when starting already active router")
 	}
 
+	_ = w.Close()
 	StopTunRouter()
 }

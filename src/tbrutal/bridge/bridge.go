@@ -15,11 +15,12 @@ import (
 )
 
 var (
-	activeClient  *client.Client
-	activeZiVPN   *ZiVPNClient
-	activeMu      sync.Mutex
-	runningStatus atomic.Bool
-	socksPort     int
+	activeClient    *client.Client
+	activeZiVPN     *ZiVPNClient
+	activeUniversal *UniversalClient
+	activeMu        sync.Mutex
+	runningStatus   atomic.Bool
+	socksPort       int
 
 	protectHook func(fd int) bool
 	logHook     func(tag, msg string)
@@ -125,7 +126,29 @@ func StartTunnel(cfg BridgeConfig) (int, error) {
 		return socksPort, nil
 	}
 
-	// 2. Default: T-Brutal Wire-Speed Paced Mode
+	// 2. Universal Protocol Mode (VLESS, Trojan, VMess, SSH, Custom HTTP Payload, Shadowsocks)
+	protoUpper := strings.ToUpper(strings.TrimSpace(cfg.Protocol))
+	if strings.Contains(protoUpper, "VLESS") ||
+		strings.Contains(protoUpper, "TROJAN") ||
+		strings.Contains(protoUpper, "VMESS") ||
+		strings.Contains(protoUpper, "SSH") ||
+		strings.Contains(protoUpper, "CUSTOM") ||
+		strings.Contains(protoUpper, "INJECTOR") ||
+		strings.Contains(protoUpper, "SHADOWSOCKS") ||
+		strings.Contains(protoUpper, "SS") {
+
+		uc := NewUniversalClient(cfg)
+		p, err := uc.Start()
+		if err != nil {
+			return 0, fmt.Errorf("failed to start %s universal client: %w", cfg.Protocol, err)
+		}
+		socksPort = p
+		activeUniversal = uc
+		runningStatus.Store(true)
+		return socksPort, nil
+	}
+
+	// 3. Default: T-Brutal Wire-Speed Paced Mode
 	if cfg.PoolSize <= 0 {
 		cfg.PoolSize = 1
 	}
@@ -175,6 +198,10 @@ func StopTunnel() {
 		return
 	}
 
+	if activeUniversal != nil {
+		activeUniversal.Stop()
+		activeUniversal = nil
+	}
 	if activeClient != nil {
 		activeClient.Stop()
 		activeClient = nil
