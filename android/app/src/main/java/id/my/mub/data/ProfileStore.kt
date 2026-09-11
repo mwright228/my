@@ -15,23 +15,7 @@ object ProfileStore {
 
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        if (getAllProfiles().isEmpty()) {
-            // Seed default initial node if empty
-            val defaultProfile = VpnProfile(
-                id = UUID.randomUUID().toString(),
-                name = "GR-Premium-1",
-                serverHost = "gr.mub.my.id",
-                serverPort = 443,
-                protocol = ProtocolType.VLESS_WS,
-                bugHostSNI = "gr.mub.my.id",
-                userUUID = "12345678-1234-1234-1234-123456789abc",
-                poolConcurrency = 2,
-                brutalRateMbps = 50,
-                dnsServer = "1.1.1.1"
-            )
-            saveProfile(defaultProfile)
-            setActiveProfileId(defaultProfile.id)
-        }
+        // No default seed — users start with a clean empty list and add their own profiles.
     }
 
     fun getActiveProfileId(): String {
@@ -121,6 +105,7 @@ object ProfileStore {
             put("wsHost", p.wsHost)
             put("ssCipher", p.ssCipher)
             put("vlessFlow", p.vlessFlow)
+            put("killSwitchEnabled", p.killSwitchEnabled)
         }
     }
 
@@ -156,7 +141,8 @@ object ProfileStore {
             wsPath = obj.optString("wsPath", "/vless-ws"),
             wsHost = obj.optString("wsHost", ""),
             ssCipher = obj.optString("ssCipher", "2022-blake3-aes-128-gcm"),
-            vlessFlow = obj.optString("vlessFlow", "")
+            vlessFlow = obj.optString("vlessFlow", ""),
+            killSwitchEnabled = obj.optBoolean("killSwitchEnabled", false)
         )
     }
 }
