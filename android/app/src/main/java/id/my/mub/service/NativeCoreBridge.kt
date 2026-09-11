@@ -49,21 +49,20 @@ object NativeCoreBridge {
     suspend fun startTunnel(profile: VpnProfile): Result<Int> = withContext(Dispatchers.IO) {
         if (!nativeLoaded) return@withContext Result.failure(IllegalStateException("Native VPN core is unavailable"))
         try {
+            if (profile.protocol == id.my.mub.data.ProtocolType.VLESS_TCP || profile.protocol == id.my.mub.data.ProtocolType.VLESS_REALITY) {
+                return@withContext Result.failure(IllegalArgumentException("${profile.protocol.displayName} is not enabled until its dedicated transport engine is available"))
+            }
             val host = if (profile.serverIp.isNotBlank()) profile.serverIp else profile.serverHost
             if (host.isBlank()) return@withContext Result.failure(IllegalArgumentException("Server host/IP is required"))
-
             val dialAddr = if (profile.protocol == id.my.mub.data.ProtocolType.SSH_PAYLOAD && profile.proxyHost.isNotBlank()) {
                 val pPort = if (profile.proxyPort > 0) profile.proxyPort else 80
                 "${profile.proxyHost}:$pPort"
             } else "$host:${profile.serverPort}"
-
             val effectiveSni = profile.bugHostSNI.ifBlank { profile.serverHost }
             val effectiveHostHeader = profile.wsHost.ifBlank { profile.serverHost }
             val effectiveToken = if (profile.protocol == id.my.mub.data.ProtocolType.SSH_PAYLOAD) "${profile.sshUser}:${profile.sshPassword}" else profile.userUUID
-
             val isRawMode = profile.protocol == id.my.mub.data.ProtocolType.T_BRUTAL &&
                 (profile.customPayload.equals("raw", true) || profile.wsPath.equals("raw", true))
-
             val effectivePayload = when (profile.protocol) {
                 id.my.mub.data.ProtocolType.SHADOWTLS_V3 -> profile.ssCipher.ifBlank { "2022-blake3-aes-256-gcm" }
                 id.my.mub.data.ProtocolType.T_BRUTAL -> profile.wsPath.ifBlank { profile.customPayload.ifBlank { "/tbrutal" } }
@@ -72,10 +71,6 @@ object NativeCoreBridge {
                 id.my.mub.data.ProtocolType.TROJAN_WS -> profile.wsPath.ifBlank { "/vless-ws" }
                 else -> profile.customPayload
             }
-
-            // The native ABI has no dedicated Reality fields yet. For explicit
-            // VLESS Reality, carry them through the otherwise-unused obfs/port-hop
-            // string fields and reject missing values instead of using a placeholder.
             val effectiveObfsKey = when (profile.protocol) {
                 id.my.mub.data.ProtocolType.VLESS_REALITY -> profile.realityPublicKey
                 id.my.mub.data.ProtocolType.SHADOWSOCKS_2022 -> profile.ssCipher.ifBlank { "2022-blake3-aes-128-gcm" }
@@ -83,32 +78,12 @@ object NativeCoreBridge {
                 else -> profile.udpObfsPassword
             }
             val effectivePortHopRange = if (profile.protocol == id.my.mub.data.ProtocolType.VLESS_REALITY) profile.realityShortId else profile.udpPortHopRange
-            if (profile.protocol == id.my.mub.data.ProtocolType.VLESS_REALITY &&
-                (effectiveObfsKey.isBlank() || effectivePortHopRange.isBlank())) {
+            if (profile.protocol == id.my.mub.data.ProtocolType.VLESS_REALITY && (effectiveObfsKey.isBlank() || effectivePortHopRange.isBlank())) {
                 return@withContext Result.failure(IllegalArgumentException("VLESS Reality requires public key and short ID"))
             }
-
             val useTLS = profile.protocol != id.my.mub.data.ProtocolType.T_BRUTAL || profile.serverPort == 443 || profile.serverPort == 8443
-            val port = nativeStartTunnel(
-                protocol = profile.protocol.name,
-                serverAddr = dialAddr,
-                sni = effectiveSni,
-                hostHeader = effectiveHostHeader,
-                token = effectiveToken,
-                poolSize = profile.poolConcurrency,
-                rateMbps = profile.brutalRateMbps,
-                useTLS = useTLS,
-                insecureTLS = profile.allowInsecureTLS,
-                rawMode = isRawMode,
-                obfsKey = effectiveObfsKey,
-                portHopRange = effectivePortHopRange,
-                dnsServer = profile.dnsServer,
-                customPayload = effectivePayload
-            )
-
-            if (port <= 0) {
-                return@withContext Result.failure(Exception("Connection to server failed (code $port). Verify server address, port, and credentials."))
-            }
+            val port = nativeStartTunnel(profile.protocol.name, dialAddr, effectiveSni, effectiveHostHeader, effectiveToken, profile.poolConcurrency, profile.brutalRateMbps, useTLS, profile.allowInsecureTLS, isRawMode, effectiveObfsKey, effectivePortHopRange, profile.dnsServer, effectivePayload)
+            if (port <= 0) return@withContext Result.failure(Exception("Connection to server failed (code $port). Verify server address, port, and credentials."))
             try {
                 java.net.Socket().use { it.connect(java.net.InetSocketAddress("127.0.0.1", port), 500) }
                 LogRepository.log("TUNNEL", "Local SOCKS5 proxy active & verified on 127.0.0.1:$port", LogLevel.SUCCESS)
@@ -155,9 +130,7 @@ object NativeCoreBridge {
         return try {
             val parts = nativeGetTelemetry().split("|")
             RealTelemetry(parts.getOrNull(0)?.toLongOrNull() ?: 0L, parts.getOrNull(1)?.toLongOrNull() ?: 0L, parts.getOrNull(2)?.toIntOrNull() ?: 0)
-        } catch (_: Throwable) {
-            RealTelemetry(0L, 0L, 0)
-        }
+        } catch (_: Throwable) { RealTelemetry(0L, 0L, 0) }
     }
 
     suspend fun probeBugHost(url: String, sni: String, timeoutMs: Int = 3000): BugHostProbeResult = withContext(Dispatchers.IO) {
@@ -172,11 +145,8 @@ object NativeCoreBridge {
                 client.connectTimeout = timeoutMs
                 client.readTimeout = timeoutMs
                 client.instanceFollowRedirects = false
-                val code = client.responseCode
-                BugHostProbeResult(url, code, System.currentTimeMillis() - start, "", emptyList(), null)
-            } catch (netEx: Exception) {
-                BugHostProbeResult(url, 0, 0, "", emptyList(), netEx.message)
-            }
+                BugHostProbeResult(url, client.responseCode, System.currentTimeMillis() - start, "", emptyList(), null)
+            } catch (netEx: Exception) { BugHostProbeResult(url, 0, 0, "", emptyList(), netEx.message) }
         }
     }
 
