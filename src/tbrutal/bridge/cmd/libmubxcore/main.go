@@ -14,6 +14,11 @@ static void releaseStringUTFChars(JNIEnv* env, jstring jstr, char* str) {
         (*env)->ReleaseStringUTFChars(env, jstr, str);
     }
 }
+
+static jstring newStringUTF(JNIEnv* env, const char* str) {
+    if (!str) return NULL;
+    return (*env)->NewStringUTF(env, str);
+}
 */
 import "C"
 import (
@@ -135,7 +140,7 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeProbeBugHost(
 	cFormatted := C.CString(formatted)
 	defer C.free(unsafe.Pointer(cFormatted))
 
-	return (*(*env)).NewStringUTF(env, cFormatted)
+	return C.newStringUTF(env, cFormatted)
 }
 
 func main() {}

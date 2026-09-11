@@ -24,7 +24,8 @@ declare -A absent=()
 declare -A was_active=()
 backup_dir="$(mktemp -d)"
 backup_file() {
-  local path="$1" target="$backup_dir${path}"
+  local path="$1"
+  local target="$backup_dir${path}"
   if [ -f "$path" ] || [ -L "$path" ]; then
     install -d -m 0700 "$(dirname "$target")"
     cp -aP "$path" "$target"

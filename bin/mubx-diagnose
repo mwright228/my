@@ -188,7 +188,7 @@ if [ "$TARGET" = "127.0.0.1" ] || [ "$TARGET" = "localhost" ] || [ "$TARGET" = "
 fi
 mubx_group_open "PATH MTU DISCOVERY (TO $pmtu_target)"
 for size in 1280 1360 1420 1472; do
-  if ping -n -c 1 -W 2 -M do -s "$((size - 28))" "$pmtu_target" >/dev/null 2>&1; then
+  if ping -n -c 1 -W 2 -M "do" -s "$((size - 28))" "$pmtu_target" >/dev/null 2>&1; then
     mubx_card "  Packet size $size bytes" "$(mubx_pill PASS "NO FRAG")"
   else
     mubx_card "  Packet size $size bytes" "$(mubx_pill FAIL "FRAG REQ")"

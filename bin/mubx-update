@@ -81,7 +81,8 @@ stage_bin() { # $1 src -> /usr/local/bin/<basename>, swapped via rename
   # unbound there, basename yields the empty string, and the final mv
   # becomes a no-op self-move that aborts the whole update.
   local src="$1"
-  local dst="/usr/local/bin/$(basename "$src")"
+  local dst
+  dst="/usr/local/bin/$(basename "$src")"
   install -m 0755 "$src" "$dst.tmp.$$"
   mv -f "$dst.tmp.$$" "$dst"
 }

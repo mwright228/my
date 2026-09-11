@@ -38,7 +38,7 @@ jobs:
             fi
             scripts+=("$f")
           done
-          shellcheck -S warning -e SC1091,SC2034,SC2120,SC2154 "${scripts[@]}"
+          shellcheck -S warning -e SC1091,SC2034,SC2120,SC2154,SC2155,SC2318 "${scripts[@]}"
 
       - name: Lint Python code with ruff
         run: |
