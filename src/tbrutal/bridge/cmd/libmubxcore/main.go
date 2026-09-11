@@ -1,6 +1,4 @@
-//go:build android && cgo
-
-package bridge
+package main
 
 /*
 #include <jni.h>
@@ -22,6 +20,8 @@ import (
 	"fmt"
 	"strings"
 	"unsafe"
+
+	"github.com/mwright228/my/src/tbrutal/bridge"
 )
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel
@@ -62,7 +62,7 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel(
 	cPortHopRange := C.getStringUTFChars(env, jPortHopRange)
 	defer C.releaseStringUTFChars(env, jPortHopRange, cPortHopRange)
 
-	cfg := BridgeConfig{
+	cfg := bridge.BridgeConfig{
 		Protocol:        C.GoString(cProtocol),
 		ServerAddr:      C.GoString(cServerAddr),
 		SNI:             C.GoString(cSNI),
@@ -78,7 +78,7 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel(
 		SocksListenAddr: "127.0.0.1:0",
 	}
 
-	port, err := StartTunnel(cfg)
+	port, err := bridge.StartTunnel(cfg)
 	if err != nil {
 		return C.jint(-1)
 	}
@@ -87,7 +87,7 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel(
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeStopTunnel
 func Java_id_my_mub_service_NativeCoreBridge_nativeStopTunnel(env *C.JNIEnv, clazz C.jclass) {
-	StopTunnel()
+	bridge.StopTunnel()
 }
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeStartTunRouter
@@ -97,7 +97,7 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunRouter(
 	jTunFd C.jint,
 	jSocksPort C.jint,
 ) C.jboolean {
-	err := StartTunRouter(int(jTunFd), int(jSocksPort))
+	err := bridge.StartTunRouter(int(jTunFd), int(jSocksPort))
 	if err != nil {
 		return C.JNI_FALSE
 	}
@@ -106,7 +106,7 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunRouter(
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeStopTunRouter
 func Java_id_my_mub_service_NativeCoreBridge_nativeStopTunRouter(env *C.JNIEnv, clazz C.jclass) {
-	StopTunRouter()
+	bridge.StopTunRouter()
 }
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeProbeBugHost
@@ -126,7 +126,7 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeProbeBugHost(
 	urlStr := C.GoString(cURL)
 	sniStr := C.GoString(cSNI)
 
-	res := ProbeBugHost(urlStr, sniStr, int(jTimeoutMs))
+	res := bridge.ProbeBugHost(urlStr, sniStr, int(jTimeoutMs))
 
 	// Format: "STATUS|LATENCY|CN|SANS|ERR"
 	sansStr := strings.Join(res.CertSANs, ",")
@@ -137,3 +137,5 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeProbeBugHost(
 
 	return (*(*env)).NewStringUTF(env, cFormatted)
 }
+
+func main() {}

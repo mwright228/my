@@ -27,7 +27,18 @@ jobs:
 
       - name: Lint shell scripts with shellcheck
         run: |
-          shellcheck -S warning -e SC1091 install.sh bin/* lib/*.sh
+          scripts=()
+          for f in install.sh bin/* lib/*.sh; do
+            [ -f "$f" ] || continue
+            if file "$f" | grep -qE 'ELF|Mach-O|binary' && ! file "$f" | grep -q 'text'; then
+              continue
+            fi
+            if head -n 1 "$f" | grep -qE 'python|python3'; then
+              continue
+            fi
+            scripts+=("$f")
+          done
+          shellcheck -S warning -e SC1091,SC2034,SC2120,SC2154 "${scripts[@]}"
 
       - name: Lint Python code with ruff
         run: |

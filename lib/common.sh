@@ -38,9 +38,9 @@ if [ -t 1 ]; then
   C_BG_CARD=$'\033[48;5;236m'    # Dark Card Background
   C_BG_ACCENT=$'\033[48;5;24m'   # Deep Blue-Cyan Accent BG
 else
-  C_RESET= C_BOLD= C_DIM= C_ITALIC= C_UNDER=
-  C_RED= C_GREEN= C_YELLOW= C_BLUE= C_MAGENTA= C_CYAN= C_WHITE=
-  C_ELECTRIC= C_PURPLE= C_MINT= C_AMBER= C_CORAL= C_SLATE= C_BORDER= C_BRIGHT= C_BG_CARD= C_BG_ACCENT=
+  C_RESET="" C_BOLD="" C_DIM="" C_ITALIC="" C_UNDER=""
+  C_RED="" C_GREEN="" C_YELLOW="" C_BLUE="" C_MAGENTA="" C_CYAN="" C_WHITE=""
+  C_ELECTRIC="" C_PURPLE="" C_MINT="" C_AMBER="" C_CORAL="" C_SLATE="" C_BORDER="" C_BRIGHT="" C_BG_CARD="" C_BG_ACCENT=""
 fi
 
 log()  { echo -e "${C_MINT}[✓]${C_RESET} $*"; }
@@ -98,7 +98,7 @@ load_mubx_env() {
 # --- System Telemetry Helpers ---------------------------------------------
 mubx_sys_ram() {
   if [ -r /proc/meminfo ]; then
-    local total free avail used pct
+    local total avail used pct
     total=$(awk '/MemTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
     avail=$(awk '/MemAvailable:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
     if [ "$total" -gt 0 ]; then

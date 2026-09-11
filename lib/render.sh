@@ -114,7 +114,7 @@ mubx_proto_normalize() { # $1 raw input string -> stdout JSON array
   for item in $input; do
     case "$item" in
       0|8|all) tags+=("all") ;;
-      1|ssh-bundle|ssh-only|ssh) tags+=("ssh" "chameleon") ;;
+      1|ssh-bundle|ssh-only) tags+=("ssh" "chameleon") ;;
       2|vless-bundle|vless) tags+=("vless_ws_tls" "vless_ws_ntls" "vless_httpupgrade_tls" "vless_httpupgrade_ntls" "vless_xhttp_tls" "vless_grpc_tls" "vless_tcp_tls") ;;
       3|vmess-bundle|vmess) tags+=("vmess_ws_tls" "vmess_ws_ntls" "vmess_tcp") ;;
       4|trojan-bundle|trojan) tags+=("trojan_ws_tls" "trojan_ws_ntls" "trojan_tcp") ;;

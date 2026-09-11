@@ -53,7 +53,7 @@ GOARCH=arm64 \
 go build -buildmode=c-shared \
     -ldflags="-s -w -extldflags '-Wl,-z,max-page-size=16384'" \
     -o "$JNI_LIBS_DIR/arm64-v8a/libmubxcore.so" \
-    "$WORKSPACE_ROOT/src/tbrutal/bridge"
+    "$WORKSPACE_ROOT/src/tbrutal/bridge/cmd/libmubxcore"
 
 echo "[✓] Successfully built $JNI_LIBS_DIR/arm64-v8a/libmubxcore.so"
 
@@ -68,7 +68,7 @@ GOARCH=amd64 \
 go build -buildmode=c-shared \
     -ldflags="-s -w -extldflags '-Wl,-z,max-page-size=16384'" \
     -o "$JNI_LIBS_DIR/x86_64/libmubxcore.so" \
-    "$WORKSPACE_ROOT/src/tbrutal/bridge"
+    "$WORKSPACE_ROOT/src/tbrutal/bridge/cmd/libmubxcore"
 
 echo "[✓] Successfully built $JNI_LIBS_DIR/x86_64/libmubxcore.so"
 echo "=========================================================="
