@@ -1,7 +1,14 @@
-name: Build QuickNotes Android APK
+name: Build MUB-X Android APK
 
 on:
   push:
+    paths:
+      - 'android/**'
+      - 'src/tbrutal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/android-build.yml'
+  pull_request:
     paths:
       - 'android/**'
       - 'src/tbrutal/**'
@@ -47,19 +54,19 @@ jobs:
           chmod +x android/build-native.sh
           ./android/build-native.sh
 
-      - name: Build Android Debug APK
+      - name: Build optimized Android release APK
         working-directory: ./android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew clean assembleRelease --stacktrace
 
-      - name: Prepare Debug Artifact
+      - name: Prepare release artifact
         run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk QuickNotes.apk
+          cp android/app/build/outputs/apk/release/app-release-unsigned.apk MUB-X-release-unsigned.apk
 
-      - name: Upload APK Artifact
+      - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: QuickNotes-Android15-Debug-APK
-          path: QuickNotes.apk
+          name: MUB-X-Android-Release-Unsigned
+          path: MUB-X-release-unsigned.apk
           retention-days: 14
