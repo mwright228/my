@@ -1,4 +1,4 @@
-name: Build Mub X Android APK
+name: Build NetPulse Android APK
 
 on:
   push:
@@ -7,6 +7,9 @@ on:
       - 'src/tbrutal/**'
       - '.github/workflows/android-build.yml'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-apk:
@@ -48,9 +51,29 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --stacktrace
 
+      - name: Prepare Release Artifacts
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk NetPulse.apk
+
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MubX-Android15-Debug-APK
-          path: android/app/build/outputs/apk/**/*.apk
+          name: NetPulse-Android15-Debug-APK
+          path: NetPulse.apk
           retention-days: 14
+
+      - name: Publish Direct Download Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: netpulse-latest
+          name: "NetPulse v1.2.0 (Stealth Edition)"
+          body: |
+            ### NetPulse • Network Diagnostics & Relay Suite
+            - **Stealth Camouflage**: App opens to a legitimate, functional Network Diagnostics benchmark suite.
+            - **Manual Freedom**: No hardcoded presets. User selects protocol (VLESS, Shadowsocks, ZiVPN, SSH, T-Brutal) and adds manual config.
+            - **Human-Crafted Material 3 UI**: Clean developer aesthetic, no neon sci-fi clutter.
+            - **Zero Black-Hole Routing**: Fixed deceptive 10808 fallback; active TCP RST prevents phone connection freeze.
+          files: NetPulse.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
