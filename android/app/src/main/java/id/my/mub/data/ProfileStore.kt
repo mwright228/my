@@ -34,9 +34,7 @@ object ProfileStore {
         migratePlaintextProfiles()
     }
 
-    fun getActiveProfileId(): String {
-        return prefs.getString(KEY_ACTIVE_ID, "") ?: ""
-    }
+    fun getActiveProfileId(): String = prefs.getString(KEY_ACTIVE_ID, "") ?: ""
 
     fun setActiveProfileId(id: String) {
         prefs.edit().putString(KEY_ACTIVE_ID, id).apply()
@@ -50,16 +48,15 @@ object ProfileStore {
 
     fun getAllProfiles(): List<VpnProfile> {
         val jsonStr = readEncryptedProfiles() ?: return emptyList()
-        val list = mutableListOf<VpnProfile>()
-        try {
+        return try {
             val arr = JSONArray(jsonStr)
-            for (i in 0 until arr.length()) {
-                list.add(profileFromJson(arr.getJSONObject(i)))
+            buildList {
+                for (i in 0 until arr.length()) add(profileFromJson(arr.getJSONObject(i)))
             }
         } catch (e: Exception) {
             e.printStackTrace()
+            emptyList()
         }
-        return list
     }
 
     fun saveProfile(profile: VpnProfile) {
@@ -79,25 +76,17 @@ object ProfileStore {
 
     private fun saveAll(profiles: List<VpnProfile>) {
         val arr = JSONArray()
-        for (p in profiles) arr.put(profileToJson(p))
-        val json = arr.toString()
-        val encrypted = encrypt(json) ?: return
-        prefs.edit()
-            .putString(KEY_PROFILES_ENCRYPTED, encrypted)
-            .remove(KEY_PROFILES_JSON)
-            .apply()
+        profiles.forEach { arr.put(profileToJson(it)) }
+        val encrypted = encrypt(arr.toString()) ?: return
+        prefs.edit().putString(KEY_PROFILES_ENCRYPTED, encrypted).remove(KEY_PROFILES_JSON).apply()
     }
 
     private fun migratePlaintextProfiles() {
         val encrypted = prefs.getString(KEY_PROFILES_ENCRYPTED, null)
         val plaintext = prefs.getString(KEY_PROFILES_JSON, null)
         if (encrypted.isNullOrEmpty() && !plaintext.isNullOrEmpty()) {
-            val sealed = encrypt(plaintext)
-            if (sealed != null) {
-                prefs.edit()
-                    .putString(KEY_PROFILES_ENCRYPTED, sealed)
-                    .remove(KEY_PROFILES_JSON)
-                    .apply()
+            encrypt(plaintext)?.let { sealed ->
+                prefs.edit().putString(KEY_PROFILES_ENCRYPTED, sealed).remove(KEY_PROFILES_JSON).apply()
             }
         } else if (!encrypted.isNullOrEmpty() && plaintext != null) {
             prefs.edit().remove(KEY_PROFILES_JSON).apply()
@@ -106,33 +95,29 @@ object ProfileStore {
 
     private fun readEncryptedProfiles(): String? {
         val sealed = prefs.getString(KEY_PROFILES_ENCRYPTED, null)
-        if (sealed.isNullOrEmpty()) return null
-        return decrypt(sealed)
+        return if (sealed.isNullOrEmpty()) null else decrypt(sealed)
     }
 
-    private fun ensureKey(): SecretKey? {
-        return try {
-            val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
-            if (keyStore.containsAlias(KEY_ALIAS)) {
-                (keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
-            } else {
-                val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
-                generator.init(
-                    KeyGenParameterSpec.Builder(
-                        KEY_ALIAS,
-                        KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-                    )
-                        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                        .setRandomizedEncryptionRequired(true)
-                        .build()
-                )
-                generator.generateKey()
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
+    private fun ensureKey(): SecretKey? = try {
+        val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+        if (keyStore.containsAlias(KEY_ALIAS)) {
+            (keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
+        } else {
+            val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
+            generator.init(
+                KeyGenParameterSpec.Builder(
+                    KEY_ALIAS,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+                ).setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setRandomizedEncryptionRequired(true)
+                    .build()
+            )
+            generator.generateKey()
         }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
     }
 
     private fun getKey(): SecretKey? = ensureKey()
@@ -140,13 +125,11 @@ object ProfileStore {
     private fun encrypt(plainText: String): String? {
         val key = getKey() ?: return null
         return try {
-            val iv = ByteArray(IV_BYTES)
-            SecureRandom().nextBytes(iv)
+            val iv = ByteArray(IV_BYTES).also { SecureRandom().nextBytes(it) }
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
             val ciphertext = cipher.doFinal(plainText.toByteArray(StandardCharsets.UTF_8))
-            Base64.encodeToString(iv, Base64.NO_WRAP) + ":" +
-                Base64.encodeToString(ciphertext, Base64.NO_WRAP)
+            Base64.encodeToString(iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(ciphertext, Base64.NO_WRAP)
         } catch (e: Exception) {
             e.printStackTrace()
             null
@@ -170,43 +153,40 @@ object ProfileStore {
         }
     }
 
-    private fun profileToJson(p: VpnProfile): JSONObject {
-        return JSONObject().apply {
-            put("id", p.id)
-            put("name", p.name)
-            put("serverHost", p.serverHost)
-            put("serverIp", p.serverIp)
-            put("serverPort", p.serverPort)
-            put("bugHostSNI", p.bugHostSNI)
-            put("userUUID", p.userUUID)
-            put("protocol", p.protocol.name)
-            put("poolConcurrency", p.poolConcurrency)
-            put("brutalRateMbps", p.brutalRateMbps)
-            put("allowInsecureTLS", p.allowInsecureTLS)
-            put("customPayload", p.customPayload)
-            put("udpObfsPassword", p.udpObfsPassword)
-            put("udpPortHopRange", p.udpPortHopRange)
-            put("dnsServer", p.dnsServer)
-            put("dnsSecondary", p.dnsSecondary)
-            put("sshUser", p.sshUser)
-            put("sshPassword", p.sshPassword)
-            put("proxyHost", p.proxyHost)
-            put("proxyPort", p.proxyPort)
-            put("wsPath", p.wsPath)
-            put("wsHost", p.wsHost)
-            put("ssCipher", p.ssCipher)
-            put("vlessFlow", p.vlessFlow)
-            put("killSwitchEnabled", p.killSwitchEnabled)
-        }
+    private fun profileToJson(p: VpnProfile): JSONObject = JSONObject().apply {
+        put("id", p.id)
+        put("name", p.name)
+        put("serverHost", p.serverHost)
+        put("serverIp", p.serverIp)
+        put("serverPort", p.serverPort)
+        put("bugHostSNI", p.bugHostSNI)
+        put("userUUID", p.userUUID)
+        put("protocol", p.protocol.name)
+        put("poolConcurrency", p.poolConcurrency)
+        put("brutalRateMbps", p.brutalRateMbps)
+        put("allowInsecureTLS", p.allowInsecureTLS)
+        put("customPayload", p.customPayload)
+        put("udpObfsPassword", p.udpObfsPassword)
+        put("udpPortHopRange", p.udpPortHopRange)
+        put("dnsServer", p.dnsServer)
+        put("dnsSecondary", p.dnsSecondary)
+        put("udpForwarding", p.udpForwarding)
+        put("sshUser", p.sshUser)
+        put("sshPassword", p.sshPassword)
+        put("proxyHost", p.proxyHost)
+        put("proxyPort", p.proxyPort)
+        put("wsPath", p.wsPath)
+        put("wsHost", p.wsHost)
+        put("ssCipher", p.ssCipher)
+        put("vlessFlow", p.vlessFlow)
+        put("realityPublicKey", p.realityPublicKey)
+        put("realityShortId", p.realityShortId)
+        put("killSwitchEnabled", p.killSwitchEnabled)
     }
 
     private fun profileFromJson(obj: JSONObject): VpnProfile {
-        val proto = try {
-            ProtocolType.valueOf(obj.optString("protocol", ProtocolType.VLESS_WS.name))
-        } catch (_: Exception) {
-            ProtocolType.VLESS_WS
-        }
-
+        val proto = try { ProtocolType.valueOf(obj.optString("protocol", ProtocolType.VLESS_WS.name)) }
+        catch (_: Exception) { ProtocolType.VLESS_WS }
         return VpnProfile(
             id = obj.optString("id", UUID.randomUUID().toString()),
             name = obj.optString("name", "Unnamed Node"),
@@ -224,6 +204,7 @@ object ProfileStore {
             udpPortHopRange = obj.optString("udpPortHopRange", ""),
             dnsServer = obj.optString("dnsServer", "1.1.1.1"),
             dnsSecondary = obj.optString("dnsSecondary", "8.8.8.8"),
+            udpForwarding = obj.optBoolean("udpForwarding", true),
             sshUser = obj.optString("sshUser", ""),
             sshPassword = obj.optString("sshPassword", ""),
             proxyHost = obj.optString("proxyHost", ""),
@@ -232,6 +213,8 @@ object ProfileStore {
             wsHost = obj.optString("wsHost", ""),
             ssCipher = obj.optString("ssCipher", "2022-blake3-aes-128-gcm"),
             vlessFlow = obj.optString("vlessFlow", ""),
+            realityPublicKey = obj.optString("realityPublicKey", ""),
+            realityShortId = obj.optString("realityShortId", ""),
             killSwitchEnabled = obj.optBoolean("killSwitchEnabled", false)
         )
     }
