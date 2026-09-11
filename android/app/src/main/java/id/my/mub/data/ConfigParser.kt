@@ -11,380 +11,254 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 object ConfigParser {
-
-    /**
-     * Fetches subscription links from a URL (e.g. https://domain/sub/<token>/links.txt).
-     * Subscription credentials are accepted only over HTTPS.
-     */
     suspend fun fetchSubscription(subUrl: String): List<VpnProfile> = withContext(Dispatchers.IO) {
         val profiles = mutableListOf<VpnProfile>()
         val trimmedUrl = subUrl.trim()
-        if (!trimmedUrl.startsWith("https://", ignoreCase = true)) {
-            return@withContext emptyList()
-        }
+        if (!trimmedUrl.startsWith("https://", ignoreCase = true)) return@withContext emptyList()
         try {
             val url = URL(trimmedUrl)
             val conn = url.openConnection() as HttpURLConnection
             conn.connectTimeout = 8000
             conn.readTimeout = 8000
             conn.setRequestProperty("User-Agent", "MubX-Android/2.5")
-
             if (conn.responseCode in 200..299) {
-                val reader = BufferedReader(InputStreamReader(conn.inputStream))
-                val rawContent = reader.readText().trim()
-                reader.close()
-
-                val decoded = tryDecodeBase64(rawContent)
-                val lines = decoded.lines()
-
-                for (line in lines) {
-                    val trimmed = line.trim()
-                    if (trimmed.isNotBlank() && !trimmed.startsWith("#")) {
-                        parseUri(trimmed)?.let { profiles.add(it) }
+                BufferedReader(InputStreamReader(conn.inputStream)).use { reader ->
+                    val decoded = tryDecodeBase64(reader.readText().trim())
+                    decoded.lines().forEach { line ->
+                        val value = line.trim()
+                        if (value.isNotBlank() && !value.startsWith("#")) parseUri(value)?.let(profiles::add)
                     }
                 }
             }
             conn.disconnect()
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (_: Exception) {
         }
         profiles
     }
 
-    /**
-     * Parses a single URI string into a strongly-typed VpnProfile.
-     * Fully compatible with all MUB-X server link outputs supported by the current model.
-     */
     fun parseUri(rawUri: String): VpnProfile? {
         val trimmed = rawUri.trim()
         return when {
-            trimmed.startsWith("tbrutal://", ignoreCase = true) -> parseTBrutal(trimmed)
-            trimmed.startsWith("zivpn://", ignoreCase = true) -> parseZivpn(trimmed)
-            trimmed.startsWith("hysteria2://", ignoreCase = true) || trimmed.startsWith("hy2://", ignoreCase = true) -> parseHysteria2(trimmed)
-            trimmed.startsWith("vless://", ignoreCase = true) -> parseVless(trimmed)
-            trimmed.startsWith("vmess://", ignoreCase = true) -> parseVmess(trimmed)
-            trimmed.startsWith("trojan://", ignoreCase = true) -> parseTrojan(trimmed)
-            trimmed.startsWith("ss://", ignoreCase = true) -> parseShadowsocks(trimmed)
-            trimmed.startsWith("tuic://", ignoreCase = true) -> parseTuic(trimmed)
-            trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true) -> parseHttpChameleon(trimmed)
+            trimmed.startsWith("tbrutal://", true) -> parseTBrutal(trimmed)
+            trimmed.startsWith("zivpn://", true) -> parseZivpn(trimmed)
+            trimmed.startsWith("hysteria2://", true) || trimmed.startsWith("hy2://", true) -> parseHysteria2(trimmed)
+            trimmed.startsWith("vless://", true) -> parseVless(trimmed)
+            trimmed.startsWith("vmess://", true) -> parseVmess(trimmed)
+            trimmed.startsWith("trojan://", true) -> parseTrojan(trimmed)
+            trimmed.startsWith("ss://", true) -> parseShadowsocks(trimmed)
+            trimmed.startsWith("tuic://", true) -> parseTuic(trimmed)
+            trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true) -> parseHttpChameleon(trimmed)
             else -> null
         }
     }
 
-    private fun parseTBrutal(raw: String): VpnProfile? {
-        return try {
-            val uri = Uri.parse(raw)
-            val token = uri.userInfo ?: ""
-            val host = uri.host ?: ""
-            val port = if (uri.port > 0) uri.port else 443
-            val sni = uri.getQueryParameter("sni") ?: host
-            val rate = uri.getQueryParameter("rate")?.toIntOrNull() ?: 80
-            val conns = uri.getQueryParameter("conns")?.toIntOrNull() ?: 4
-            val path = uri.getQueryParameter("path") ?: "/tbrutal"
-            val fragment = uri.fragment ?: "MUBX-T-Brutal"
+    private fun parseTBrutal(raw: String): VpnProfile? = try {
+        val uri = Uri.parse(raw)
+        VpnProfile(
+            name = uri.fragment ?: "MUBX-T-Brutal",
+            serverHost = uri.host ?: "",
+            serverIp = uri.host ?: "",
+            serverPort = if (uri.port > 0) uri.port else 443,
+            bugHostSNI = uri.getQueryParameter("sni") ?: uri.host.orEmpty(),
+            userUUID = uri.userInfo.orEmpty(),
+            protocol = ProtocolType.T_BRUTAL,
+            poolConcurrency = uri.getQueryParameter("conns")?.toIntOrNull()?.coerceIn(1, 32) ?: 4,
+            brutalRateMbps = uri.getQueryParameter("rate")?.toIntOrNull()?.coerceAtLeast(0) ?: 80,
+            wsPath = uri.getQueryParameter("path") ?: "/tbrutal",
+            customPayload = uri.getQueryParameter("path") ?: "/tbrutal"
+        )
+    } catch (_: Exception) { null }
 
-            VpnProfile(
-                name = fragment,
-                serverHost = host,
-                serverIp = host,
-                serverPort = port,
-                bugHostSNI = sni,
-                userUUID = token,
-                protocol = ProtocolType.T_BRUTAL,
-                poolConcurrency = conns,
-                brutalRateMbps = rate,
-                wsPath = path,
-                customPayload = path
-            )
-        } catch (e: Exception) {
-            null
+    private fun parseZivpn(raw: String): VpnProfile? = try {
+        val uri = Uri.parse(raw)
+        VpnProfile(
+            name = uri.fragment ?: "MUBX-ZivPN-UDP",
+            serverHost = uri.host.orEmpty(),
+            serverIp = uri.host.orEmpty(),
+            serverPort = if (uri.port > 0) uri.port else 5667,
+            userUUID = uri.userInfo.orEmpty(),
+            protocol = ProtocolType.ZIVPN_UDP,
+            poolConcurrency = 1,
+            brutalRateMbps = 60,
+            udpObfsPassword = uri.getQueryParameter("obfs") ?: "zivpn",
+            udpPortHopRange = uri.getQueryParameter("mport") ?: "6000:19999"
+        )
+    } catch (_: Exception) { null }
+
+    private fun parseHysteria2(raw: String): VpnProfile? = try {
+        val uri = Uri.parse(raw)
+        VpnProfile(
+            name = uri.fragment ?: "MUBX-Hysteria2",
+            serverHost = uri.host.orEmpty(),
+            serverIp = uri.host.orEmpty(),
+            serverPort = if (uri.port > 0) uri.port else 4433,
+            bugHostSNI = uri.getQueryParameter("sni") ?: uri.host.orEmpty(),
+            userUUID = uri.userInfo.orEmpty(),
+            protocol = ProtocolType.HYSTERIA_2,
+            poolConcurrency = 4,
+            brutalRateMbps = 100,
+            udpPortHopRange = uri.getQueryParameter("mport") ?: ""
+        )
+    } catch (_: Exception) { null }
+
+    private fun parseVless(raw: String): VpnProfile? = try {
+        val uri = Uri.parse(raw)
+        val host = uri.host.orEmpty()
+        val type = uri.getQueryParameter("type") ?: "tcp"
+        val security = uri.getQueryParameter("security").orEmpty()
+        val isWs = type.equals("ws", true)
+        val isReality = security.equals("reality", true)
+        val proto = when {
+            isReality -> ProtocolType.VLESS_REALITY
+            isWs -> ProtocolType.VLESS_WS
+            else -> ProtocolType.VLESS_TCP
         }
-    }
+        VpnProfile(
+            name = uri.fragment ?: "MUBX-VLESS",
+            serverHost = host,
+            serverIp = host,
+            serverPort = if (uri.port > 0) uri.port else 443,
+            bugHostSNI = uri.getQueryParameter("sni") ?: uri.getQueryParameter("host") ?: host,
+            userUUID = uri.userInfo.orEmpty(),
+            protocol = proto,
+            poolConcurrency = 2,
+            brutalRateMbps = 0,
+            wsPath = uri.getQueryParameter("path") ?: "/vless-ws",
+            wsHost = uri.getQueryParameter("host") ?: "",
+            vlessFlow = uri.getQueryParameter("flow") ?: "",
+            allowInsecureTLS = uri.getQueryParameter("allowInsecure") == "1" || uri.getQueryParameter("allowInsecure").equals("true", true),
+            realityPublicKey = uri.getQueryParameter("pbk") ?: uri.getQueryParameter("publicKey") ?: "",
+            realityShortId = uri.getQueryParameter("sid") ?: uri.getQueryParameter("shortId") ?: ""
+        )
+    } catch (_: Exception) { null }
 
-    private fun parseZivpn(raw: String): VpnProfile? {
-        return try {
-            val uri = Uri.parse(raw)
-            val pass = uri.userInfo ?: ""
-            val host = uri.host ?: ""
-            val port = if (uri.port > 0) uri.port else 5667
-            val obfs = uri.getQueryParameter("obfs") ?: "zivpn"
-            val mport = uri.getQueryParameter("mport") ?: "6000:19999"
-            val fragment = uri.fragment ?: "MUBX-ZivPN-UDP"
+    private fun parseVmess(raw: String): VpnProfile? = try {
+        val encoded = raw.substringAfter("vmess://").trim()
+        val decodedJson = String(Base64.decode(encoded, Base64.DEFAULT or Base64.URL_SAFE or Base64.NO_WRAP))
+        val json = JSONObject(decodedJson)
+        val host = json.optString("add", "")
+        if (host.isBlank()) return null
+        VpnProfile(
+            name = json.optString("ps", "MUBX-VMess"),
+            serverHost = host,
+            serverIp = host,
+            serverPort = json.optInt("port", 443),
+            bugHostSNI = json.optString("sni", json.optString("host", host)),
+            userUUID = json.optString("id", ""),
+            protocol = ProtocolType.VMESS_WS,
+            poolConcurrency = 2,
+            brutalRateMbps = 0,
+            wsPath = json.optString("path", "/vless-ws").ifBlank { "/vless-ws" },
+            wsHost = json.optString("host", ""),
+            allowInsecureTLS = json.optBoolean("tlsAllowInsecure", json.optBoolean("insecure", false))
+        )
+    } catch (_: Exception) { null }
 
-            VpnProfile(
-                name = fragment,
-                serverHost = host,
-                serverIp = host,
-                serverPort = port,
-                bugHostSNI = "",
-                userUUID = pass,
-                protocol = ProtocolType.ZIVPN_UDP,
-                poolConcurrency = 1,
-                brutalRateMbps = 60,
-                udpObfsPassword = obfs,
-                udpPortHopRange = mport
-            )
-        } catch (e: Exception) {
-            null
-        }
-    }
+    private fun parseTrojan(raw: String): VpnProfile? = try {
+        val uri = Uri.parse(raw)
+        val host = uri.host.orEmpty()
+        VpnProfile(
+            name = uri.fragment ?: "MUBX-Trojan",
+            serverHost = host,
+            serverIp = host,
+            serverPort = if (uri.port > 0) uri.port else 443,
+            bugHostSNI = uri.getQueryParameter("sni") ?: host,
+            userUUID = uri.userInfo.orEmpty(),
+            protocol = ProtocolType.TROJAN_WS,
+            poolConcurrency = 2,
+            brutalRateMbps = 0,
+            wsPath = uri.getQueryParameter("path") ?: "/vless-ws",
+            wsHost = uri.getQueryParameter("host") ?: "",
+            allowInsecureTLS = uri.getQueryParameter("allowInsecure") == "1" || uri.getQueryParameter("allowInsecure").equals("true", true)
+        )
+    } catch (_: Exception) { null }
 
-    private fun parseHysteria2(raw: String): VpnProfile? {
-        return try {
-            val uri = Uri.parse(raw)
-            val pass = uri.userInfo ?: ""
-            val host = uri.host ?: ""
-            val port = if (uri.port > 0) uri.port else 4433
-            val sni = uri.getQueryParameter("sni") ?: host
-            val mport = uri.getQueryParameter("mport") ?: ""
-            val fragment = uri.fragment ?: "MUBX-Hysteria2"
-
-            VpnProfile(
-                name = fragment,
-                serverHost = host,
-                serverIp = host,
-                serverPort = port,
-                bugHostSNI = sni,
-                userUUID = pass,
-                protocol = ProtocolType.HYSTERIA_2,
-                poolConcurrency = 4,
-                brutalRateMbps = 100,
-                udpPortHopRange = mport
-            )
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private fun parseVless(raw: String): VpnProfile? {
-        return try {
-            val uri = Uri.parse(raw)
-            val uuid = uri.userInfo ?: ""
-            val host = uri.host ?: ""
-            val port = if (uri.port > 0) uri.port else 443
-            val sni = uri.getQueryParameter("sni") ?: uri.getQueryParameter("host") ?: host
-            val type = uri.getQueryParameter("type") ?: "tcp"
-            val fragment = uri.fragment ?: "MUBX-VLESS"
-
-            val proto = if (type.contains("ws", ignoreCase = true)) {
-                ProtocolType.VLESS_WS
-            } else {
-                ProtocolType.VLESS_TCP
+    private fun parseShadowsocks(raw: String): VpnProfile? = try {
+        val uri = Uri.parse(raw)
+        val host = uri.host.orEmpty()
+        val fragment = uri.fragment ?: "MUBX-Shadowsocks"
+        val plugin = Uri.decode(uri.getQueryParameter("plugin") ?: "")
+        val isShadowTls = plugin.contains("shadow-tls", true)
+        val is2022 = fragment.contains("2022", true) || fragment.contains("SS22", true)
+        var sni = host
+        var path = ""
+        var pluginPassword = ""
+        plugin.split(';').forEach { part ->
+            val key = part.substringBefore('=').trim()
+            val value = part.substringAfter('=', '').trim()
+            when {
+                key.equals("host", true) -> sni = value
+                key.equals("path", true) -> path = value
+                key.equals("password", true) -> pluginPassword = value
             }
-
-            val path = uri.getQueryParameter("path") ?: "/vless-ws"
-            val headerHost = uri.getQueryParameter("host") ?: ""
-            val flow = uri.getQueryParameter("flow") ?: "none"
-            val insecureParam = uri.getQueryParameter("allowInsecure") ?: uri.getQueryParameter("insecure")
-            val allowInsecure = insecureParam == "1" || insecureParam.equals("true", ignoreCase = true)
-
-            VpnProfile(
-                name = fragment,
-                serverHost = host,
-                serverIp = host,
-                serverPort = port,
-                bugHostSNI = sni,
-                userUUID = uuid,
-                protocol = proto,
-                poolConcurrency = 2,
-                brutalRateMbps = 0,
-                wsPath = path,
-                wsHost = headerHost,
-                vlessFlow = flow,
-                allowInsecureTLS = allowInsecure
-            )
-        } catch (e: Exception) {
-            null
         }
-    }
-
-    private fun parseVmess(raw: String): VpnProfile? {
-        return try {
-            val b64 = raw.substringAfter("vmess://").trim()
-            val decodedJson = String(Base64.decode(b64, Base64.DEFAULT or Base64.URL_SAFE or Base64.NO_WRAP))
-            val json = JSONObject(decodedJson)
-            val add = json.optString("add", "")
-            val port = json.optInt("port", 443)
-            val id = json.optString("id", "")
-            val sni = json.optString("sni", json.optString("host", add))
-            val ps = json.optString("ps", "MUBX-VMess")
-            val allowInsecure = json.optBoolean("insecure", false)
-
-            VpnProfile(
-                name = ps,
-                serverHost = add,
-                serverIp = add,
-                serverPort = port,
-                bugHostSNI = sni,
-                userUUID = id,
-                protocol = ProtocolType.VLESS_WS,
-                poolConcurrency = 2,
-                brutalRateMbps = 0,
-                allowInsecureTLS = allowInsecure
-            )
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private fun parseTrojan(raw: String): VpnProfile? {
-        return try {
-            val uri = Uri.parse(raw)
-            val pass = uri.userInfo ?: ""
-            val host = uri.host ?: ""
-            val port = if (uri.port > 0) uri.port else 443
-            val sni = uri.getQueryParameter("sni") ?: host
-            val fragment = uri.fragment ?: "MUBX-Trojan"
-            val insecureParam = uri.getQueryParameter("allowInsecure") ?: uri.getQueryParameter("insecure")
-            val allowInsecure = insecureParam == "1" || insecureParam.equals("true", ignoreCase = true)
-
-            VpnProfile(
-                name = fragment,
-                serverHost = host,
-                serverIp = host,
-                serverPort = port,
-                bugHostSNI = sni,
-                userUUID = pass,
-                protocol = ProtocolType.VLESS_TCP,
-                poolConcurrency = 2,
-                brutalRateMbps = 0,
-                allowInsecureTLS = allowInsecure
-            )
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private fun parseShadowsocks(raw: String): VpnProfile? {
-        return try {
-            val uri = Uri.parse(raw)
-            val host = uri.host ?: ""
-            val port = if (uri.port > 0) uri.port else 443
-            val plugin = uri.getQueryParameter("plugin") ?: ""
-            val fragment = uri.fragment ?: "MUBX-Shadowsocks"
-
-            val isShadowTls = plugin.contains("shadow-tls", ignoreCase = true)
-            val is2022 = fragment.contains("2022", ignoreCase = true) || fragment.contains("SS22", ignoreCase = true)
-
-            var extractedSni = host
-            var extractedPath = ""
-            var extractedPass = ""
-            if (plugin.isNotBlank()) {
-                val decodedPlugin = Uri.decode(plugin)
-                for (part in decodedPlugin.split(";")) {
-                    val key = part.substringBefore("=").trim()
-                    val value = part.substringAfter("=").trim()
-                    when {
-                        key.equals("host", ignoreCase = true) -> extractedSni = value
-                        key.equals("path", ignoreCase = true) -> extractedPath = value
-                        key.equals("password", ignoreCase = true) -> extractedPass = value
-                    }
-                }
+        val rawUserInfo = uri.userInfo.orEmpty()
+        var cipher = if (is2022 || isShadowTls) "2022-blake3-aes-256-gcm" else "aes-256-gcm"
+        var pass = rawUserInfo
+        if (rawUserInfo.isNotBlank() && !rawUserInfo.contains(':')) {
+            runCatching { String(Base64.decode(rawUserInfo, Base64.DEFAULT or Base64.URL_SAFE)) }.getOrNull()?.let {
+                if (it.contains(':')) {
+                    cipher = it.substringBefore(':')
+                    pass = it.substringAfter(':')
+                } else if (it.isNotBlank()) pass = it
             }
-
-            val rawUserInfo = uri.userInfo ?: ""
-            var cipher = if (is2022 || isShadowTls) "2022-blake3-aes-256-gcm" else "aes-256-gcm"
-            var pass = rawUserInfo
-            if (rawUserInfo.isNotBlank()) {
-                if (!rawUserInfo.contains(":")) {
-                    try {
-                        val decoded = String(android.util.Base64.decode(rawUserInfo, android.util.Base64.DEFAULT or android.util.Base64.URL_SAFE))
-                        if (decoded.contains(":")) {
-                            cipher = decoded.substringBefore(":")
-                            pass = decoded.substringAfter(":")
-                        } else {
-                            pass = decoded
-                        }
-                    } catch (e: Exception) {
-                        pass = rawUserInfo
-                    }
-                } else {
-                    cipher = rawUserInfo.substringBefore(":")
-                    pass = rawUserInfo.substringAfter(":")
-                }
-            }
-
-            val proto = when {
+        } else if (rawUserInfo.contains(':')) {
+            cipher = rawUserInfo.substringBefore(':')
+            pass = rawUserInfo.substringAfter(':')
+        }
+        VpnProfile(
+            name = fragment,
+            serverHost = host,
+            serverIp = host,
+            serverPort = if (uri.port > 0) uri.port else 443,
+            bugHostSNI = sni,
+            userUUID = pass,
+            ssCipher = cipher,
+            protocol = when {
                 isShadowTls -> ProtocolType.SHADOWTLS_V3
                 is2022 -> ProtocolType.SHADOWSOCKS_2022
-                else -> ProtocolType.SHADOWSOCKS_2022
-            }
+                else -> ProtocolType.SHADOWSOCKS
+            },
+            poolConcurrency = 2,
+            customPayload = path,
+            udpObfsPassword = pluginPassword
+        )
+    } catch (_: Exception) { null }
 
-            VpnProfile(
-                name = fragment,
-                serverHost = host,
-                serverIp = host,
-                serverPort = port,
-                bugHostSNI = extractedSni,
-                userUUID = pass,
-                ssCipher = cipher,
-                protocol = proto,
-                poolConcurrency = 2,
-                brutalRateMbps = 0,
-                customPayload = extractedPath,
-                udpObfsPassword = if (extractedPass.isNotBlank()) extractedPass else "zivpn"
-            )
-        } catch (e: Exception) {
-            null
-        }
-    }
+    private fun parseTuic(raw: String): VpnProfile? = try {
+        val uri = Uri.parse(raw)
+        val userInfo = uri.userInfo.orEmpty()
+        VpnProfile(
+            name = uri.fragment ?: "MUBX-TUIC",
+            serverHost = uri.host.orEmpty(),
+            serverIp = uri.host.orEmpty(),
+            serverPort = if (uri.port > 0) uri.port else 8444,
+            bugHostSNI = uri.getQueryParameter("sni") ?: uri.host.orEmpty(),
+            userUUID = userInfo.substringBefore(':'),
+            protocol = ProtocolType.TUIC,
+            poolConcurrency = 4,
+            brutalRateMbps = 100,
+            allowInsecureTLS = uri.getQueryParameter("allowInsecure") == "1" || uri.getQueryParameter("allowInsecure").equals("true", true)
+        )
+    } catch (_: Exception) { null }
 
-    private fun parseTuic(raw: String): VpnProfile? {
-        return try {
-            val uri = Uri.parse(raw)
-            val userInfo = uri.userInfo ?: ""
-            val host = uri.host ?: ""
-            val port = if (uri.port > 0) uri.port else 8444
-            val sni = uri.getQueryParameter("sni") ?: host
-            val fragment = uri.fragment ?: "MUBX-TUIC"
+    private fun parseHttpChameleon(raw: String): VpnProfile? = try {
+        val uri = Uri.parse(raw)
+        VpnProfile(
+            name = uri.fragment ?: "MUBX-Chameleon",
+            serverHost = uri.host.orEmpty(),
+            serverIp = uri.host.orEmpty(),
+            serverPort = if (uri.port > 0) uri.port else 8080,
+            userUUID = uri.userInfo.orEmpty(),
+            protocol = ProtocolType.SSH_PAYLOAD,
+            poolConcurrency = 2,
+            brutalRateMbps = 40
+        )
+    } catch (_: Exception) { null }
 
-            VpnProfile(
-                name = fragment,
-                serverHost = host,
-                serverIp = host,
-                serverPort = port,
-                bugHostSNI = sni,
-                userUUID = userInfo.substringBefore(":"),
-                protocol = ProtocolType.HYSTERIA_2,
-                poolConcurrency = 4,
-                brutalRateMbps = 100
-            )
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private fun parseHttpChameleon(raw: String): VpnProfile? {
-        return try {
-            val uri = Uri.parse(raw)
-            val host = uri.host ?: ""
-            val port = if (uri.port > 0) uri.port else 8080
-            val fragment = uri.fragment ?: "MUBX-Chameleon"
-
-            VpnProfile(
-                name = fragment,
-                serverHost = host,
-                serverIp = host,
-                serverPort = port,
-                bugHostSNI = "",
-                userUUID = uri.userInfo ?: "",
-                protocol = ProtocolType.SSH_PAYLOAD,
-                poolConcurrency = 2,
-                brutalRateMbps = 40
-            )
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private fun tryDecodeBase64(input: String): String {
-        return try {
-            val clean = input.replace("\r", "").replace("\n", "").trim()
-            val bytes = Base64.decode(clean, Base64.DEFAULT or Base64.URL_SAFE)
-            val str = String(bytes)
-            if (str.contains("://")) str else input
-        } catch (e: Exception) {
-            input
-        }
-    }
+    private fun tryDecodeBase64(input: String): String = try {
+        val clean = input.replace("\r", "").replace("\n", "").trim()
+        val decoded = String(Base64.decode(clean, Base64.DEFAULT or Base64.URL_SAFE))
+        if (decoded.contains("://")) decoded else input
+    } catch (_: Exception) { input }
 }
