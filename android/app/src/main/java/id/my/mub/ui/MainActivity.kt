@@ -75,13 +75,10 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         AppScreen.RELAY -> {
-                            RelayDashboardScreen(
+                            id.my.mub.ui.warden.WardenAppScreen(
                                 vpnState = vpnState,
-                                currentProfile = activeProfile,
-                                onBackToNotes = {
-                                    currentScreen = AppScreen.NOTES
-                                },
-                                onToggleRelay = {
+                                activeProfile = activeProfile,
+                                onToggleVpn = {
                                     if (vpnState is VpnState.Connected || vpnState is VpnState.Connecting) {
                                         stopVpnService()
                                     } else {
@@ -91,8 +88,8 @@ class MainActivity : ComponentActivity() {
                                         requestAndStartVpn()
                                     }
                                 },
-                                onOpenConsole = {
-                                    currentScreen = AppScreen.LOGS
+                                onBackToNotes = {
+                                    currentScreen = AppScreen.NOTES
                                 },
                                 onUpdateProfile = { updated ->
                                     activeProfile = updated

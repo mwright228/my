@@ -315,9 +315,22 @@ func (uc *UniversalClient) dialVLESS(atyp byte, targetHost string, targetPort ui
 	if path == "" {
 		path = "/vless-ws"
 	}
+	if strings.HasPrefix(path, "%2F") || strings.HasPrefix(path, "%2f") {
+		path = "/" + path[3:]
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
 	hostHeader := uc.cfg.HostHeader
+	if hostHeader == "" || net.ParseIP(hostHeader) != nil {
+		if uc.cfg.SNI != "" && net.ParseIP(uc.cfg.SNI) == nil {
+			hostHeader = uc.cfg.SNI
+		}
+	}
 	if hostHeader == "" {
-		hostHeader = sni
+		h, _, _ := net.SplitHostPort(serverAddr)
+		hostHeader = h
 	}
 
 	isWS := strings.Contains(strings.ToUpper(uc.cfg.Protocol), "WS") || strings.Contains(path, "ws") || path != ""
@@ -329,10 +342,12 @@ func (uc *UniversalClient) dialVLESS(atyp byte, targetHost string, targetPort ui
 
 		upgradeReq := fmt.Sprintf("GET %s HTTP/1.1\r\n"+
 			"Host: %s\r\n"+
+			"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n"+
 			"Upgrade: websocket\r\n"+
 			"Connection: Upgrade\r\n"+
 			"Sec-WebSocket-Key: %s\r\n"+
-			"Sec-WebSocket-Version: 13\r\n\r\n", path, hostHeader, b64Key)
+			"Sec-WebSocket-Version: 13\r\n"+
+			"Origin: https://%s\r\n\r\n", path, hostHeader, b64Key, hostHeader)
 
 		if _, err := conn.Write([]byte(upgradeReq)); err != nil {
 			_ = conn.Close()

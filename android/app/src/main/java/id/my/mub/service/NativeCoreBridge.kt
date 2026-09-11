@@ -71,8 +71,8 @@ object NativeCoreBridge {
             } else {
                 "$host:${profile.serverPort}"
             }
-            val effectiveSni = if (profile.bugHostSNI.isNotBlank()) profile.bugHostSNI else host
-            val effectiveHostHeader = if (profile.wsHost.isNotBlank()) profile.wsHost else host
+            val effectiveSni = if (profile.bugHostSNI.isNotBlank()) profile.bugHostSNI else profile.serverHost
+            val effectiveHostHeader = if (profile.wsHost.isNotBlank()) profile.wsHost else profile.serverHost
             val effectiveToken = if (profile.protocol == id.my.mub.data.ProtocolType.SHADOWSOCKS_2022) {
                 profile.userUUID
             } else if (profile.protocol == id.my.mub.data.ProtocolType.SSH_PAYLOAD) {

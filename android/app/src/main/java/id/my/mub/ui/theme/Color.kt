@@ -29,3 +29,18 @@ val SlateGray = TextSecondary
 val SuccessGreen = AccentSuccess
 val WarningAmber = AccentWarning
 val ErrorRed = AccentError
+
+// Exact Warden Design Tokens
+val WardenBg = Color(0xFF05070A)
+val WardenScreen = Color(0xFF0A0D12)
+val WardenSurface = Color(0xFF12171F)
+val WardenSurface2 = Color(0xFF1A212B)
+val WardenBorder = Color(0x14FFFFFF)
+val WardenText = Color(0xFFEEF3F5)
+val WardenMuted = Color(0xFF7E8996)
+val WardenMutedDim = Color(0xFF5A6570)
+val WardenMint = Color(0xFF4CE0B3)
+val WardenIndigo = Color(0xFF6C8CFF)
+val WardenViolet = Color(0xFFB18CFF)
+val WardenAmber = Color(0xFFFFB84C)
+val WardenRed = Color(0xFFFF6B5E)
