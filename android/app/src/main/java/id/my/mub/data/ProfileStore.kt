@@ -30,7 +30,7 @@ object ProfileStore {
 
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        ensureKey()
+        check(ensureKey() != null) { "Unable to initialize Android Keystore profile encryption" }
         migratePlaintextProfiles()
     }
 
@@ -50,12 +50,9 @@ object ProfileStore {
         val jsonStr = readEncryptedProfiles() ?: return emptyList()
         return try {
             val arr = JSONArray(jsonStr)
-            buildList {
-                for (i in 0 until arr.length()) add(profileFromJson(arr.getJSONObject(i)))
-            }
+            buildList { for (i in 0 until arr.length()) add(profileFromJson(arr.getJSONObject(i))) }
         } catch (e: Exception) {
-            e.printStackTrace()
-            emptyList()
+            throw IllegalStateException("Stored VPN profiles could not be decrypted or parsed", e)
         }
     }
 
@@ -77,19 +74,22 @@ object ProfileStore {
     private fun saveAll(profiles: List<VpnProfile>) {
         val arr = JSONArray()
         profiles.forEach { arr.put(profileToJson(it)) }
-        val encrypted = encrypt(arr.toString()) ?: return
-        prefs.edit().putString(KEY_PROFILES_ENCRYPTED, encrypted).remove(KEY_PROFILES_JSON).apply()
+        val encrypted = requireNotNull(encrypt(arr.toString())) { "Unable to encrypt VPN profiles with Android Keystore" }
+        check(prefs.edit().putString(KEY_PROFILES_ENCRYPTED, encrypted).remove(KEY_PROFILES_JSON).commit()) {
+            "Unable to persist encrypted VPN profiles"
+        }
     }
 
     private fun migratePlaintextProfiles() {
         val encrypted = prefs.getString(KEY_PROFILES_ENCRYPTED, null)
         val plaintext = prefs.getString(KEY_PROFILES_JSON, null)
         if (encrypted.isNullOrEmpty() && !plaintext.isNullOrEmpty()) {
-            encrypt(plaintext)?.let { sealed ->
-                prefs.edit().putString(KEY_PROFILES_ENCRYPTED, sealed).remove(KEY_PROFILES_JSON).apply()
+            val sealed = requireNotNull(encrypt(plaintext)) { "Unable to encrypt existing VPN profiles during migration" }
+            check(prefs.edit().putString(KEY_PROFILES_ENCRYPTED, sealed).remove(KEY_PROFILES_JSON).commit()) {
+                "Unable to complete encrypted VPN profile migration"
             }
         } else if (!encrypted.isNullOrEmpty() && plaintext != null) {
-            prefs.edit().remove(KEY_PROFILES_JSON).apply()
+            check(prefs.edit().remove(KEY_PROFILES_JSON).commit()) { "Unable to remove legacy plaintext VPN profiles" }
         }
     }
 
@@ -105,10 +105,8 @@ object ProfileStore {
         } else {
             val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
             generator.init(
-                KeyGenParameterSpec.Builder(
-                    KEY_ALIAS,
-                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-                ).setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                     .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                     .setRandomizedEncryptionRequired(true)
                     .build()
@@ -154,68 +152,32 @@ object ProfileStore {
     }
 
     private fun profileToJson(p: VpnProfile): JSONObject = JSONObject().apply {
-        put("id", p.id)
-        put("name", p.name)
-        put("serverHost", p.serverHost)
-        put("serverIp", p.serverIp)
-        put("serverPort", p.serverPort)
-        put("bugHostSNI", p.bugHostSNI)
-        put("userUUID", p.userUUID)
-        put("protocol", p.protocol.name)
-        put("poolConcurrency", p.poolConcurrency)
-        put("brutalRateMbps", p.brutalRateMbps)
-        put("allowInsecureTLS", p.allowInsecureTLS)
-        put("customPayload", p.customPayload)
-        put("udpObfsPassword", p.udpObfsPassword)
-        put("udpPortHopRange", p.udpPortHopRange)
-        put("dnsServer", p.dnsServer)
-        put("dnsSecondary", p.dnsSecondary)
-        put("udpForwarding", p.udpForwarding)
-        put("sshUser", p.sshUser)
-        put("sshPassword", p.sshPassword)
-        put("proxyHost", p.proxyHost)
-        put("proxyPort", p.proxyPort)
-        put("wsPath", p.wsPath)
-        put("wsHost", p.wsHost)
-        put("ssCipher", p.ssCipher)
-        put("vlessFlow", p.vlessFlow)
-        put("realityPublicKey", p.realityPublicKey)
-        put("realityShortId", p.realityShortId)
-        put("killSwitchEnabled", p.killSwitchEnabled)
+        put("id", p.id); put("name", p.name); put("serverHost", p.serverHost); put("serverIp", p.serverIp)
+        put("serverPort", p.serverPort); put("bugHostSNI", p.bugHostSNI); put("userUUID", p.userUUID)
+        put("protocol", p.protocol.name); put("poolConcurrency", p.poolConcurrency); put("brutalRateMbps", p.brutalRateMbps)
+        put("allowInsecureTLS", p.allowInsecureTLS); put("customPayload", p.customPayload); put("udpObfsPassword", p.udpObfsPassword)
+        put("udpPortHopRange", p.udpPortHopRange); put("dnsServer", p.dnsServer); put("dnsSecondary", p.dnsSecondary)
+        put("udpForwarding", p.udpForwarding); put("sshUser", p.sshUser); put("sshPassword", p.sshPassword)
+        put("proxyHost", p.proxyHost); put("proxyPort", p.proxyPort); put("wsPath", p.wsPath); put("wsHost", p.wsHost)
+        put("ssCipher", p.ssCipher); put("vlessFlow", p.vlessFlow); put("realityPublicKey", p.realityPublicKey)
+        put("realityShortId", p.realityShortId); put("killSwitchEnabled", p.killSwitchEnabled)
     }
 
     private fun profileFromJson(obj: JSONObject): VpnProfile {
-        val proto = try { ProtocolType.valueOf(obj.optString("protocol", ProtocolType.VLESS_WS.name)) }
-        catch (_: Exception) { ProtocolType.VLESS_WS }
+        val proto = try { ProtocolType.valueOf(obj.optString("protocol", ProtocolType.VLESS_WS.name)) } catch (_: Exception) { ProtocolType.VLESS_WS }
         return VpnProfile(
-            id = obj.optString("id", UUID.randomUUID().toString()),
-            name = obj.optString("name", "Unnamed Node"),
-            serverHost = obj.optString("serverHost", ""),
-            serverIp = obj.optString("serverIp", ""),
-            serverPort = obj.optInt("serverPort", 443),
-            bugHostSNI = obj.optString("bugHostSNI", ""),
-            userUUID = obj.optString("userUUID", ""),
-            protocol = proto,
-            poolConcurrency = obj.optInt("poolConcurrency", 2),
-            brutalRateMbps = obj.optInt("brutalRateMbps", 50),
-            allowInsecureTLS = obj.optBoolean("allowInsecureTLS", false),
-            customPayload = obj.optString("customPayload", ""),
-            udpObfsPassword = obj.optString("udpObfsPassword", ""),
-            udpPortHopRange = obj.optString("udpPortHopRange", ""),
-            dnsServer = obj.optString("dnsServer", "1.1.1.1"),
-            dnsSecondary = obj.optString("dnsSecondary", "8.8.8.8"),
-            udpForwarding = obj.optBoolean("udpForwarding", true),
-            sshUser = obj.optString("sshUser", ""),
-            sshPassword = obj.optString("sshPassword", ""),
-            proxyHost = obj.optString("proxyHost", ""),
-            proxyPort = obj.optInt("proxyPort", 0),
-            wsPath = obj.optString("wsPath", "/vless-ws"),
-            wsHost = obj.optString("wsHost", ""),
-            ssCipher = obj.optString("ssCipher", "2022-blake3-aes-128-gcm"),
-            vlessFlow = obj.optString("vlessFlow", ""),
-            realityPublicKey = obj.optString("realityPublicKey", ""),
-            realityShortId = obj.optString("realityShortId", ""),
-            killSwitchEnabled = obj.optBoolean("killSwitchEnabled", false)
+            id = obj.optString("id", UUID.randomUUID().toString()), name = obj.optString("name", "Unnamed Node"),
+            serverHost = obj.optString("serverHost", ""), serverIp = obj.optString("serverIp", ""), serverPort = obj.optInt("serverPort", 443),
+            bugHostSNI = obj.optString("bugHostSNI", ""), userUUID = obj.optString("userUUID", ""), protocol = proto,
+            poolConcurrency = obj.optInt("poolConcurrency", 2), brutalRateMbps = obj.optInt("brutalRateMbps", 50),
+            allowInsecureTLS = obj.optBoolean("allowInsecureTLS", false), customPayload = obj.optString("customPayload", ""),
+            udpObfsPassword = obj.optString("udpObfsPassword", ""), udpPortHopRange = obj.optString("udpPortHopRange", ""),
+            dnsServer = obj.optString("dnsServer", "1.1.1.1"), dnsSecondary = obj.optString("dnsSecondary", "8.8.8.8"),
+            udpForwarding = obj.optBoolean("udpForwarding", true), sshUser = obj.optString("sshUser", ""), sshPassword = obj.optString("sshPassword", ""),
+            proxyHost = obj.optString("proxyHost", ""), proxyPort = obj.optInt("proxyPort", 0), wsPath = obj.optString("wsPath", "/vless-ws"),
+            wsHost = obj.optString("wsHost", ""), ssCipher = obj.optString("ssCipher", "2022-blake3-aes-128-gcm"),
+            vlessFlow = obj.optString("vlessFlow", ""), realityPublicKey = obj.optString("realityPublicKey", ""),
+            realityShortId = obj.optString("realityShortId", ""), killSwitchEnabled = obj.optBoolean("killSwitchEnabled", false)
         )
     }
 }
