@@ -26,3 +26,6 @@ val CyberMint = AccentSuccess
 val CoralRed = AccentError
 val AmberGold = AccentWarning
 val SlateGray = TextSecondary
+val SuccessGreen = AccentSuccess
+val WarningAmber = AccentWarning
+val ErrorRed = AccentError
