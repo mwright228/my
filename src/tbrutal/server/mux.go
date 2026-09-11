@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,8 @@ import (
 	"github.com/mwright228/my/src/tbrutal/pacer"
 	"github.com/mwright228/my/src/tbrutal/protocol"
 )
+
+const maxStreamsPerSession = 128
 
 type Stream struct {
 	id         uint32
@@ -92,6 +95,44 @@ func (s *Session) Handle() {
 	}
 }
 
+func isBlockedIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
+}
+
+func resolvePublicTarget(host string, port uint16) (string, error) {
+	if host == "" || port == 0 {
+		return "", fmt.Errorf("invalid target")
+	}
+
+	if ip := net.ParseIP(host); ip != nil {
+		if isBlockedIP(ip) {
+			return "", fmt.Errorf("target address is not allowed")
+		}
+		return net.JoinHostPort(ip.String(), fmt.Sprintf("%d", port)), nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil || len(ips) == 0 {
+		return "", fmt.Errorf("target resolution failed")
+	}
+
+	for _, ip := range ips {
+		if !isBlockedIP(ip) {
+			// Dial the validated address rather than the original hostname so a
+			// private/loopback DNS answer cannot be selected by a later re-resolution.
+			return net.JoinHostPort(ip.String(), fmt.Sprintf("%d", port)), nil
+		}
+	}
+
+	return "", fmt.Errorf("target address is not allowed")
+}
+
 func (s *Session) handleConnect(frame *protocol.Frame) {
 	token, addrType, host, port, err := protocol.DecodeConnectPayload(frame.Payload)
 	if err != nil {
@@ -107,9 +148,31 @@ func (s *Session) handleConnect(frame *protocol.Frame) {
 		_ = s.sendFrame(resp)
 		return
 	}
-
 	_ = username
-	target := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+
+	s.streamsMu.Lock()
+	if s.closed.Load() || len(s.streams) >= maxStreamsPerSession {
+		s.streamsMu.Unlock()
+		resp, _ := protocol.NewFrame(protocol.CmdConnectResp, frame.StreamID, []byte{protocol.RespDialFailed})
+		_ = s.sendFrame(resp)
+		return
+	}
+	if existing, exists := s.streams[frame.StreamID]; exists {
+		existing.closed.Store(true)
+		if existing.targetConn != nil {
+			_ = existing.targetConn.Close()
+		}
+		delete(s.streams, frame.StreamID)
+	}
+	s.streamsMu.Unlock()
+
+	target, err := resolvePublicTarget(host, port)
+	if err != nil {
+		resp, _ := protocol.NewFrame(protocol.CmdConnectResp, frame.StreamID, []byte{protocol.RespDialFailed})
+		_ = s.sendFrame(resp)
+		return
+	}
+
 	targetConn, err := net.DialTimeout("tcp", target, 10*time.Second)
 	if err != nil {
 		resp, _ := protocol.NewFrame(protocol.CmdConnectResp, frame.StreamID, []byte{protocol.RespDialFailed})
@@ -129,17 +192,22 @@ func (s *Session) handleConnect(frame *protocol.Frame) {
 	}
 
 	s.streamsMu.Lock()
+	if s.closed.Load() || len(s.streams) >= maxStreamsPerSession {
+		s.streamsMu.Unlock()
+		_ = targetConn.Close()
+		resp, _ := protocol.NewFrame(protocol.CmdConnectResp, frame.StreamID, []byte{protocol.RespDialFailed})
+		_ = s.sendFrame(resp)
+		return
+	}
 	s.streams[frame.StreamID] = st
 	s.streamsMu.Unlock()
 
-	// Send success response
 	resp, _ := protocol.NewFrame(protocol.CmdConnectResp, frame.StreamID, []byte{protocol.RespSuccess})
 	if err := s.sendFrame(resp); err != nil {
 		s.handleClose(frame.StreamID)
 		return
 	}
 
-	// Start reading from targetConn and sending back to client
 	go s.pipeTargetToClient(st)
 }
 
@@ -154,7 +222,6 @@ func (s *Session) pipeTargetToClient(st *Stream) {
 
 		n, err := st.targetConn.Read(buf)
 		if n > 0 {
-			// Userspace Brutal rate pacing: enforce minimum interval / tokens
 			s.pacer.Wait(n)
 
 			dataFrame, fErr := protocol.NewFrame(protocol.CmdData, st.id, buf[:n])
@@ -167,7 +234,6 @@ func (s *Session) pipeTargetToClient(st *Stream) {
 		}
 
 		if err != nil {
-			// Remote target closed, send close frame
 			closeFrame, _ := protocol.NewFrame(protocol.CmdClose, st.id, nil)
 			_ = s.sendFrame(closeFrame)
 			return
