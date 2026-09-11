@@ -26,7 +26,8 @@ data class VpnProfile(
     val allowInsecureTLS: Boolean = true,
     val customPayload: String = "",
     val udpObfsPassword: String = "zivpn",
-    val udpPortHopRange: String = "6000:19999"
+    val udpPortHopRange: String = "6000:19999",
+    val killSwitchEnabled: Boolean = false
 )
 
 sealed class VpnState {

@@ -117,7 +117,7 @@ class MubxVpnService : VpnService() {
                 // 1. Launch multi-protocol Go Core connection pool
                 val socksPort = NativeCoreBridge.startTunnel(currentProfile).getOrThrow()
 
-                // 2. Establish Android TUN Interface (tun0) with Banking App Protection
+                // 2. Establish Android TUN Interface (tun0) with Banking App Protection & Kill Switch
                 val builder = Builder().apply {
                     setSession("MUB-X Tunnel")
                     addAddress("172.19.0.1", 30)
@@ -126,6 +126,10 @@ class MubxVpnService : VpnService() {
                     addRoute("0.0.0.0", 0)
                     setMtu(1500)
                     setBlocking(true)
+
+                    if (currentProfile.killSwitchEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        setMetered(false)
+                    }
 
                     // Banking Security Bypass: Exclude banking apps from VPN routing
                     // to ensure they use direct carrier network and never trigger geo-fraud flags.

@@ -48,6 +48,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        checkAndRequestBatteryOptimization()
 
         setContent {
             MubxVpnTheme {
@@ -139,6 +140,21 @@ class MainActivity : ComponentActivity() {
             action = MubxVpnService.ACTION_DISCONNECT
         }
         startService(intent)
+    }
+
+    private fun checkAndRequestBatteryOptimization() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            val pm = getSystemService(POWER_SERVICE) as? android.os.PowerManager
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = android.net.Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                } catch (ignored: Exception) {
+                }
+            }
+        }
     }
 }
 

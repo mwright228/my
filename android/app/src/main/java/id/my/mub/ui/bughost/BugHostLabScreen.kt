@@ -41,6 +41,7 @@ fun BugHostLabScreen(
     var udpObfs by remember { mutableStateOf(currentProfile.udpObfsPassword) }
     var udpPortRange by remember { mutableStateOf(currentProfile.udpPortHopRange) }
     var fakeDns53 by remember { mutableStateOf(false) }
+    var killSwitch by remember { mutableStateOf(currentProfile.killSwitchEnabled) }
 
     var probeResult by remember { mutableStateOf("200 OK - Whitelisted") }
     var isProbing by remember { mutableStateOf(false) }
@@ -344,6 +345,39 @@ fun BugHostLabScreen(
             }
         }
 
+        Spacer(modifier = Modifier.height(18.dp))
+
+        // --- 6. Security: Kill Switch ---
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, SurfaceCardBorder, RoundedCornerShape(16.dp)),
+            colors = CardDefaults.cardColors(containerColor = SurfaceCard)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = "Kill Switch (Leak Protection)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = PureWhite)
+                    Text(text = "Block all non-VPN traffic if tunnel drops", fontSize = 12.sp, color = SlateGray)
+                }
+                Switch(
+                    checked = killSwitch,
+                    onCheckedChange = { killSwitch = it },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = PureWhite,
+                        checkedTrackColor = ElectricCyan,
+                        uncheckedThumbColor = SlateGray,
+                        uncheckedTrackColor = BgObsidian
+                    )
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.height(24.dp))
 
         // --- Save & Deploy Button ---
@@ -355,7 +389,8 @@ fun BugHostLabScreen(
                     poolConcurrency = poolSize.toInt(),
                     brutalRateMbps = if (isWireSpeed) 0 else pacingRate.toInt(),
                     udpObfsPassword = udpObfs.trim(),
-                    udpPortHopRange = udpPortRange.trim()
+                    udpPortHopRange = udpPortRange.trim(),
+                    killSwitchEnabled = killSwitch
                 )
                 onSaveProfile(updated)
                 onNavigateBack()
