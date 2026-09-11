@@ -1,5 +1,6 @@
 package id.my.mub.service
 
+import android.app.PendingIntent
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
@@ -58,7 +59,13 @@ class MubxTileService : TileService() {
                 val activityIntent = Intent(this, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
                 }
-                startActivityAndCollapse(activityIntent)
+                val pendingIntent = PendingIntent.getActivity(
+                    this,
+                    0,
+                    activityIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                startActivityAndCollapse(pendingIntent)
             }
         }
     }
