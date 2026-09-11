@@ -197,11 +197,9 @@ class MubxVpnService : VpnService() {
         if (instance == this) instance = null
 
         // onDestroy can be reached without the normal ACTION_DISCONNECT path.
-        // Start an independent best-effort native cleanup before the coroutine
-        // scope is cancelled so a service teardown cannot strand tunnel state.
+        // Use the synchronous native emergency path before cancelling the service scope.
         Thread {
-            runCatching { NativeCoreBridge.stopTunRouter() }
-            runCatching { NativeCoreBridge.stopTunnel() }
+            NativeCoreBridge.forceStop()
             runCatching { vpnInterface?.close() }
             vpnInterface = null
         }.start()
