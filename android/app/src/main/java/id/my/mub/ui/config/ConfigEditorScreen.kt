@@ -336,7 +336,11 @@ fun ConfigEditorScreen(
                                 if (bugHostSNI.isBlank()) return@Button
                                 isProbing = true
                                 coroutineScope.launch {
-                                    val res = NativeCoreBridge.probeBugHost(bugHostSNI.trim(), 2500)
+                                    val res = NativeCoreBridge.probeBugHost(
+                                        url = "https://${bugHostSNI.trim()}",
+                                        sni = bugHostSNI.trim(),
+                                        timeoutMs = 2500
+                                    )
                                     probeResult = if (res.isWhitelisted) {
                                         "Online: ${res.statusCode} (${res.latencyMs} ms)"
                                     } else {

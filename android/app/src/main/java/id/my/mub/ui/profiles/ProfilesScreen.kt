@@ -257,6 +257,7 @@ fun ProfilesScreen(
         )
     }
 }
+}
 
 @Composable
 fun ProfileCard(
