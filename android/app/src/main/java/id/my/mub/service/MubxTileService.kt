@@ -1,5 +1,6 @@
 package id.my.mub.service
 
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Intent
 import android.net.VpnService
@@ -7,7 +8,6 @@ import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import androidx.annotation.RequiresApi
-import androidx.annotation.SuppressLint
 import id.my.mub.data.VpnState
 import id.my.mub.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
