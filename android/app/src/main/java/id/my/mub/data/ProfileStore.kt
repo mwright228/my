@@ -2,20 +2,36 @@ package id.my.mub.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
+import java.nio.charset.StandardCharsets
+import java.security.KeyStore
+import java.security.SecureRandom
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 import java.util.UUID
 
 object ProfileStore {
     private const val PREFS_NAME = "quicknotes_relay_profiles"
     private const val KEY_ACTIVE_ID = "active_profile_id"
     private const val KEY_PROFILES_JSON = "profiles_json"
+    private const val KEY_PROFILES_ENCRYPTED = "profiles_json_enc"
+    private const val KEYSTORE = "AndroidKeyStore"
+    private const val KEY_ALIAS = "mubx_profile_store_v1"
+    private const val GCM_TAG_BITS = 128
+    private const val IV_BYTES = 12
 
     private lateinit var prefs: SharedPreferences
 
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        // No default seed — users start with a clean empty list and add their own profiles.
+        ensureKey()
+        migratePlaintextProfiles()
     }
 
     fun getActiveProfileId(): String {
@@ -33,13 +49,12 @@ object ProfileStore {
     }
 
     fun getAllProfiles(): List<VpnProfile> {
-        val jsonStr = prefs.getString(KEY_PROFILES_JSON, null) ?: return emptyList()
+        val jsonStr = readEncryptedProfiles() ?: return emptyList()
         val list = mutableListOf<VpnProfile>()
         try {
             val arr = JSONArray(jsonStr)
             for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                list.add(profileFromJson(obj))
+                list.add(profileFromJson(arr.getJSONObject(i)))
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -50,33 +65,109 @@ object ProfileStore {
     fun saveProfile(profile: VpnProfile) {
         val current = getAllProfiles().toMutableList()
         val idx = current.indexOfFirst { it.id == profile.id }
-        if (idx >= 0) {
-            current[idx] = profile
-        } else {
-            current.add(profile)
-        }
+        if (idx >= 0) current[idx] = profile else current.add(profile)
         saveAll(current)
-        if (getActiveProfileId().isEmpty()) {
-            setActiveProfileId(profile.id)
-        }
+        if (getActiveProfileId().isEmpty()) setActiveProfileId(profile.id)
     }
 
     fun deleteProfile(id: String) {
         val current = getAllProfiles().toMutableList()
         current.removeAll { it.id == id }
         saveAll(current)
-        if (getActiveProfileId() == id) {
-            val next = current.firstOrNull()
-            setActiveProfileId(next?.id ?: "")
-        }
+        if (getActiveProfileId() == id) setActiveProfileId(current.firstOrNull()?.id ?: "")
     }
 
     private fun saveAll(profiles: List<VpnProfile>) {
         val arr = JSONArray()
-        for (p in profiles) {
-            arr.put(profileToJson(p))
+        for (p in profiles) arr.put(profileToJson(p))
+        val json = arr.toString()
+        val encrypted = encrypt(json) ?: return
+        prefs.edit()
+            .putString(KEY_PROFILES_ENCRYPTED, encrypted)
+            .remove(KEY_PROFILES_JSON)
+            .apply()
+    }
+
+    private fun migratePlaintextProfiles() {
+        val encrypted = prefs.getString(KEY_PROFILES_ENCRYPTED, null)
+        val plaintext = prefs.getString(KEY_PROFILES_JSON, null)
+        if (encrypted.isNullOrEmpty() && !plaintext.isNullOrEmpty()) {
+            val sealed = encrypt(plaintext)
+            if (sealed != null) {
+                prefs.edit()
+                    .putString(KEY_PROFILES_ENCRYPTED, sealed)
+                    .remove(KEY_PROFILES_JSON)
+                    .apply()
+            }
+        } else if (!encrypted.isNullOrEmpty() && plaintext != null) {
+            prefs.edit().remove(KEY_PROFILES_JSON).apply()
         }
-        prefs.edit().putString(KEY_PROFILES_JSON, arr.toString()).apply()
+    }
+
+    private fun readEncryptedProfiles(): String? {
+        val sealed = prefs.getString(KEY_PROFILES_ENCRYPTED, null)
+        if (sealed.isNullOrEmpty()) return null
+        return decrypt(sealed)
+    }
+
+    private fun ensureKey(): SecretKey? {
+        return try {
+            val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+            if (keyStore.containsAlias(KEY_ALIAS)) {
+                (keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
+            } else {
+                val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
+                generator.init(
+                    KeyGenParameterSpec.Builder(
+                        KEY_ALIAS,
+                        KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+                    )
+                        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                        .setRandomizedEncryptionRequired(true)
+                        .build()
+                )
+                generator.generateKey()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    private fun getKey(): SecretKey? = ensureKey()
+
+    private fun encrypt(plainText: String): String? {
+        val key = getKey() ?: return null
+        return try {
+            val iv = ByteArray(IV_BYTES)
+            SecureRandom().nextBytes(iv)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
+            val ciphertext = cipher.doFinal(plainText.toByteArray(StandardCharsets.UTF_8))
+            Base64.encodeToString(iv, Base64.NO_WRAP) + ":" +
+                Base64.encodeToString(ciphertext, Base64.NO_WRAP)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    private fun decrypt(sealed: String): String? {
+        val key = getKey() ?: return null
+        return try {
+            val parts = sealed.split(":", limit = 2)
+            if (parts.size != 2) return null
+            val iv = Base64.decode(parts[0], Base64.NO_WRAP)
+            val ciphertext = Base64.decode(parts[1], Base64.NO_WRAP)
+            if (iv.size != IV_BYTES || ciphertext.isEmpty()) return null
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
+            String(cipher.doFinal(ciphertext), StandardCharsets.UTF_8)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
     }
 
     private fun profileToJson(p: VpnProfile): JSONObject {
@@ -110,10 +201,9 @@ object ProfileStore {
     }
 
     private fun profileFromJson(obj: JSONObject): VpnProfile {
-        val protoName = obj.optString("protocol", ProtocolType.VLESS_WS.name)
         val proto = try {
-            ProtocolType.valueOf(protoName)
-        } catch (e: Exception) {
+            ProtocolType.valueOf(obj.optString("protocol", ProtocolType.VLESS_WS.name))
+        } catch (_: Exception) {
             ProtocolType.VLESS_WS
         }
 
