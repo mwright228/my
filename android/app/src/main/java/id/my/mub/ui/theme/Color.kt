@@ -2,15 +2,27 @@ package id.my.mub.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val BgObsidian = Color(0xFF080B11)
-val SurfaceCard = Color(0xFF111726)
-val SurfaceCardElevated = Color(0xFF182236)
-val SurfaceCardBorder = Color(0xFF222F47)
+// Modern, human-designed neutral developer palette (Inspired by Linear / Apple / Outline)
+val BgMain = Color(0xFF0E1116)
+val SurfaceCard = Color(0xFF161B22)
+val SurfaceCardElevated = Color(0xFF1F242C)
+val SurfaceCardBorder = Color(0xFF2D333B)
 
-val ElectricCyan = Color(0xFF00F0FF)
-val NeonViolet = Color(0xFF8B5CF6)
-val CyberMint = Color(0xFF00FFA3)
-val CoralRed = Color(0xFFFF3366)
-val AmberGold = Color(0xFFFFB800)
-val SlateGray = Color(0xFF8896AB)
+val AccentPrimary = Color(0xFF3B82F6) // Clean Royal Blue
+val AccentSuccess = Color(0xFF10B981) // Emerald Green
+val AccentWarning = Color(0xFFF59E0B) // Amber
+val AccentError = Color(0xFFEF4444)   // Clean Red
+
+val TextPrimary = Color(0xFFF0F6FC)
+val TextSecondary = Color(0xFF8B949E)
+val TextMuted = Color(0xFF6E7681)
 val PureWhite = Color(0xFFFFFFFF)
+
+// Aliases for compatibility
+val BgObsidian = BgMain
+val ElectricCyan = AccentPrimary
+val NeonViolet = AccentPrimary
+val CyberMint = AccentSuccess
+val CoralRed = AccentError
+val AmberGold = AccentWarning
+val SlateGray = TextSecondary

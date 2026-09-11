@@ -39,7 +39,7 @@
             </intent-filter>
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="MUB-X Telecom Multi-Protocol Tunneling Engine" />
+                android:value="NetPulse Network Performance and Diagnostics Engine" />
         </service>
 
         <service

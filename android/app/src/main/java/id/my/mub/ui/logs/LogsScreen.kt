@@ -26,7 +26,9 @@ import id.my.mub.data.LogRepository
 import id.my.mub.ui.theme.*
 
 @Composable
-fun LogsScreen() {
+fun LogsScreen(
+    onBack: () -> Unit = {}
+) {
     val logs by LogRepository.logs.collectAsState()
     val listState = rememberLazyListState()
     val context = LocalContext.current

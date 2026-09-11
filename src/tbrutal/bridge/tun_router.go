@@ -459,12 +459,22 @@ func (r *TunRouter) handleTCP(packet []byte, ihl int, srcIP, dstIP net.IP) {
 	}
 }
 
+func (r *TunRouter) sendReset(key tcpKey, seq, ack uint32) {
+	srcIP := net.ParseIP(key.dstIP).To4()
+	dstIP := net.ParseIP(key.srcIP).To4()
+	if srcIP != nil && dstIP != nil {
+		rstPkt := craftTCPPacket(srcIP, dstIP, key.dstPort, key.srcPort, seq, ack, 0x04, nil)
+		_, _ = r.writeTun(rstPkt)
+	}
+}
+
 func (r *TunRouter) initSocksConnection(sess *TcpSession, targetHost string, targetPort uint16) {
 	conn, err := net.DialTimeout("tcp", r.socksAddr, 5*time.Second)
 	if err != nil {
 		sess.closed.Store(true)
 		r.sessions.Delete(sess.key)
 		ActiveConns.Add(-1)
+		r.sendReset(sess.key, sess.serverSeq, sess.clientSeq)
 		return
 	}
 
@@ -474,6 +484,7 @@ func (r *TunRouter) initSocksConnection(sess *TcpSession, targetHost string, tar
 		r.sessions.Delete(sess.key)
 		ActiveConns.Add(-1)
 		_ = conn.Close()
+		r.sendReset(sess.key, sess.serverSeq, sess.clientSeq)
 		return
 	}
 	var authResp [2]byte
@@ -482,6 +493,7 @@ func (r *TunRouter) initSocksConnection(sess *TcpSession, targetHost string, tar
 		r.sessions.Delete(sess.key)
 		ActiveConns.Add(-1)
 		_ = conn.Close()
+		r.sendReset(sess.key, sess.serverSeq, sess.clientSeq)
 		return
 	}
 
@@ -502,6 +514,7 @@ func (r *TunRouter) initSocksConnection(sess *TcpSession, targetHost string, tar
 		r.sessions.Delete(sess.key)
 		ActiveConns.Add(-1)
 		_ = conn.Close()
+		r.sendReset(sess.key, sess.serverSeq, sess.clientSeq)
 		return
 	}
 
@@ -511,6 +524,7 @@ func (r *TunRouter) initSocksConnection(sess *TcpSession, targetHost string, tar
 		r.sessions.Delete(sess.key)
 		ActiveConns.Add(-1)
 		_ = conn.Close()
+		r.sendReset(sess.key, sess.serverSeq, sess.clientSeq)
 		return
 	}
 

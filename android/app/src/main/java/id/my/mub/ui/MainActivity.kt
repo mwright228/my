@@ -27,15 +27,15 @@ import id.my.mub.data.VpnState
 import id.my.mub.service.MubxVpnService
 import id.my.mub.ui.config.ConfigEditorScreen
 import id.my.mub.ui.dashboard.DashboardScreen
+import id.my.mub.ui.diagnostics.NetworkDiagnosticsScreen
 import id.my.mub.ui.logs.LogsScreen
-import id.my.mub.ui.profiles.ProfilesScreen
 import id.my.mub.ui.theme.*
 
 enum class NavigationTab(val title: String, val icon: String) {
-    DASHBOARD("Tunnel", "⚡"),
+    DIAGNOSTICS("Network", "📊"),
+    RELAY("Relay", "⚡"),
     CONFIG("Config", "⚙️"),
-    PROFILES("Vault", "📁"),
-    LOGS("Logs", "📜")
+    LOGS("Console", "📜")
 }
 
 class MainActivity : ComponentActivity() {
@@ -46,7 +46,7 @@ class MainActivity : ComponentActivity() {
         if (result.resultCode == RESULT_OK) {
             startVpnService()
         } else {
-            LogRepository.log("VPN", "VPN permission was declined by user", id.my.mub.data.LogLevel.WARN)
+            LogRepository.log("RELAY", "Relay permission was declined by user", id.my.mub.data.LogLevel.WARN)
         }
     }
 
@@ -59,12 +59,13 @@ class MainActivity : ComponentActivity() {
             MubxVpnTheme {
                 val vpnState by MubxVpnService.vpnState.collectAsState()
                 var activeProfile by remember { mutableStateOf(MubxVpnService.currentProfile) }
-                var selectedTab by remember { mutableStateOf(NavigationTab.DASHBOARD) }
+                // First screen is DIAGNOSTICS for complete stealth camouflage
+                var selectedTab by remember { mutableStateOf(NavigationTab.DIAGNOSTICS) }
 
                 Scaffold(
-                    containerColor = BgObsidian,
+                    containerColor = BgMain,
                     bottomBar = {
-                        MubxBottomBar(
+                        NetPulseBottomBar(
                             selectedTab = selectedTab,
                             onTabSelected = { selectedTab = it }
                         )
@@ -76,7 +77,10 @@ class MainActivity : ComponentActivity() {
                             .padding(innerPadding)
                     ) {
                         when (selectedTab) {
-                            NavigationTab.DASHBOARD -> {
+                            NavigationTab.DIAGNOSTICS -> {
+                                NetworkDiagnosticsScreen()
+                            }
+                            NavigationTab.RELAY -> {
                                 DashboardScreen(
                                     vpnState = vpnState,
                                     profile = activeProfile,
@@ -102,40 +106,21 @@ class MainActivity : ComponentActivity() {
                                     onSaveAndDeploy = { updated ->
                                         activeProfile = updated
                                         MubxVpnService.setProfile(updated)
-                                        selectedTab = NavigationTab.DASHBOARD
-                                        if (vpnState is VpnState.Connected || vpnState is VpnState.Connecting) {
-                                            stopVpnService()
-                                        }
-                                        requestAndStartVpn()
+                                        selectedTab = NavigationTab.RELAY
                                     },
-                                    onSaveAsNew = { updated ->
-                                        activeProfile = updated
-                                        MubxVpnService.setProfile(updated)
-                                        selectedTab = NavigationTab.DASHBOARD
+                                    onSaveAsNew = { newProf ->
+                                        activeProfile = newProf
+                                        MubxVpnService.setProfile(newProf)
+                                        selectedTab = NavigationTab.RELAY
                                     }
                                 )
                             }
-                            NavigationTab.PROFILES -> {
-                                ProfilesScreen(
-                                    currentProfile = activeProfile,
-                                    onSelectProfile = { selected ->
-                                        activeProfile = selected
-                                        MubxVpnService.setProfile(selected)
-                                        selectedTab = NavigationTab.DASHBOARD
-                                    },
-                                    onAddProfile = { added ->
-                                        activeProfile = added
-                                        MubxVpnService.setProfile(added)
-                                    },
-                                    onEditProfile = { editTarget ->
-                                        activeProfile = editTarget
-                                        selectedTab = NavigationTab.CONFIG
-                                    },
-                                    onDeleteProfile = { _ -> }
-                                )
-                            }
                             NavigationTab.LOGS -> {
-                                LogsScreen()
+                                LogsScreen(
+                                    onBack = {
+                                        selectedTab = NavigationTab.RELAY
+                                    }
+                                )
                             }
                         }
                     }
@@ -157,7 +142,11 @@ class MainActivity : ComponentActivity() {
         val intent = Intent(this, MubxVpnService::class.java).apply {
             action = MubxVpnService.ACTION_CONNECT
         }
-        startService(intent)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
     }
 
     private fun stopVpnService() {
@@ -184,34 +173,34 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun MubxBottomBar(
+fun NetPulseBottomBar(
     selectedTab: NavigationTab,
     onTabSelected: (NavigationTab) -> Unit
 ) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(BgObsidian)
+            .background(BgMain)
             .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
+                .clip(RoundedCornerShape(16.dp))
                 .background(SurfaceCard)
-                .border(1.dp, SurfaceCardBorder, RoundedCornerShape(20.dp))
-                .padding(vertical = 6.dp, horizontal = 8.dp),
+                .border(1.dp, SurfaceCardBorder, RoundedCornerShape(16.dp))
+                .padding(vertical = 4.dp, horizontal = 6.dp),
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically
         ) {
             NavigationTab.values().forEach { tab ->
                 val isSelected = tab == selectedTab
-                val contentColor = if (isSelected) ElectricCyan else SlateGray
-                val bgTab = if (isSelected) Color(0x2200F0FF) else Color.Transparent
+                val contentColor = if (isSelected) AccentPrimary else TextSecondary
+                val bgTab = if (isSelected) AccentPrimary.copy(alpha = 0.12f) else Color.Transparent
 
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(10.dp))
                         .background(bgTab)
                         .clickable { onTabSelected(tab) }
                         .padding(horizontal = 12.dp, vertical = 6.dp),
@@ -221,13 +210,13 @@ fun MubxBottomBar(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(text = tab.icon, fontSize = 15.sp)
+                        Text(text = tab.icon, fontSize = 14.sp)
                         if (isSelected) {
                             Text(
                                 text = tab.title,
                                 color = contentColor,
                                 fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
                     }

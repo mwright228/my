@@ -5,20 +5,20 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 
 private val DarkColorScheme = darkColorScheme(
-    primary = ElectricCyan,
-    secondary = NeonViolet,
-    tertiary = CyberMint,
-    background = BgObsidian,
+    primary = AccentPrimary,
+    secondary = AccentPrimary,
+    tertiary = AccentSuccess,
+    background = BgMain,
     surface = SurfaceCard,
-    onPrimary = BgObsidian,
+    onPrimary = PureWhite,
     onSecondary = PureWhite,
-    onBackground = PureWhite,
-    onSurface = PureWhite,
-    error = CoralRed
+    onBackground = TextPrimary,
+    onSurface = TextPrimary,
+    error = AccentError
 )
 
 @Composable
-fun MubxTheme(content: @Composable () -> Unit) {
+fun NetPulseTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = DarkColorScheme,
         content = content
@@ -26,5 +26,7 @@ fun MubxTheme(content: @Composable () -> Unit) {
 }
 
 @Composable
-fun MubxVpnTheme(content: @Composable () -> Unit) = MubxTheme(content)
+fun MubxTheme(content: @Composable () -> Unit) = NetPulseTheme(content)
 
+@Composable
+fun MubxVpnTheme(content: @Composable () -> Unit) = NetPulseTheme(content)

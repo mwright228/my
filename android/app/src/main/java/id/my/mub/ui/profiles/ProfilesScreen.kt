@@ -32,69 +32,14 @@ fun ProfilesScreen(
     onEditProfile: (VpnProfile) -> Unit,
     onDeleteProfile: (String) -> Unit
 ) {
-    // Initial fleet profiles
+    // User saved profiles list (starts empty or with user's configured profile)
     var profiles by remember {
         mutableStateOf(
-            listOf(
-                currentProfile,
-                VpnProfile(
-                    name = "Jazz Bug-Host Direct",
-                    serverHost = "filter.ncnd.jazz.com.pk",
-                    serverIp = "212.60.151.69",
-                    serverPort = 80,
-                    bugHostSNI = "filter.ncnd.jazz.com.pk",
-                    protocol = ProtocolType.SSH_PAYLOAD,
-                    poolConcurrency = 2,
-                    brutalRateMbps = 40,
-                    allowInsecureTLS = true
-                ),
-                VpnProfile(
-                    name = "Vodafone Ultra Turbo",
-                    serverHost = "gr.mub.my.id",
-                    serverIp = "212.60.151.69",
-                    serverPort = 443,
-                    bugHostSNI = "images.vodafone.co.uk",
-                    protocol = ProtocolType.T_BRUTAL,
-                    poolConcurrency = 8,
-                    brutalRateMbps = 150,
-                    allowInsecureTLS = true
-                ),
-                VpnProfile(
-                    name = "ZiVPN UDP Anti-DPI Bypass",
-                    serverHost = "gr.mub.my.id",
-                    serverIp = "212.60.151.69",
-                    serverPort = 5667,
-                    bugHostSNI = "",
-                    protocol = ProtocolType.ZIVPN_UDP,
-                    poolConcurrency = 1,
-                    brutalRateMbps = 60,
-                    allowInsecureTLS = true,
-                    udpObfsPassword = "zivpn",
-                    udpPortHopRange = "6000:19999"
-                ),
-                VpnProfile(
-                    name = "Gaming Low-Ping UDP",
-                    serverHost = "gr.mub.my.id",
-                    serverIp = "212.60.151.69",
-                    serverPort = 8443,
-                    bugHostSNI = "gr.mub.my.id",
-                    protocol = ProtocolType.HYSTERIA_2,
-                    poolConcurrency = 4,
-                    brutalRateMbps = 100,
-                    allowInsecureTLS = false
-                ),
-                VpnProfile(
-                    name = "AmneziaWG Stealth WireGuard",
-                    serverHost = "gr.mub.my.id",
-                    serverIp = "212.60.151.69",
-                    serverPort = 51820,
-                    bugHostSNI = "",
-                    protocol = ProtocolType.AMNEZIA_WG,
-                    poolConcurrency = 1,
-                    brutalRateMbps = 0,
-                    allowInsecureTLS = false
-                )
-            )
+            if (currentProfile.serverHost.isNotBlank() || currentProfile.serverIp.isNotBlank()) {
+                listOf(currentProfile)
+            } else {
+                emptyList()
+            }
         )
     }
 
@@ -188,7 +133,29 @@ fun ProfilesScreen(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(profiles, key = { it.id }) { item ->
+            if (profiles.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, SurfaceCardBorder, RoundedCornerShape(12.dp)),
+                        colors = CardDefaults.cardColors(containerColor = SurfaceCard),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text("No Configurations Saved", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text("Import a link above or create a new node in the Config tab.", fontSize = 12.sp, color = TextSecondary)
+                        }
+                    }
+                }
+            } else {
+                items(profiles, key = { it.id }) { item ->
                 val isSelected = item.id == currentProfile.id
 
                 ProfileCard(

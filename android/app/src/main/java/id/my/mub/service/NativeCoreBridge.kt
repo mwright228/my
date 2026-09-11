@@ -60,10 +60,17 @@ object NativeCoreBridge {
      */
     suspend fun startTunnel(profile: VpnProfile): Result<Int> = withContext(Dispatchers.IO) {
         try {
-            LogRepository.log("TUNNEL", "Initiating ${profile.protocol.displayName} to ${profile.serverIp}:${profile.serverPort}")
+            val host = if (profile.serverIp.isNotBlank()) profile.serverIp else profile.serverHost
+            if (host.isBlank()) {
+                val err = "Server host/IP is required. Please check your configuration."
+                LogRepository.log("TUNNEL", err, LogLevel.ERROR)
+                return@withContext Result.failure(IllegalArgumentException(err))
+            }
+
+            LogRepository.log("TUNNEL", "Initiating ${profile.protocol.displayName} to $host:${profile.serverPort}")
             val port = nativeStartTunnel(
                 protocol = profile.protocol.name,
-                serverAddr = "${profile.serverIp}:${profile.serverPort}",
+                serverAddr = "$host:${profile.serverPort}",
                 sni = profile.bugHostSNI,
                 hostHeader = profile.serverHost,
                 token = profile.userUUID,
@@ -78,16 +85,26 @@ object NativeCoreBridge {
                 customPayload = profile.customPayload
             )
             if (port > 0) {
-                LogRepository.log("TUNNEL", "Local SOCKS5 proxy active on 127.0.0.1:$port", LogLevel.SUCCESS)
-                Result.success(port)
+                // Pre-flight probe: verify SOCKS port is truly listening and accepting TCP
+                try {
+                    java.net.Socket().use { testSock ->
+                        testSock.connect(java.net.InetSocketAddress("127.0.0.1", port), 500)
+                    }
+                    LogRepository.log("TUNNEL", "Local SOCKS5 proxy active & verified on 127.0.0.1:$port", LogLevel.SUCCESS)
+                    Result.success(port)
+                } catch (sockErr: Exception) {
+                    val err = "SOCKS proxy on port $port failed connectivity check: ${sockErr.message}"
+                    LogRepository.log("TUNNEL", err, LogLevel.ERROR)
+                    Result.failure(IllegalStateException(err))
+                }
             } else {
-                val err = "Native tunnel start returned invalid port: $port"
+                val err = "Connection to server failed (code $port). Verify server address, port, and credentials."
                 LogRepository.log("TUNNEL", err, LogLevel.ERROR)
                 Result.failure(Exception(err))
             }
         } catch (e: Throwable) {
-            LogRepository.log("TUNNEL", "Tunnel fallback: ${e.message}", LogLevel.WARN)
-            Result.success(10808)
+            LogRepository.log("TUNNEL", "Tunnel start error: ${e.message}", LogLevel.ERROR)
+            Result.failure(e)
         }
     }
 

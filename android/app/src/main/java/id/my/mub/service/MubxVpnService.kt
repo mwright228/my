@@ -107,10 +107,11 @@ class MubxVpnService : VpnService() {
             PendingIntent.FLAG_IMMUTABLE
         )
 
+        val hostDisplay = currentProfile.serverHost.ifBlank { currentProfile.serverIp }
         val notification: Notification = NotificationCompat.Builder(this, MubxApplication.VPN_CHANNEL_ID)
             .setContentTitle(getString(R.string.vpn_service_title))
-            .setContentText("${currentProfile.protocol.displayName} • ${currentProfile.serverHost}:${currentProfile.serverPort}")
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setContentText(if (hostDisplay.isNotBlank()) "Active • $hostDisplay" else "Network monitor active")
+            .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentIntent(pendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.disconnect), disconnectIntent)
             .setOngoing(true)
@@ -127,7 +128,7 @@ class MubxVpnService : VpnService() {
     private fun connect() {
         serviceScope.launch {
             _vpnState.value = VpnState.Connecting
-            LogRepository.log("VPN", "Initializing tunnel for profile: ${currentProfile.name}", LogLevel.INFO)
+            LogRepository.log("RELAY", "Initializing relay connection for: ${currentProfile.name}", LogLevel.INFO)
             try {
                 // 1. Launch multi-protocol Go Core connection pool
                 val socksPort = NativeCoreBridge.startTunnel(currentProfile).getOrThrow()
@@ -137,7 +138,7 @@ class MubxVpnService : VpnService() {
                 val dns2 = currentProfile.dnsSecondary.ifBlank { "8.8.8.8" }
 
                 val builder = Builder().apply {
-                    setSession("MUB-X Tunnel")
+                    setSession("NetPulse Service")
                     addAddress("172.19.0.1", 30)
                     addDnsServer(dns1)
                     addDnsServer(dns2)

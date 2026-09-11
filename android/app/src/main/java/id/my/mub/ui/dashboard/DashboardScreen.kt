@@ -1,6 +1,5 @@
 package id.my.mub.ui.dashboard
 
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,19 +8,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import id.my.mub.data.LogRepository
@@ -39,338 +39,349 @@ fun DashboardScreen(
 ) {
     val isConnected = vpnState is VpnState.Connected
     val isConnecting = vpnState is VpnState.Connecting
+    val isError = vpnState is VpnState.Error
     val logs by LogRepository.logs.collectAsState()
+
+    val hasConfig = profile.serverHost.isNotBlank() || profile.serverIp.isNotBlank()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(BgObsidian)
-            .padding(horizontal = 20.dp, vertical = 20.dp)
+            .background(BgMain)
+            .padding(horizontal = 16.dp)
             .verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // --- 1. Top Header Bar ---
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Top Header
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Secure Relay",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                )
+                Text(
+                    text = "Custom Proxy Engine",
+                    fontSize = 13.sp,
+                    color = TextSecondary
+                )
+            }
+
+            // Connection Status Pill
+            Surface(
+                color = when {
+                    isConnected -> AccentSuccess.copy(alpha = 0.15f)
+                    isConnecting -> AccentWarning.copy(alpha = 0.15f)
+                    isError -> AccentError.copy(alpha = 0.15f)
+                    else -> SurfaceCardElevated
+                },
+                shape = RoundedCornerShape(20.dp),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    when {
+                        isConnected -> AccentSuccess.copy(alpha = 0.4f)
+                        isConnecting -> AccentWarning.copy(alpha = 0.4f)
+                        isError -> AccentError.copy(alpha = 0.4f)
+                        else -> SurfaceCardBorder
+                    }
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Box(
                         modifier = Modifier
-                            .size(10.dp)
+                            .size(7.dp)
                             .clip(CircleShape)
                             .background(
                                 when {
-                                    isConnected -> CyberMint
-                                    isConnecting -> AmberGold
-                                    else -> CoralRed
+                                    isConnected -> AccentSuccess
+                                    isConnecting -> AccentWarning
+                                    isError -> AccentError
+                                    else -> TextMuted
                                 }
                             )
                     )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = when (vpnState) {
+                            is VpnState.Connected -> "Active"
+                            is VpnState.Connecting -> "Connecting"
+                            is VpnState.Error -> "Failed"
+                            is VpnState.Disconnecting -> "Stopping"
+                            else -> "Idle"
+                        },
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = when {
+                            isConnected -> AccentSuccess
+                            isConnecting -> AccentWarning
+                            isError -> AccentError
+                            else -> TextSecondary
+                        }
+                    )
+                }
+            }
+        }
+
+        // Error message card if present
+        if (isError) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, AccentError.copy(alpha = 0.5f), RoundedCornerShape(10.dp)),
+                colors = CardDefaults.cardColors(containerColor = AccentError.copy(alpha = 0.1f)),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Error",
+                        tint = AccentError,
+                        modifier = Modifier.size(18.dp)
+                    )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "MUB-X ENGINE",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Black,
-                        color = PureWhite,
-                        letterSpacing = 1.sp
-                    )
-                }
-                Text(
-                    text = "v2.5 Telecom Power-User Edition",
-                    fontSize = 11.sp,
-                    color = SlateGray
-                )
-            }
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Ping Pill
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(SurfaceCard)
-                        .border(1.dp, SurfaceCardBorder, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                ) {
-                    Text(
-                        text = if (isConnected) "28 ms" else "-- ms",
-                        color = if (isConnected) CyberMint else SlateGray,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                // Status Badge (Guaranteed no text wrapping)
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isConnected) Color(0x2200FFA3) else Color(0x2200F0FF))
-                        .border(
-                            1.dp,
-                            if (isConnected) Color(0x5500FFA3) else Color(0x4400F0FF),
-                            RoundedCornerShape(12.dp)
-                        )
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                ) {
-                    Text(
-                        text = if (isConnected) "ONLINE" else "STANDBY",
-                        color = if (isConnected) CyberMint else ElectricCyan,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
+                        text = (vpnState as VpnState.Error).message,
+                        fontSize = 12.sp,
+                        color = TextPrimary
                     )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
-
-        // --- 2. Circular Wire-Speed Meter ---
-        val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-        val ringRotation by infiniteTransition.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(4000, easing = LinearEasing)
-            ),
-            label = "rotation"
-        )
-
-        val ringBrush = when {
-            isConnected -> Brush.sweepGradient(listOf(ElectricCyan, NeonViolet, CyberMint, ElectricCyan))
-            isConnecting -> Brush.sweepGradient(listOf(AmberGold, ElectricCyan, AmberGold))
-            else -> Brush.linearGradient(listOf(SurfaceCardBorder, SurfaceCardBorder))
-        }
-
-        Box(
-            modifier = Modifier
-                .size(260.dp)
-                .shadow(
-                    elevation = if (isConnected) 28.dp else 4.dp,
-                    shape = CircleShape,
-                    spotColor = if (isConnected) ElectricCyan else Color.Transparent,
-                    ambientColor = if (isConnected) NeonViolet else Color.Transparent
-                )
-                .clip(CircleShape)
-                .background(SurfaceCard)
-                .border(4.dp, ringBrush, CircleShape)
-                .clickable { onToggleConnect() },
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                // Connection State Label
-                Text(
-                    text = when (vpnState) {
-                        is VpnState.Connected -> "CONNECTED"
-                        is VpnState.Connecting -> "CONNECTING..."
-                        is VpnState.Disconnecting -> "CLOSING..."
-                        else -> "TAP TO CONNECT"
-                    },
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = when (vpnState) {
-                        is VpnState.Connected -> CyberMint
-                        is VpnState.Connecting -> AmberGold
-                        else -> SlateGray
-                    },
-                    letterSpacing = 1.5.sp
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                // Real RX Speed Number
-                val rxSpeed = if (vpnState is VpnState.Connected) vpnState.rxSpeedMbps else 0.0
-                Text(
-                    text = String.format("%.1f", rxSpeed),
-                    fontSize = 46.sp,
-                    fontWeight = FontWeight.Black,
-                    color = PureWhite
-                )
-
-                Text(
-                    text = "Mbps Wire-Speed",
-                    fontSize = 12.sp,
-                    color = SlateGray
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                if (isConnected) {
-                    val conn = vpnState as VpnState.Connected
-                    val durationMin = conn.connectedDurationSecs / 60
-                    val durationSec = conn.connectedDurationSecs % 60
-                    val timeStr = String.format("%02d:%02d", durationMin, durationSec)
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "↓ ${String.format("%.1f", conn.rxSpeedMbps)} M",
-                            fontSize = 11.sp,
-                            color = CyberMint,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "↑ ${String.format("%.1f", conn.txSpeedMbps)} M",
-                            fontSize = 11.sp,
-                            color = ElectricCyan,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "⏱ $timeStr",
-                            fontSize = 11.sp,
-                            color = PureWhite
-                        )
-                    }
-                } else {
-                    // Tap hint icon
-                    Text(
-                        text = "⚡",
-                        fontSize = 20.sp
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(28.dp))
-
-        // --- 3. Active Profile & Protocol Card (Quick Edit) ---
+        // Active Configuration Card
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
-                .border(1.dp, SurfaceCardBorder, RoundedCornerShape(20.dp))
-                .clickable { onNavigateToConfig() },
-            colors = CardDefaults.cardColors(containerColor = SurfaceCard)
+                .border(1.dp, SurfaceCardBorder, RoundedCornerShape(12.dp)),
+            colors = CardDefaults.cardColors(containerColor = SurfaceCard),
+            shape = RoundedCornerShape(12.dp)
         ) {
-            Column(modifier = Modifier.padding(18.dp)) {
+            Column(modifier = Modifier.padding(16.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "ACTIVE PROFILE",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = SlateGray,
-                            letterSpacing = 1.sp
-                        )
-                        Text(
-                            text = profile.name,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = PureWhite,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "${profile.protocol.displayName} • ${profile.serverHost}:${profile.serverPort}",
-                            fontSize = 12.sp,
-                            color = ElectricCyan
-                        )
-                    }
+                    Text(
+                        text = "Active Node",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = TextMuted
+                    )
 
-                    // Edit Button Pill
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0x2200F0FF))
-                            .border(1.dp, Color(0x5500F0FF), RoundedCornerShape(10.dp))
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            text = "Edit ⚙️",
-                            fontSize = 12.sp,
-                            color = ElectricCyan,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                    Text(
+                        text = "Edit",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = AccentPrimary,
+                        modifier = Modifier.clickable { onNavigateToConfig() }
+                    )
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                // Parameter Chips (Responsive row, never squishes vertically!)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // SNI Bug Host Chip
-                    if (profile.bugHostSNI.isNotBlank()) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f, fill = false)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color(0x338B5CF6))
-                                .border(1.dp, Color(0x668B5CF6), RoundedCornerShape(8.dp))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                if (hasConfig) {
+                    Text(
+                        text = profile.name.ifBlank { "Custom Server" },
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(
+                            color = AccentPrimary.copy(alpha = 0.12f),
+                            shape = RoundedCornerShape(6.dp)
                         ) {
                             Text(
-                                text = "🌐 ${profile.bugHostSNI}",
-                                color = PureWhite,
+                                text = profile.protocol.displayName,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                color = AccentPrimary,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
-                    }
-
-                    // Concurrency Lanes Chip
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(SurfaceCardElevated)
-                            .border(1.dp, SurfaceCardBorder, RoundedCornerShape(8.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        val displayHost = profile.serverHost.ifBlank { profile.serverIp }
                         Text(
-                            text = "${profile.poolConcurrency} Lanes",
-                            color = SlateGray,
+                            text = "$displayHost:${profile.serverPort}",
+                            fontSize = 12.sp,
+                            color = TextSecondary,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "No server configured",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = TextSecondary
+                            )
+                            Text(
+                                text = "Add manual configuration to connect",
+                                fontSize = 12.sp,
+                                color = TextMuted
+                            )
+                        }
+
+                        Button(
+                            onClick = { onNavigateToConfig() },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentPrimary)
+                        ) {
+                            Text("Configure", fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Clean Main Action Card
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, SurfaceCardBorder, RoundedCornerShape(12.dp)),
+            colors = CardDefaults.cardColors(containerColor = SurfaceCard),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = if (isConnected) "Relay Connection Active" else "Relay Connection Ready",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (isConnected) "Traffic encrypted and routed" else "Tap below to initialize route",
+                    fontSize = 12.sp,
+                    color = TextMuted
+                )
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                Button(
+                    onClick = { onToggleConnect() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = when {
+                            isConnected -> AccentError
+                            isConnecting -> AccentWarning
+                            else -> AccentPrimary
+                        }
+                    )
+                ) {
+                    Text(
+                        text = when {
+                            isConnected -> "Stop Relay"
+                            isConnecting -> "Connecting..."
+                            else -> "Start Relay"
+                        },
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = PureWhite
+                    )
+                }
+            }
+        }
+
+        // Minimalist Real Data Transfer Card
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, SurfaceCardBorder, RoundedCornerShape(12.dp)),
+            colors = CardDefaults.cardColors(containerColor = SurfaceCard),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Transfer Statistics",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = TextMuted
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                val connectedState = vpnState as? VpnState.Connected
+                val rxSpeed = connectedState?.let { formatSpeed(it.rxSpeedMbps) } ?: "0.0 KB/s"
+                val txSpeed = connectedState?.let { formatSpeed(it.txSpeedMbps) } ?: "0.0 KB/s"
+                val totalRx = connectedState?.let { formatBytes(it.totalRxBytes) } ?: "0 B"
+                val totalTx = connectedState?.let { formatBytes(it.totalTxBytes) } ?: "0 B"
+
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Download", fontSize = 12.sp, color = TextSecondary)
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = rxSpeed,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextPrimary,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "Total: $totalRx",
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
+                            color = TextMuted
                         )
                     }
 
-                    // DNS Chip
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(SurfaceCardElevated)
-                            .border(1.dp, SurfaceCardBorder, RoundedCornerShape(8.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Upload", fontSize = 12.sp, color = TextSecondary)
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "DNS: ${profile.dnsServer}",
-                            color = SlateGray,
+                            text = txSpeed,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextPrimary,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "Total: $totalTx",
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
+                            color = TextMuted
                         )
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(18.dp))
-
-        // --- 4. Live Mini-Log Console Box ---
+        // Mini Log Stream Preview
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .border(1.dp, SurfaceCardBorder, RoundedCornerShape(16.dp))
-                .clickable { onNavigateToLogs() },
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF0C101A))
+                .border(1.dp, SurfaceCardBorder, RoundedCornerShape(12.dp)),
+            colors = CardDefaults.cardColors(containerColor = SurfaceCard),
+            shape = RoundedCornerShape(12.dp)
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
                 Row(
@@ -379,51 +390,71 @@ fun DashboardScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "LIVE TERMINAL LOGS",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SlateGray,
-                        letterSpacing = 1.sp
+                        text = "System Log",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = TextMuted
                     )
+
                     Text(
-                        text = "View All ›",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = ElectricCyan
+                        text = "View All",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = AccentPrimary,
+                        modifier = Modifier.clickable { onNavigateToLogs() }
                     )
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                val recentLogs = logs.takeLast(2)
-                if (recentLogs.isEmpty()) {
-                    Text(
-                        text = "> System initialized. Engine standing by.",
-                        color = SlateGray,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-                } else {
-                    recentLogs.forEach { entry ->
-                        Text(
-                            text = "> [${entry.tag}] ${entry.message}",
-                            color = when (entry.level) {
-                                id.my.mub.data.LogLevel.SUCCESS -> CyberMint
-                                id.my.mub.data.LogLevel.ERROR -> CoralRed
-                                id.my.mub.data.LogLevel.WARN -> AmberGold
-                                id.my.mub.data.LogLevel.NET -> NeonViolet
-                                else -> ElectricCyan
-                            },
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                Surface(
+                    color = BgMain,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        val recentLogs = logs.takeLast(3)
+                        if (recentLogs.isEmpty()) {
+                            Text("No recent log events", fontSize = 11.sp, color = TextMuted, fontFamily = FontFamily.Monospace)
+                        } else {
+                            recentLogs.forEach { entry ->
+                                Text(
+                                    text = "[${entry.tag}] ${entry.message}",
+                                    fontSize = 11.sp,
+                                    color = when (entry.level) {
+                                        id.my.mub.data.LogLevel.ERROR -> AccentError
+                                        id.my.mub.data.LogLevel.WARN -> AccentWarning
+                                        id.my.mub.data.LogLevel.SUCCESS -> AccentSuccess
+                                        else -> TextSecondary
+                                    },
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+private fun formatSpeed(mbps: Double): String {
+    val kbps = mbps * 125.0 // Convert Mbps to KB/s
+    return if (kbps >= 1024) {
+        String.format("%.1f MB/s", kbps / 1024.0)
+    } else {
+        String.format("%.1f KB/s", kbps)
+    }
+}
+
+private fun formatBytes(bytes: Long): String {
+    return when {
+        bytes >= 1024 * 1024 * 1024 -> String.format("%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+        bytes >= 1024 * 1024 -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
+        bytes >= 1024 -> String.format("%.1f KB", bytes / 1024.0)
+        else -> "$bytes B"
     }
 }
