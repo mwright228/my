@@ -3,6 +3,8 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
 	"errors"
 	"io"
 	"log"
@@ -28,9 +30,7 @@ type prefixConn struct {
 	reader io.Reader
 }
 
-func (c *prefixConn) Read(p []byte) (int, error) {
-	return c.reader.Read(p)
-}
+func (c *prefixConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
 
 type chanListener struct {
 	addr    net.Addr
@@ -40,19 +40,13 @@ type chanListener struct {
 }
 
 func newChanListener(addr net.Addr) *chanListener {
-	return &chanListener{
-		addr:    addr,
-		conns:   make(chan net.Conn, 256),
-		closeCh: make(chan struct{}),
-	}
+	return &chanListener{addr: addr, conns: make(chan net.Conn, 256), closeCh: make(chan struct{})}
 }
 
 func (l *chanListener) Accept() (net.Conn, error) {
 	select {
 	case c, ok := <-l.conns:
-		if !ok {
-			return nil, net.ErrClosed
-		}
+		if !ok { return nil, net.ErrClosed }
 		return c, nil
 	case <-l.closeCh:
 		return nil, net.ErrClosed
@@ -60,23 +54,17 @@ func (l *chanListener) Accept() (net.Conn, error) {
 }
 
 func (l *chanListener) Close() error {
-	if l.closed.CompareAndSwap(false, true) {
-		close(l.closeCh)
-	}
+	if l.closed.CompareAndSwap(false, true) { close(l.closeCh) }
 	return nil
 }
 
 func (l *chanListener) Addr() net.Addr {
-	if l.addr != nil {
-		return l.addr
-	}
+	if l.addr != nil { return l.addr }
 	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 18999}
 }
 
 func (l *chanListener) Feed(c net.Conn) error {
-	if l.closed.Load() {
-		return net.ErrClosed
-	}
+	if l.closed.Load() { return net.ErrClosed }
 	select {
 	case l.conns <- c:
 		return nil
@@ -98,20 +86,13 @@ type Server struct {
 }
 
 func NewServer(cfg Config) *Server {
-	if cfg.ListenAddr == "" {
-		cfg.ListenAddr = "127.0.0.1:18999"
-	}
-	if cfg.UsersFile == "" {
-		cfg.UsersFile = "/etc/mubx/users.json"
-	}
-
-	authStore := auth.NewStore(cfg.UsersFile)
-	p := pacer.NewPacer(cfg.RateMbps)
+	if cfg.ListenAddr == "" { cfg.ListenAddr = "127.0.0.1:18999" }
+	if cfg.UsersFile == "" { cfg.UsersFile = "/etc/mubx/users.json" }
 
 	s := &Server{
 		cfg:       cfg,
-		authStore: authStore,
-		pacer:     p,
+		authStore: auth.NewStore(cfg.UsersFile),
+		pacer:     pacer.NewPacer(cfg.RateMbps),
 	}
 
 	mux := http.NewServeMux()
@@ -120,36 +101,33 @@ func NewServer(cfg Config) *Server {
 	mux.HandleFunc("/", s.handleUpgrade)
 
 	s.httpServer = &http.Server{
-		Addr:         cfg.ListenAddr,
-		Handler:      mux,
-		ReadTimeout:  0,
-		WriteTimeout: 0,
-		IdleTimeout:  120 * time.Second,
+		Addr:              cfg.ListenAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    32 << 10,
 	}
-
 	return s
 }
 
-func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
-	upg := strings.ToLower(r.Header.Get("Upgrade"))
-	connHdr := strings.ToLower(r.Header.Get("Connection"))
+func websocketAccept(key string) string {
+	sum := sha1.Sum([]byte(strings.TrimSpace(key) + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
 
-	if upg != "tbrutal" && upg != "websocket" && !strings.Contains(connHdr, "upgrade") {
+func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
+	upg := strings.TrimSpace(strings.ToLower(r.Header.Get("Upgrade")))
+	connHdr := strings.ToLower(r.Header.Get("Connection"))
+	if (upg != "tbrutal" && upg != "websocket") || !strings.Contains(connHdr, "upgrade") {
 		http.Error(w, "Bad Request: T-Brutal Upgrade required", http.StatusBadRequest)
 		return
 	}
 
 	hj, ok := w.(http.Hijacker)
-	if !ok {
-		http.Error(w, "Server does not support hijacking", http.StatusInternalServerError)
-		return
-	}
-
+	if !ok { http.Error(w, "Server does not support hijacking", http.StatusInternalServerError); return }
 	conn, buf, err := hj.Hijack()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	if err != nil { return }
 
 	if tc, ok := conn.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)
@@ -157,51 +135,42 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 		_ = tc.SetKeepAlivePeriod(30 * time.Second)
 	}
 
-	// Send RFC 6455 compliant HTTP 101 Switching Protocols response
-	resp := "HTTP/1.1 101 Switching Protocols\r\n" +
-		"Upgrade: websocket\r\n" +
-		"Connection: Upgrade\r\n" +
-		"Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n" +
-		"\r\n"
-	if _, err := buf.WriteString(resp); err != nil {
-		_ = conn.Close()
-		return
-	}
-	if err := buf.Flush(); err != nil {
-		_ = conn.Close()
-		return
+	accept := ""
+	if upg == "websocket" {
+		key := strings.TrimSpace(r.Header.Get("Sec-WebSocket-Key"))
+		if key == "" { _ = conn.Close(); return }
+		accept = websocketAccept(key)
 	}
 
-	session := NewSession(conn, s.authStore, s.pacer)
-	go session.Handle()
+	resp := "HTTP/1.1 101 Switching Protocols\r\n" +
+		"Upgrade: " + upg + "\r\n" +
+		"Connection: Upgrade\r\n"
+	if accept != "" { resp += "Sec-WebSocket-Accept: " + accept + "\r\n" }
+	resp += "\r\n"
+	if _, err := buf.WriteString(resp); err != nil { _ = conn.Close(); return }
+	if err := buf.Flush(); err != nil { _ = conn.Close(); return }
+
+	go NewSession(conn, s.authStore, s.pacer).Handle()
 }
 
 func (s *Server) Start() error {
 	log.Printf("[*] T-Brutal server listening on %s (Pacer: %d Mbps, Users: %s, Dual: Raw+HTTP)", s.cfg.ListenAddr, s.cfg.RateMbps, s.cfg.UsersFile)
 	ln, err := net.Listen("tcp", s.cfg.ListenAddr)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 	return s.Serve(ln)
 }
 
 func (s *Server) Serve(ln net.Listener) error {
 	s.listener = ln
 	s.chanLn = newChanListener(ln.Addr())
-
-	go func() {
-		_ = s.httpServer.Serve(s.chanLn)
-	}()
+	go func() { _ = s.httpServer.Serve(s.chanLn) }()
 
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			if s.closed.Load() {
-				return nil
-			}
+			if s.closed.Load() { return nil }
 			return err
 		}
-
 		go s.dispatchConn(conn)
 	}
 }
@@ -211,45 +180,26 @@ func (s *Server) dispatchConn(conn net.Conn) {
 	prefix := make([]byte, 2)
 	n, err := io.ReadFull(conn, prefix)
 	_ = conn.SetReadDeadline(time.Time{})
-	if err != nil {
-		_ = conn.Close()
-		return
-	}
+	if err != nil { _ = conn.Close(); return }
 
-	wrapped := &prefixConn{
-		Conn:   conn,
-		reader: io.MultiReader(bytes.NewReader(prefix[:n]), conn),
-	}
-
-	// Sniff for T-Brutal raw protocol magic: Magic0=0x54 ('T'), Magic1=0x42 ('B')
+	wrapped := &prefixConn{Conn: conn, reader: io.MultiReader(bytes.NewReader(prefix[:n]), conn)}
 	if n >= 2 && prefix[0] == protocol.Magic0 && prefix[1] == protocol.Magic1 {
 		if tc, ok := conn.(*net.TCPConn); ok {
 			_ = tc.SetNoDelay(true)
 			_ = tc.SetKeepAlive(true)
 			_ = tc.SetKeepAlivePeriod(30 * time.Second)
 		}
-		session := NewSession(wrapped, s.authStore, s.pacer)
-		go session.Handle()
+		go NewSession(wrapped, s.authStore, s.pacer).Handle()
 		return
 	}
 
-	// Forward to internal HTTP server for HTTP Upgrade negotiation
-	if s.chanLn != nil {
-		if err := s.chanLn.Feed(wrapped); err != nil {
-			_ = wrapped.Close()
-		}
-	} else {
-		_ = wrapped.Close()
-	}
+	if s.chanLn == nil { _ = wrapped.Close(); return }
+	if err := s.chanLn.Feed(wrapped); err != nil { _ = wrapped.Close() }
 }
 
 func (s *Server) Stop(ctx context.Context) error {
 	s.closed.Store(true)
-	if s.listener != nil {
-		_ = s.listener.Close()
-	}
-	if s.chanLn != nil {
-		_ = s.chanLn.Close()
-	}
+	if s.listener != nil { _ = s.listener.Close() }
+	if s.chanLn != nil { _ = s.chanLn.Close() }
 	return s.httpServer.Shutdown(ctx)
 }
