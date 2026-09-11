@@ -3,7 +3,10 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -120,21 +123,27 @@ func NewServer(cfg Config) *Server {
 	mux.HandleFunc("/", s.handleUpgrade)
 
 	s.httpServer = &http.Server{
-		Addr:         cfg.ListenAddr,
-		Handler:      mux,
-		ReadTimeout:  0,
-		WriteTimeout: 0,
-		IdleTimeout:  120 * time.Second,
+		Addr:           cfg.ListenAddr,
+		Handler:        mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:   15 * time.Second,
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 32 << 10,
 	}
 
 	return s
 }
 
+func websocketAccept(key string) string {
+	sum := sha1.Sum([]byte(strings.TrimSpace(key) + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
 func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
-	upg := strings.ToLower(r.Header.Get("Upgrade"))
+	upg := strings.TrimSpace(strings.ToLower(r.Header.Get("Upgrade")))
 	connHdr := strings.ToLower(r.Header.Get("Connection"))
 
-	if upg != "tbrutal" && upg != "websocket" && !strings.Contains(connHdr, "upgrade") {
+	if (upg != "tbrutal" && upg != "websocket") || !strings.Contains(connHdr, "upgrade") {
 		http.Error(w, "Bad Request: T-Brutal Upgrade required", http.StatusBadRequest)
 		return
 	}
@@ -157,12 +166,24 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 		_ = tc.SetKeepAlivePeriod(30 * time.Second)
 	}
 
-	// Send RFC 6455 compliant HTTP 101 Switching Protocols response
+	key := strings.TrimSpace(r.Header.Get("Sec-WebSocket-Key"))
+	accept := ""
+	if upg == "websocket" {
+		if key == "" {
+			_ = conn.Close()
+			return
+		}
+		accept = websocketAccept(key)
+	}
+
 	resp := "HTTP/1.1 101 Switching Protocols\r\n" +
-		"Upgrade: websocket\r\n" +
-		"Connection: Upgrade\r\n" +
-		"Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n" +
-		"\r\n"
+		"Upgrade: " + upg + "\r\n" +
+		"Connection: Upgrade\r\n"
+	if accept != "" {
+		resp += "Sec-WebSocket-Accept: " + accept + "\r\n"
+	}
+	resp += "\r\n"
+
 	if _, err := buf.WriteString(resp); err != nil {
 		_ = conn.Close()
 		return
@@ -221,7 +242,6 @@ func (s *Server) dispatchConn(conn net.Conn) {
 		reader: io.MultiReader(bytes.NewReader(prefix[:n]), conn),
 	}
 
-	// Sniff for T-Brutal raw protocol magic: Magic0=0x54 ('T'), Magic1=0x42 ('B')
 	if n >= 2 && prefix[0] == protocol.Magic0 && prefix[1] == protocol.Magic1 {
 		if tc, ok := conn.(*net.TCPConn); ok {
 			_ = tc.SetNoDelay(true)
@@ -233,7 +253,6 @@ func (s *Server) dispatchConn(conn net.Conn) {
 		return
 	}
 
-	// Forward to internal HTTP server for HTTP Upgrade negotiation
 	if s.chanLn != nil {
 		if err := s.chanLn.Feed(wrapped); err != nil {
 			_ = wrapped.Close()
@@ -253,3 +272,5 @@ func (s *Server) Stop(ctx context.Context) error {
 	}
 	return s.httpServer.Shutdown(ctx)
 }
+
+var _ = fmt.Sprintf
