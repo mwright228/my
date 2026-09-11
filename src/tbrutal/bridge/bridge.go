@@ -14,6 +14,9 @@ import (
 	"github.com/mwright228/my/src/tbrutal/client"
 )
 
+type socketProtectorHolder struct{ fn func(int) bool }
+type loggerHolder struct{ fn func(string, string) }
+
 var (
 	activeClient *client.Client
 	activeZiVPN *ZiVPNClient
@@ -24,15 +27,18 @@ var (
 	socksPort int
 	protectHook atomic.Value
 	logHook atomic.Value
+	sshFingerprint atomic.Value
 	TotalRxBytes atomic.Uint64
 	TotalTxBytes atomic.Uint64
 	ActiveConns atomic.Int32
 )
 
-func SetSocketProtector(fn func(fd int) bool) { protectHook.Store(fn); client.SetSocketProtector(fn) }
-func ProtectSocket(fd int) bool { v := protectHook.Load(); if v == nil { return false }; return v.(func(int) bool)(fd) }
-func SetLogger(fn func(tag,msg string)) { logHook.Store(fn) }
-func LogMsg(tag,msg string) { v:=logHook.Load(); if v!=nil { v.(func(string,string))(tag,msg) } }
+func SetSocketProtector(fn func(fd int) bool) { protectHook.Store(socketProtectorHolder{fn: fn}); client.SetSocketProtector(fn) }
+func ProtectSocket(fd int) bool { v, ok := protectHook.Load().(socketProtectorHolder); if !ok || v.fn == nil { return false }; return v.fn(fd) }
+func SetLogger(fn func(tag,msg string)) { logHook.Store(loggerHolder{fn: fn}) }
+func LogMsg(tag,msg string) { v, ok := logHook.Load().(loggerHolder); if ok && v.fn != nil { v.fn(tag,msg) } }
+func SetSSHHostKeySHA256(fingerprint string) { sshFingerprint.Store(strings.TrimSpace(fingerprint)) }
+func SSHHostKeySHA256() string { v, _ := sshFingerprint.Load().(string); return v }
 func GetTelemetry()(uint64,uint64,int32){return TotalRxBytes.Load(),TotalTxBytes.Load(),ActiveConns.Load()}
 
 type BridgeConfig struct {
