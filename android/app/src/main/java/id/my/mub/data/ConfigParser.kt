@@ -13,13 +13,13 @@ import java.net.URL
 object ConfigParser {
 
     /**
-     * Fetches subscription links from a URL (e.g. https://domain/sub/<token>/links.txt)
-     * Supports both plain newline-separated text and base64-encoded subscription formats.
+     * Fetches subscription links from a URL (e.g. https://domain/sub/<token>/links.txt).
+     * Subscription credentials are accepted only over HTTPS.
      */
     suspend fun fetchSubscription(subUrl: String): List<VpnProfile> = withContext(Dispatchers.IO) {
         val profiles = mutableListOf<VpnProfile>()
         val trimmedUrl = subUrl.trim()
-        if (!trimmedUrl.startsWith("http://", ignoreCase = true) && !trimmedUrl.startsWith("https://", ignoreCase = true)) {
+        if (!trimmedUrl.startsWith("https://", ignoreCase = true)) {
             return@withContext emptyList()
         }
         try {
@@ -34,7 +34,6 @@ object ConfigParser {
                 val rawContent = reader.readText().trim()
                 reader.close()
 
-                // Check if content is base64 encoded
                 val decoded = tryDecodeBase64(rawContent)
                 val lines = decoded.lines()
 
@@ -45,6 +44,7 @@ object ConfigParser {
                     }
                 }
             }
+            conn.disconnect()
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -53,7 +53,7 @@ object ConfigParser {
 
     /**
      * Parses a single URI string into a strongly-typed VpnProfile.
-     * Fully compatible with all MUB-X server link outputs.
+     * Fully compatible with all MUB-X server link outputs supported by the current model.
      */
     fun parseUri(rawUri: String): VpnProfile? {
         val trimmed = rawUri.trim()
@@ -176,11 +176,7 @@ object ConfigParser {
             val headerHost = uri.getQueryParameter("host") ?: ""
             val flow = uri.getQueryParameter("flow") ?: "none"
             val insecureParam = uri.getQueryParameter("allowInsecure") ?: uri.getQueryParameter("insecure")
-            val allowInsecure = when {
-                insecureParam == "1" || insecureParam.equals("true", ignoreCase = true) -> true
-                sni.isNotBlank() && !sni.equals(host, ignoreCase = true) -> true
-                else -> false
-            }
+            val allowInsecure = insecureParam == "1" || insecureParam.equals("true", ignoreCase = true)
 
             VpnProfile(
                 name = fragment,
@@ -212,7 +208,7 @@ object ConfigParser {
             val id = json.optString("id", "")
             val sni = json.optString("sni", json.optString("host", add))
             val ps = json.optString("ps", "MUBX-VMess")
-            val allowInsecure = json.optBoolean("insecure", false) || (sni.isNotBlank() && !sni.equals(add, ignoreCase = true))
+            val allowInsecure = json.optBoolean("insecure", false)
 
             VpnProfile(
                 name = ps,
@@ -240,11 +236,7 @@ object ConfigParser {
             val sni = uri.getQueryParameter("sni") ?: host
             val fragment = uri.fragment ?: "MUBX-Trojan"
             val insecureParam = uri.getQueryParameter("allowInsecure") ?: uri.getQueryParameter("insecure")
-            val allowInsecure = when {
-                insecureParam == "1" || insecureParam.equals("true", ignoreCase = true) -> true
-                sni.isNotBlank() && !sni.equals(host, ignoreCase = true) -> true
-                else -> false
-            }
+            val allowInsecure = insecureParam == "1" || insecureParam.equals("true", ignoreCase = true)
 
             VpnProfile(
                 name = fragment,
@@ -274,7 +266,6 @@ object ConfigParser {
             val isShadowTls = plugin.contains("shadow-tls", ignoreCase = true)
             val is2022 = fragment.contains("2022", ignoreCase = true) || fragment.contains("SS22", ignoreCase = true)
 
-            // Extract plugin options (e.g. host=xxx;path=yyy;password=zzz)
             var extractedSni = host
             var extractedPath = ""
             var extractedPass = ""
@@ -291,7 +282,6 @@ object ConfigParser {
                 }
             }
 
-            // Decode userInfo (SIP002 Base64 format e.g. base64(cipher:password))
             val rawUserInfo = uri.userInfo ?: ""
             var cipher = if (is2022 || isShadowTls) "2022-blake3-aes-256-gcm" else "aes-256-gcm"
             var pass = rawUserInfo
