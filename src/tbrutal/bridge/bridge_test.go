@@ -22,30 +22,23 @@ func TestProbeBugHostDirect(t *testing.T) {
 	defer ts.Close()
 
 	res := ProbeBugHost(ts.URL, "", 2000)
-	if res.StatusCode != 200 {
-		t.Fatalf("expected status 200, got %d (err: %s)", res.StatusCode, res.ErrorMsg)
-	}
-	if res.LatencyMs < 0 {
-		t.Errorf("expected non-negative latency, got %d", res.LatencyMs)
-	}
+	if res.StatusCode != 200 { t.Fatalf("expected status 200, got %d (err: %s)", res.StatusCode, res.ErrorMsg) }
+	if res.LatencyMs < 0 { t.Errorf("expected non-negative latency, got %d", res.LatencyMs) }
 }
 
 func TestProbeBugHostTLSCertificate(t *testing.T) {
-	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
 	defer ts.Close()
 
 	res := ProbeBugHost(ts.URL, "example.com", 2000)
-	if res.StatusCode != 200 {
-		t.Fatalf("expected status 200, got %d (err: %s)", res.StatusCode, res.ErrorMsg)
-	}
-	if res.CertCN == "" && len(res.CertSANs) == 0 {
-		t.Logf("TLS server cert had empty CN/SANs")
-	}
+	if res.StatusCode != 200 { t.Fatalf("expected status 200, got %d (err: %s)", res.StatusCode, res.ErrorMsg) }
+	if res.CertCN == "" && len(res.CertSANs) == 0 { t.Logf("TLS server cert had empty CN/SANs") }
 }
 
 func TestStartAndStopTunnel(t *testing.T) {
+	SetSocketProtector(func(int) bool { return true })
+	defer SetSocketProtector(nil)
+
 	tmpDir := t.TempDir()
 	usersFile := filepath.Join(tmpDir, "users.json")
 	usersJSON := `[{"name":"testuser","uuid":"valid-secret-token-123","status":"active","protocols":["all"]}]`
@@ -81,7 +74,6 @@ func TestStartAndStopTunnel(t *testing.T) {
 	port, err := StartTunnel(cfg)
 	if err != nil { t.Fatalf("StartTunnel failed: %v", err) }
 	if port <= 0 { t.Fatalf("expected valid port, got %d", port) }
-
 	_, err = StartTunnel(cfg)
 	if err == nil { t.Errorf("expected duplicate StartTunnel to fail") }
 
