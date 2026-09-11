@@ -59,13 +59,18 @@ class MubxTileService : TileService() {
                 val activityIntent = Intent(this, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
                 }
-                val pendingIntent = PendingIntent.getActivity(
-                    this,
-                    0,
-                    activityIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                )
-                startActivityAndCollapse(pendingIntent)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    val pendingIntent = PendingIntent.getActivity(
+                        this,
+                        0,
+                        activityIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    )
+                    startActivityAndCollapse(pendingIntent)
+                } else {
+                    @Suppress("DEPRECATION")
+                    startActivityAndCollapse(activityIntent)
+                }
             }
         }
     }
