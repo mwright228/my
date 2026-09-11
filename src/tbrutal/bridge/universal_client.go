@@ -297,9 +297,22 @@ func (uc *UniversalClient) getSSHClient() (*ssh.Client, error) {
 	if uc.sshClient != nil { return uc.sshClient, nil }
 	user, pass := parseSSHUserPass(uc.cfg.Token); if user == "" { user = "root" }
 	var authMethods []ssh.AuthMethod; if pass != "" { authMethods = append(authMethods, ssh.Password(pass)) }
-	// SSH host-key verification remains mandatory unless the user explicitly opts into insecure mode.
-	if !uc.cfg.InsecureTLS { return nil, errors.New("SSH requires explicit insecure mode until a server host-key fingerprint is configured") }
-	sshConfig := &ssh.ClientConfig{User: user, Auth: authMethods, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 15 * time.Second}
+	var hostKeyCallback ssh.HostKeyCallback
+	if uc.cfg.InsecureTLS {
+		hostKeyCallback = ssh.InsecureIgnoreHostKey()
+	} else {
+		expected := SSHHostKeySHA256()
+		if expected == "" { return nil, errors.New("secure SSH requires an SSH host-key SHA256 fingerprint") }
+		expected = strings.TrimSpace(expected)
+		hostKeyCallback = func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+			actual := ssh.FingerprintSHA256(key)
+			if actual != expected {
+				return fmt.Errorf("SSH host-key fingerprint mismatch for %s: got %s", hostname, actual)
+			}
+			return nil
+		}
+	}
+	sshConfig := &ssh.ClientConfig{User: user, Auth: authMethods, HostKeyCallback: hostKeyCallback, Timeout: 15 * time.Second}
 	serverAddr := uc.cfg.ServerAddr
 	if !hasPort(serverAddr) { serverAddr = net.JoinHostPort(serverAddr, "22") }
 	sni := uc.cfg.SNI; if sni == "" { sni = uc.cfg.HostHeader }; if sni == "" { sni, _, _ = net.SplitHostPort(serverAddr) }
