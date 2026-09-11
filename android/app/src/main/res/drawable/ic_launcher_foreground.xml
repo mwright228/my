@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Cyber Shield Outer Border -->
+    <path
+        android:strokeColor="#00F0FF"
+        android:strokeWidth="2.5"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000"
+        android:pathData="M54,24 L80,36 L80,62 C80,76 68,86 54,90 C40,86 28,76 28,62 L28,36 Z" />
+
+    <!-- Cyber Shield Inner Glow Accent -->
+    <path
+        android:strokeColor="#9D4EDD"
+        android:strokeWidth="1.2"
+        android:fillColor="#2200F0FF"
+        android:pathData="M54,30 L74,39 L74,60 C74,71 64,79 54,83 C44,79 34,71 34,60 L34,39 Z" />
+
+    <!-- Stylized Futuristic 'X' -->
+    <path
+        android:strokeColor="#00F0FF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M42,42 L66,66" />
+    <path
+        android:strokeColor="#00FFA3"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M66,42 L42,66" />
+
+    <!-- Center Energy Core -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,51 L57,54 L54,57 L51,54 Z" />
+</vector>

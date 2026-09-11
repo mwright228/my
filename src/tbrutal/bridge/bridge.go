@@ -16,12 +16,14 @@ import (
 
 var (
 	activeClient  *client.Client
+	activeZiVPN   *ZiVPNClient
 	activeMu      sync.Mutex
 	runningStatus atomic.Bool
 	socksPort     int
 )
 
 type BridgeConfig struct {
+	Protocol        string
 	ServerAddr      string
 	SNI             string
 	HostHeader      string
@@ -32,6 +34,8 @@ type BridgeConfig struct {
 	UseTLS          bool
 	InsecureTLS     bool
 	RawMode         bool
+	ObfsKey         string
+	PortHopRange    string
 	SocksListenAddr string
 }
 
@@ -43,23 +47,47 @@ type BugHostResult struct {
 	ErrorMsg   string
 }
 
-// StartTunnel initializes the T-Brutal rate pacer, connection pool, and local SOCKS5 engine.
+// StartTunnel initializes the selected protocol engine (T-Brutal or ZiVPN UDP) and local SOCKS5 engine.
 func StartTunnel(cfg BridgeConfig) (int, error) {
 	activeMu.Lock()
 	defer activeMu.Unlock()
 
 	if runningStatus.Load() {
-		return socksPort, errors.New("t-brutal tunnel is already running")
+		return socksPort, errors.New("mubx tunnel is already running")
 	}
 
+	if cfg.SocksListenAddr == "" {
+		cfg.SocksListenAddr = "127.0.0.1:0" // Dynamic ephemeral port
+	}
+
+	// 1. ZiVPN UDP Protocol Mode
+	if strings.EqualFold(cfg.Protocol, "ZIVPN_UDP") || strings.EqualFold(cfg.Protocol, "ZIVPN") {
+		host, _, err := net.SplitHostPort(cfg.ServerAddr)
+		if err != nil {
+			host = cfg.ServerAddr
+		}
+		zc := NewZiVPNClient(host, host, cfg.PortHopRange, cfg.ObfsKey, cfg.SocksListenAddr)
+		if err := zc.Start(); err != nil {
+			return 0, fmt.Errorf("failed to start ZiVPN client: %w", err)
+		}
+		addr := zc.ListenerAddr()
+		tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+		if err != nil {
+			zc.Stop()
+			return 0, fmt.Errorf("failed to resolve socks address: %w", err)
+		}
+		socksPort = tcpAddr.Port
+		activeZiVPN = zc
+		runningStatus.Store(true)
+		return socksPort, nil
+	}
+
+	// 2. Default: T-Brutal Wire-Speed Paced Mode
 	if cfg.PoolSize <= 0 {
 		cfg.PoolSize = 1
 	}
 	if cfg.Path == "" && !cfg.RawMode {
 		cfg.Path = "/tbrutal"
-	}
-	if cfg.SocksListenAddr == "" {
-		cfg.SocksListenAddr = "127.0.0.1:0" // Dynamic ephemeral port
 	}
 
 	c := client.NewClient(client.Config{
@@ -93,10 +121,12 @@ func StartTunnel(cfg BridgeConfig) (int, error) {
 	return socksPort, nil
 }
 
-// StopTunnel cleanly tears down all connections and listeners.
+// StopTunnel cleanly tears down all connections, listeners, and TUN router.
 func StopTunnel() {
 	activeMu.Lock()
 	defer activeMu.Unlock()
+
+	StopTunRouter()
 
 	if !runningStatus.Load() {
 		return
@@ -105,6 +135,10 @@ func StopTunnel() {
 	if activeClient != nil {
 		activeClient.Stop()
 		activeClient = nil
+	}
+	if activeZiVPN != nil {
+		activeZiVPN.Stop()
+		activeZiVPN = nil
 	}
 	runningStatus.Store(false)
 	socksPort = 0

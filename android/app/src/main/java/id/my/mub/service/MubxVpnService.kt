@@ -108,6 +108,12 @@ class MubxVpnService : VpnService() {
                     throw IllegalStateException("Failed to establish VpnService TUN interface")
                 }
 
+                // 3. Hand off Layer 3 TUN file descriptor to native Go packet router
+                val tunFd = vpnInterface?.fd ?: -1
+                if (tunFd >= 0) {
+                    NativeCoreBridge.startTunRouter(tunFd, socksPort)
+                }
+
                 _vpnState.value = VpnState.Connected(
                     rxSpeedMbps = currentProfile.brutalRateMbps.toDouble() * 0.85,
                     txSpeedMbps = 22.3,
@@ -148,6 +154,7 @@ class MubxVpnService : VpnService() {
             telemetryJob?.cancel()
 
             try {
+                NativeCoreBridge.stopTunRouter()
                 NativeCoreBridge.stopTunnel()
                 vpnInterface?.close()
                 vpnInterface = null

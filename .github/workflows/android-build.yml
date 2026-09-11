@@ -26,6 +26,11 @@ jobs:
         with:
           go-version: '1.22'
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
       - name: Setup Android NDK (r27b - 16KB page size aligned)
         uses: nttld/setup-ndk@v1
         with:
@@ -40,7 +45,7 @@ jobs:
       - name: Build Android Debug APK
         working-directory: ./android
         run: |
-          chmod +x gradlew || gradle wrapper
+          chmod +x gradlew
           ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK Artifact

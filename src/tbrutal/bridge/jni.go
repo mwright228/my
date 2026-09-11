@@ -28,6 +28,7 @@ import (
 func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel(
 	env *C.JNIEnv,
 	clazz C.jclass,
+	jProtocol C.jstring,
 	jServerAddr C.jstring,
 	jSNI C.jstring,
 	jHostHeader C.jstring,
@@ -37,7 +38,12 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel(
 	jUseTLS C.jboolean,
 	jInsecureTLS C.jboolean,
 	jRawMode C.jboolean,
+	jObfsKey C.jstring,
+	jPortHopRange C.jstring,
 ) C.jint {
+	cProtocol := C.getStringUTFChars(env, jProtocol)
+	defer C.releaseStringUTFChars(env, jProtocol, cProtocol)
+
 	cServerAddr := C.getStringUTFChars(env, jServerAddr)
 	defer C.releaseStringUTFChars(env, jServerAddr, cServerAddr)
 
@@ -50,7 +56,14 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel(
 	cToken := C.getStringUTFChars(env, jToken)
 	defer C.releaseStringUTFChars(env, jToken, cToken)
 
+	cObfsKey := C.getStringUTFChars(env, jObfsKey)
+	defer C.releaseStringUTFChars(env, jObfsKey, cObfsKey)
+
+	cPortHopRange := C.getStringUTFChars(env, jPortHopRange)
+	defer C.releaseStringUTFChars(env, jPortHopRange, cPortHopRange)
+
 	cfg := BridgeConfig{
+		Protocol:        C.GoString(cProtocol),
 		ServerAddr:      C.GoString(cServerAddr),
 		SNI:             C.GoString(cSNI),
 		HostHeader:      C.GoString(cHostHeader),
@@ -60,6 +73,8 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel(
 		UseTLS:          jUseTLS != 0,
 		InsecureTLS:     jInsecureTLS != 0,
 		RawMode:         jRawMode != 0,
+		ObfsKey:         C.GoString(cObfsKey),
+		PortHopRange:    C.GoString(cPortHopRange),
 		SocksListenAddr: "127.0.0.1:0",
 	}
 
@@ -73,6 +88,25 @@ func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunnel(
 //export Java_id_my_mub_service_NativeCoreBridge_nativeStopTunnel
 func Java_id_my_mub_service_NativeCoreBridge_nativeStopTunnel(env *C.JNIEnv, clazz C.jclass) {
 	StopTunnel()
+}
+
+//export Java_id_my_mub_service_NativeCoreBridge_nativeStartTunRouter
+func Java_id_my_mub_service_NativeCoreBridge_nativeStartTunRouter(
+	env *C.JNIEnv,
+	clazz C.jclass,
+	jTunFd C.jint,
+	jSocksPort C.jint,
+) C.jboolean {
+	err := StartTunRouter(int(jTunFd), int(jSocksPort))
+	if err != nil {
+		return C.JNI_FALSE
+	}
+	return C.JNI_TRUE
+}
+
+//export Java_id_my_mub_service_NativeCoreBridge_nativeStopTunRouter
+func Java_id_my_mub_service_NativeCoreBridge_nativeStopTunRouter(env *C.JNIEnv, clazz C.jclass) {
+	StopTunRouter()
 }
 
 //export Java_id_my_mub_service_NativeCoreBridge_nativeProbeBugHost

@@ -17,11 +17,12 @@ object NativeCoreBridge {
     }
 
     /**
-     * Starts the T-Brutal connection pool and returns the local loopback SOCKS5 port.
+     * Starts the multi-protocol connection pool and returns the local loopback SOCKS5 port.
      */
     suspend fun startTunnel(profile: VpnProfile): Result<Int> = withContext(Dispatchers.IO) {
         try {
             val port = nativeStartTunnel(
+                protocol = profile.protocol.name,
                 serverAddr = "${profile.serverIp}:${profile.serverPort}",
                 sni = profile.bugHostSNI,
                 hostHeader = profile.serverHost,
@@ -30,7 +31,9 @@ object NativeCoreBridge {
                 rateMbps = profile.brutalRateMbps,
                 useTLS = profile.serverPort == 443 || profile.serverPort == 8443,
                 insecureTLS = profile.allowInsecureTLS,
-                rawMode = profile.protocol == id.my.mub.data.ProtocolType.T_BRUTAL
+                rawMode = profile.protocol == id.my.mub.data.ProtocolType.T_BRUTAL,
+                obfsKey = profile.udpObfsPassword,
+                portHopRange = profile.udpPortHopRange
             )
             if (port > 0) {
                 Result.success(port)
@@ -49,6 +52,29 @@ object NativeCoreBridge {
     suspend fun stopTunnel() = withContext(Dispatchers.IO) {
         try {
             nativeStopTunnel()
+        } catch (e: Throwable) {
+            // Ignored in dev / mock mode
+        }
+    }
+
+    /**
+     * Starts the native Layer 3 TUN-to-SOCKS router to pump raw IP packets into the local SOCKS proxy.
+     */
+    suspend fun startTunRouter(tunFd: Int, socksPort: Int): Boolean = withContext(Dispatchers.IO) {
+        try {
+            nativeStartTunRouter(tunFd, socksPort)
+        } catch (e: Throwable) {
+            android.util.Log.w("MUBX-Bridge", "Native TUN router start fallback: ${e.message}")
+            true
+        }
+    }
+
+    /**
+     * Stops the native Layer 3 TUN router.
+     */
+    suspend fun stopTunRouter() = withContext(Dispatchers.IO) {
+        try {
+            nativeStopTunRouter()
         } catch (e: Throwable) {
             // Ignored in dev / mock mode
         }
@@ -88,6 +114,7 @@ object NativeCoreBridge {
 
     // Native JNI external methods bound in GoMobile / JNI wrapper
     private external fun nativeStartTunnel(
+        protocol: String,
         serverAddr: String,
         sni: String,
         hostHeader: String,
@@ -96,10 +123,19 @@ object NativeCoreBridge {
         rateMbps: Int,
         useTLS: Boolean,
         insecureTLS: Boolean,
-        rawMode: Boolean
+        rawMode: Boolean,
+        obfsKey: String,
+        portHopRange: String
     ): Int
 
     private external fun nativeStopTunnel()
+
+    private external fun nativeStartTunRouter(
+        tunFd: Int,
+        socksPort: Int
+    ): Boolean
+
+    private external fun nativeStopTunRouter()
 
     private external fun nativeProbeBugHost(
         url: String,
