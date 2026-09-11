@@ -1,54 +1,90 @@
-# 🛡️ MUB-X Threat Model & Security Architecture
+# MUB-X Threat Model & Security Architecture
 
-## 1. Executive Summary
+## 1. Scope
 
-MUB-X is a telecom-grade multi-protocol VPS proxy suite engineered to operate across adverse cellular networks, bypass Deep Packet Inspection (DPI), and withstand active probing by network censors. This document defines the security boundaries, threat actors, defensive mechanisms, and explicit non-guarantees of the system.
+MUB-X is a multi-protocol VPN/proxy system consisting of an Android `VpnService`, a native Go networking core, server-side proxy services, and configuration/user-management scripts.
 
----
+This document describes the security controls that are intended to be enforced by the repository. It does **not** certify a deployed VPS, Android device, certificate set, firewall policy, or external carrier behavior. Production deployment still requires live-host verification.
 
-## 2. Threat Actors & Attack Vectors
+## 2. Threat actors
 
-| Threat Actor | Capabilities | Target Vectors |
+| Threat actor | Capability | Primary concern |
 | :--- | :--- | :--- |
-| **Mobile Carrier DPI** | Passive SNI inspection, Host header filtering, TCP connection resets, payload manipulation (`[split]`, `[delay_split]`). | Censoring user traffic, billing manipulation, identifying circumvention proxies via error responses (e.g. `400 Bad Request`). |
-| **Active Probing Scanners** | Automated scanners sending malformed TLS ClientHello packets, HTTP requests, or random byte probes to discovered server ports. | Fingerprinting proxy daemons, identifying unauthorized server configurations, triggering censor blocklists. |
-| **Open-Relay Abusers** | Internet-wide port scanners seeking open HTTP `CONNECT` proxies on common ports (`8080`, `3128`, `8888`). | Laundering malicious traffic, launching DDoS attacks, exploiting unauthenticated egress bandwidth. |
-| **Eavesdroppers on Plaintext Path** | Sniffers on public Wi-Fi or unencrypted carrier backhauls. | Intercepting user subscription tokens or credentials transmitted over unencrypted HTTP. |
-| **Untrusted Multi-User Tenants** | Users sharing the same MUB-X server instance. | Attempting to exceed data quotas, snoop on other users' traffic, or bypass accounting. |
+| Mobile-network observer | SNI/Host inspection, resets, traffic classification | Transport blocking or fingerprinting |
+| Active network scanner | Sends malformed HTTP/TLS/protocol traffic | Service fingerprinting and resource exhaustion |
+| Open-relay abuser | Scans public proxy ports and sends arbitrary destinations | Unauthorized egress and bandwidth abuse |
+| Untrusted tenant | Possesses a valid user credential | Quota bypass, cross-user access, unauthorized protocols |
+| Local device attacker | Can inspect app storage or influence the Android process | Credential disclosure or tunnel disruption |
+| VPS attacker | Gains control of the server or its root account | Full compromise of in-memory credentials and traffic |
 
----
+## 3. Current security controls
 
-## 3. Defense Mechanisms & Security Guarantees
+### 3.1 Authentication and tenant isolation
 
-### 3.1. Chameleon Universal Payload Engine & Open-Relay Prevention
-- **Local Bridge Isolation**: Unauthenticated HTTP payloads entering Chameleon on ports `8080`, `3128`, `8888`, or loopback `18088` are strictly restricted to local MUB-X tunnel services (`is_local_target`: Dropbear SSH `:2222`, Sing-box ShadowTLS `:8448`, SS-2022 `:18500`, wstunnel `:18080`, SS-443 `:17000`, ZivPN `:5667`, OpenVPN `:1194`, BadVPN `:7100+`). These local daemons enforce their own cryptographic credentials (SSH keys/passwords, AEAD ciphers).
-- **Outbound Relay Authentication**: Any `CONNECT` or HTTP request attempting to egress to an external internet host/port requires HTTP `Proxy-Authorization: Basic <base64(user:uuid)>` verified against `/etc/mubx/users.json`. Unauthenticated requests are immediately rejected with `407 Proxy Authentication Required`.
-- **Zero-Rejection State Machine**: Lenient parsing tolerates front-injected headers (`X-Online-Host`, `Host:`), delay-split streams, and leading CRLFs without ever emitting a `400 Bad Request` fingerprint to probing DPI middleboxes.
+- The server user store fails closed when the file is missing or malformed.
+- Frozen and expired users are rejected at authentication time.
+- Unknown protocols are rejected rather than silently mapped to a different transport.
+- Server sessions cap concurrent streams per session.
+- Server-side destination validation rejects loopback, private, link-local, multicast, and unspecified destination addresses.
+- User/configuration changes are rendered and validated before service reloads.
 
-### 3.2. Active Probing Resistance & Dynamic Camouflage
-- **Authentic Reverse-Proxy Camouflage**: All unmatched HTTP and HTTPS requests arriving on public ports (`80`, `443` -> Nginx `20443`) are reverse-proxied to a real external site (`https://www.apple.com`) with subfilter rewrites and transparent caching. Scanners observing the site see legitimate web server responses.
-- **HAProxy Layer-4 Content Demultiplexing**: HAProxy inspects the initial connection payload at Layer 4 without decrypting TLS:
-  - TLS ClientHello with the configured ShadowTLS decoy SNI (`__SHADOWTLS_SNI__`) routes to sing-box (`127.0.0.1:8448`).
-  - All other TLS ClientHello handshakes route to Nginx (`127.0.0.1:20443`).
-  - Raw non-TLS byte streams (Shadowsocks TCP) route directly to Xray's SS-443 inbound (`127.0.0.1:17000`).
-  - HTTP injection requests route to Chameleon (`127.0.0.1:18088`).
+These controls reduce open-relay and cross-tenant risks; they do not replace host firewall policy or service-level authentication at every separately exposed daemon.
 
-### 3.3. Credential Protection & HTTPS Enforcement
-- **Subscription Tokens**: Subscriptions (`/sub/<token>/...`) contain full client connection profiles and tokens. The Nginx server block on port 80 enforces an immediate `301 Moved Permanently` redirect to `https://$host$request_uri`, preventing plaintext credential theft over unencrypted channels.
-- **Secrets Storage**: Server secrets in `/etc/telecom-engine.env` and `/etc/mubx/users.json` are created with `umask 077` and restricted to `chmod 600` (root-only access).
+### 3.2 Android credential storage
 
-### 3.4. Host & Process Sandboxing
-- **systemd Hardening**: Daemon units utilize sandboxing controls:
-  - `NoNewPrivileges=yes` prevents privilege escalation.
-  - `PrivateTmp=yes` isolates temporary files.
-  - `ProtectSystem=strict` and `ProtectHome=yes` enforce read-only access to host system hierarchies.
-  - `ProtectKernelTunables=yes` and `ProtectControlGroups=yes` block kernel modification.
-  - `CapabilityBoundingSet=` drops unnecessary Linux capabilities.
+- VPN profiles are encrypted at rest using an Android Keystore-backed AES-GCM key.
+- Legacy plaintext profile data is migrated into the encrypted store and removed.
+- Application backup is disabled because profiles may contain credentials, UUIDs, SSH secrets, and transport parameters.
+- Encryption and persistence failures are treated as errors rather than silently discarding changes.
 
----
+### 3.3 VPN lifecycle and native boundary
 
-## 4. Operational Boundaries & Non-Guarantees
+- Native tunnel startup fails closed when the native library or loopback SOCKS listener is unavailable.
+- Connect/disconnect operations are serialized and cancellation-aware.
+- Destruction paths invoke emergency native cleanup.
+- Android's TUN descriptor is duplicated before the Go router takes ownership; Go closes only its own duplicate during shutdown.
+- Socket-protection failures on VPN-critical paths are treated as errors rather than ignored.
 
-1. **Host-Level Root Compromise**: If an attacker gains root access to the underlying VPS, all in-memory keys and process states are compromised.
-2. **Side-Channel Traffic Analysis**: Advanced censors possessing full traffic timing and packet-size telemetry across international transit points may perform statistical flow correlation. While ShadowTLS, SS-2022, Hysteria 2, and BBR mitigate coarse heuristics, absolute anonymity against global passive adversaries requires application-layer mixnet protocols (e.g. Tor).
-3. **Carrier Bug-Host Longevity**: SNI and Host spoofing depend on third-party mobile network operator zero-rating configurations. MUB-X provides the transport agility to change bug-hosts instantly via `mubx-probe` and `link-gen`, but does not guarantee unblockability of specific carrier domains.
+The application does **not** itself control Android's global "block connections without VPN" policy. A true device-wide lockdown must be enabled through the Android VPN/always-on system settings.
+
+### 3.4 Transport and TLS handling
+
+- VLESS WebSocket, VLESS TCP, VLESS Reality, VMess WebSocket, Trojan WebSocket, Shadowsocks, Shadowsocks 2022, Hysteria 2, TUIC, ShadowTLS, ZiVPN, SSH/custom payloads, and T-Brutal are represented explicitly where supported.
+- Reality requires profile-specific public key and short ID values; the client must not fall back to a placeholder.
+- TLS certificate verification is controlled by the explicit insecure-TLS profile setting. An SNI/host mismatch alone does not disable verification.
+- WebSocket handshakes validate the `Sec-WebSocket-Accept` value on the custom client path.
+
+MUB-X's T-Brutal HTTP transport uses a WebSocket-style HTTP upgrade for camouflage and then continues with its own framing protocol. It must not be described as a conventional RFC 6455 message-framed WebSocket tunnel.
+
+### 3.5 Server and process hardening
+
+Repository systemd units use controls such as `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem`, and `ProtectHome`; individual services may also have capability and resource restrictions. These settings must be verified against the actual generated unit files on the deployed VPS.
+
+### 3.6 CI and release artifacts
+
+CI runs shell linting, Python linting/tests, Go tests, `go vet`, Go race tests, and repository consistency checks. Android CI builds the optimized release variant and runs release unit tests and lint before producing an unsigned APK artifact.
+
+An unsigned APK artifact is **not** a production release. A production distribution requires a controlled signing process with protected signing material and a verified release/install path.
+
+## 4. Explicit non-guarantees
+
+1. A root compromise of the VPS or Android device can expose in-memory credentials and traffic state.
+2. Global passive traffic-analysis resistance cannot be guaranteed by this software.
+3. Carrier-specific SNI/zero-rating behavior is external to MUB-X and can change at any time.
+4. The app cannot programmatically force Android's device-wide always-on VPN lockdown policy.
+5. Unsupported or incomplete protocol features must fail closed rather than silently falling back to another protocol.
+6. A repository CI pass does not prove that a particular live VPS has correct firewall rules, certificates, DNS, kernel settings, systemd state, or generated configuration.
+
+## 5. Production-readiness gate
+
+MUB-X should only be called **production ready** after all of the following are true:
+
+- Go tests, vet, race tests, Android release tests, and Android lint pass on the final commit.
+- Native/TUN lifecycle has been exercised on an Android device or emulator with repeated connect/disconnect/crash scenarios.
+- Every advertised protocol has an end-to-end interoperability test against its corresponding server configuration.
+- No security-critical socket-protection path ignores failure.
+- User/config changes roll back cleanly if any dependent service cannot reload.
+- The released APK is signed through a protected release process.
+- The deployed VPS is separately checked for firewall, certificates, secrets permissions, systemd hardening, and generated configuration.
+
+The repository itself does not claim stronger guarantees than these gates can demonstrate.
