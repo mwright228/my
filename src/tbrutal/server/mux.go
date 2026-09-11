@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -98,10 +99,41 @@ func (s *Session) Handle() {
 }
 
 func isBlockedIP(ip net.IP) bool {
-	if ip == nil {
+	addr, ok := netip.ParseAddr(ip.String())
+	if !ok {
 		return true
 	}
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
+	if addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsMulticast() || addr.IsUnspecified() {
+		return true
+	}
+	if addr.Is4() {
+		a := addr.As4()
+		if a[0] == 0 || a[0] >= 240 {
+			return true
+		}
+		if a[0] == 100 && a[1] >= 64 && a[1] <= 127 { // RFC 6598 CGNAT
+			return true
+		}
+		if a[0] == 192 && a[1] == 0 && a[2] == 0 { // IETF protocol assignments
+			return true
+		}
+		if a[0] == 192 && a[1] == 0 && a[2] == 2 { // TEST-NET-1
+			return true
+		}
+		if a[0] == 198 && a[1] == 18 { // benchmarking
+			return true
+		}
+		if a[0] == 198 && a[1] == 19 { // benchmarking
+			return true
+		}
+		if a[0] == 198 && a[1] == 51 && a[2] == 100 { // TEST-NET-2
+			return true
+		}
+		if a[0] == 203 && a[1] == 0 && a[2] == 113 { // TEST-NET-3
+			return true
+		}
+	}
+	return false
 }
 
 func resolvePublicTarget(host string, port uint16) (string, error) {
