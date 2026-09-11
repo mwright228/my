@@ -23,14 +23,13 @@ object NativeCoreBridge {
 
     @JvmStatic
     fun protectSocket(fd: Int): Boolean {
-        val vpn = MubxVpnService.instance
-        if (vpn == null) {
+        val vpn = MubxVpnService.instance ?: run {
             LogRepository.log("PROTECT", "VPN service unavailable while protecting socket fd $fd", LogLevel.ERROR)
             return false
         }
-        val success = vpn.protect(fd)
-        if (!success) LogRepository.log("PROTECT", "Failed to protect socket fd $fd", LogLevel.ERROR)
-        return success
+        val ok = vpn.protect(fd)
+        if (!ok) LogRepository.log("PROTECT", "Failed to protect socket fd $fd", LogLevel.ERROR)
+        return ok
     }
 
     @JvmStatic
@@ -49,37 +48,50 @@ object NativeCoreBridge {
     suspend fun startTunnel(profile: VpnProfile): Result<Int> = withContext(Dispatchers.IO) {
         if (!nativeLoaded) return@withContext Result.failure(IllegalStateException("Native VPN core is unavailable"))
         try {
-            val host = if (profile.serverIp.isNotBlank()) profile.serverIp else profile.serverHost
+            val host = profile.serverIp.ifBlank { profile.serverHost }
             if (host.isBlank()) return@withContext Result.failure(IllegalArgumentException("Server host/IP is required"))
             val dialAddr = if (profile.protocol == id.my.mub.data.ProtocolType.SSH_PAYLOAD && profile.proxyHost.isNotBlank()) {
-                val pPort = if (profile.proxyPort > 0) profile.proxyPort else 80
-                "${profile.proxyHost}:$pPort"
+                "${profile.proxyHost}:${if (profile.proxyPort > 0) profile.proxyPort else 80}"
             } else "$host:${profile.serverPort}"
             val effectiveSni = profile.bugHostSNI.ifBlank { profile.serverHost }
             val effectiveHostHeader = profile.wsHost.ifBlank { profile.serverHost }
-            val effectiveToken = if (profile.protocol == id.my.mub.data.ProtocolType.SSH_PAYLOAD) "${profile.sshUser}:${profile.sshPassword}" else profile.userUUID
-            val isRawMode = profile.protocol == id.my.mub.data.ProtocolType.T_BRUTAL &&
+            val token = if (profile.protocol == id.my.mub.data.ProtocolType.SSH_PAYLOAD) "${profile.sshUser}:${profile.sshPassword}" else profile.userUUID
+            if (profile.protocol != id.my.mub.data.ProtocolType.SSH_PAYLOAD && token.isBlank()) {
+                return@withContext Result.failure(IllegalArgumentException("Protocol credential is required"))
+            }
+            val rawMode = profile.protocol == id.my.mub.data.ProtocolType.T_BRUTAL &&
                 (profile.customPayload.equals("raw", true) || profile.wsPath.equals("raw", true))
-            val effectivePayload = when (profile.protocol) {
-                id.my.mub.data.ProtocolType.SHADOWTLS_V3 -> profile.ssCipher.ifBlank { "2022-blake3-aes-256-gcm" }
+            val payload = when (profile.protocol) {
                 id.my.mub.data.ProtocolType.T_BRUTAL -> profile.wsPath.ifBlank { profile.customPayload.ifBlank { "/tbrutal" } }
                 id.my.mub.data.ProtocolType.VLESS_WS,
                 id.my.mub.data.ProtocolType.VMESS_WS,
                 id.my.mub.data.ProtocolType.TROJAN_WS -> profile.wsPath.ifBlank { "/vless-ws" }
+                id.my.mub.data.ProtocolType.SHADOWTLS_V3 -> profile.ssCipher.ifBlank { "2022-blake3-aes-256-gcm" }
                 else -> profile.customPayload
             }
-            val effectiveObfsKey = when (profile.protocol) {
+            val obfsKey = when (profile.protocol) {
                 id.my.mub.data.ProtocolType.VLESS_REALITY -> profile.realityPublicKey
+                id.my.mub.data.ProtocolType.TUIC -> profile.tuicPassword
                 id.my.mub.data.ProtocolType.SHADOWSOCKS_2022 -> profile.ssCipher.ifBlank { "2022-blake3-aes-128-gcm" }
                 id.my.mub.data.ProtocolType.SHADOWTLS_V3 -> profile.udpObfsPassword
                 else -> profile.udpObfsPassword
             }
-            val effectivePortHopRange = if (profile.protocol == id.my.mub.data.ProtocolType.VLESS_REALITY) profile.realityShortId else profile.udpPortHopRange
-            if (profile.protocol == id.my.mub.data.ProtocolType.VLESS_REALITY && (effectiveObfsKey.isBlank() || effectivePortHopRange.isBlank())) {
+            val secondValue = when (profile.protocol) {
+                id.my.mub.data.ProtocolType.VLESS_REALITY -> profile.realityShortId
+                else -> profile.udpPortHopRange
+            }
+            if (profile.protocol == id.my.mub.data.ProtocolType.VLESS_REALITY && (obfsKey.isBlank() || secondValue.isBlank())) {
                 return@withContext Result.failure(IllegalArgumentException("VLESS Reality requires public key and short ID"))
             }
-            val useTLS = profile.protocol != id.my.mub.data.ProtocolType.T_BRUTAL || profile.serverPort == 443 || profile.serverPort == 8443
-            val port = nativeStartTunnel(profile.protocol.name, dialAddr, effectiveSni, effectiveHostHeader, effectiveToken, profile.poolConcurrency, profile.brutalRateMbps, useTLS, profile.allowInsecureTLS, isRawMode, effectiveObfsKey, effectivePortHopRange, profile.dnsServer, effectivePayload)
+            if (profile.protocol == id.my.mub.data.ProtocolType.TUIC && obfsKey.isBlank()) {
+                return@withContext Result.failure(IllegalArgumentException("TUIC requires a password"))
+            }
+            val useTls = profile.protocol != id.my.mub.data.ProtocolType.T_BRUTAL || profile.serverPort == 443 || profile.serverPort == 8443
+            val port = nativeStartTunnel(
+                profile.protocol.name, dialAddr, effectiveSni, effectiveHostHeader, token,
+                profile.poolConcurrency, profile.brutalRateMbps, useTls, profile.allowInsecureTLS,
+                rawMode, obfsKey, secondValue, profile.dnsServer, payload
+            )
             if (port <= 0) return@withContext Result.failure(Exception("Connection to server failed (code $port). Verify server address, port, and credentials."))
             try {
                 java.net.Socket().use { it.connect(java.net.InetSocketAddress("127.0.0.1", port), 500) }
@@ -97,16 +109,13 @@ object NativeCoreBridge {
 
     suspend fun stopTunnel() = withContext(Dispatchers.IO) {
         if (!nativeLoaded) return@withContext
-        runCatching { nativeStopTunnel() }
-            .onFailure { LogRepository.log("TUNNEL", "Native tunnel stop error: ${it.message}", LogLevel.WARN) }
+        runCatching { nativeStopTunnel() }.onFailure { LogRepository.log("TUNNEL", "Native tunnel stop error: ${it.message}", LogLevel.WARN) }
     }
 
     fun forceStop() {
         if (!nativeLoaded) return
-        runCatching { nativeStopTunRouter() }
-            .onFailure { LogRepository.log("ROUTER", "Emergency TUN stop error: ${it.message}", LogLevel.WARN) }
-        runCatching { nativeStopTunnel() }
-            .onFailure { LogRepository.log("TUNNEL", "Emergency tunnel stop error: ${it.message}", LogLevel.WARN) }
+        runCatching { nativeStopTunRouter() }.onFailure { LogRepository.log("ROUTER", "Emergency TUN stop error: ${it.message}", LogLevel.WARN) }
+        runCatching { nativeStopTunnel() }.onFailure { LogRepository.log("TUNNEL", "Emergency tunnel stop error: ${it.message}", LogLevel.WARN) }
     }
 
     suspend fun startTunRouter(tunFd: Int, socksPort: Int, dnsServer: String = "1.1.1.1:53"): Boolean = withContext(Dispatchers.IO) {
@@ -118,8 +127,7 @@ object NativeCoreBridge {
 
     suspend fun stopTunRouter() = withContext(Dispatchers.IO) {
         if (!nativeLoaded) return@withContext
-        runCatching { nativeStopTunRouter() }
-            .onFailure { LogRepository.log("ROUTER", "Native TUN router stop error: ${it.message}", LogLevel.WARN) }
+        runCatching { nativeStopTunRouter() }.onFailure { LogRepository.log("ROUTER", "Native TUN router stop error: ${it.message}", LogLevel.WARN) }
     }
 
     fun getTelemetry(): RealTelemetry {
@@ -135,13 +143,11 @@ object NativeCoreBridge {
             val raw = if (nativeLoaded) nativeProbeBugHost(url, sni, timeoutMs) else throw IllegalStateException("Native core unavailable")
             val parts = raw.split("|")
             BugHostProbeResult(url, parts.getOrNull(0)?.toIntOrNull() ?: 0, parts.getOrNull(1)?.toLongOrNull() ?: 0L, parts.getOrNull(2) ?: "", parts.getOrNull(3)?.split(",")?.filter { it.isNotBlank() } ?: emptyList(), parts.getOrNull(4)?.takeIf { it.isNotBlank() })
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             try {
                 val start = System.currentTimeMillis()
                 val client = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                client.connectTimeout = timeoutMs
-                client.readTimeout = timeoutMs
-                client.instanceFollowRedirects = false
+                client.connectTimeout = timeoutMs; client.readTimeout = timeoutMs; client.instanceFollowRedirects = false
                 BugHostProbeResult(url, client.responseCode, System.currentTimeMillis() - start, "", emptyList(), null)
             } catch (netEx: Exception) { BugHostProbeResult(url, 0, 0, "", emptyList(), netEx.message) }
         }
