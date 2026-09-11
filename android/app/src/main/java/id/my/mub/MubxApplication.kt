@@ -16,6 +16,7 @@ class MubxApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        id.my.mub.data.ProfileStore.init(this)
         createNotificationChannel()
     }
 

@@ -31,9 +31,7 @@ object NativeCoreBridge {
             return false
         }
         val success = vpn.protect(fd)
-        if (success) {
-            LogRepository.log("PROTECT", "Protected socket fd $fd from VPN routing loop", LogLevel.NET)
-        } else {
+        if (!success) {
             LogRepository.log("PROTECT", "Failed to protect socket fd $fd", LogLevel.WARN)
         }
         return success

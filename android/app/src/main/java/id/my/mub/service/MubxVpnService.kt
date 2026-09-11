@@ -128,10 +128,32 @@ class MubxVpnService : VpnService() {
     private fun connect() {
         serviceScope.launch {
             _vpnState.value = VpnState.Connecting
-            LogRepository.log("RELAY", "Initializing relay connection for: ${currentProfile.name}", LogLevel.INFO)
             try {
+                // Pre-resolve host to physical IP before TUN is established to prevent DNS routing loop
+                val targetHost = currentProfile.serverHost.ifBlank { currentProfile.serverIp }
+                val resolvedIp = withContext(Dispatchers.IO) {
+                    try {
+                        val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                        val activeNet = cm?.activeNetwork
+                        if (activeNet != null) {
+                            val addrs = activeNet.getAllByName(targetHost)
+                            addrs.firstOrNull()?.hostAddress ?: targetHost
+                        } else {
+                            java.net.InetAddress.getByName(targetHost).hostAddress ?: targetHost
+                        }
+                    } catch (e: Exception) {
+                        LogRepository.log("VPN", "Host pre-resolution note: ${e.message}", LogLevel.WARN)
+                        targetHost
+                    }
+                }
+
+                val effectiveProfile = currentProfile.copy(
+                    serverIp = resolvedIp,
+                    bugHostSNI = currentProfile.bugHostSNI.ifBlank { currentProfile.serverHost }
+                )
+
                 // 1. Launch multi-protocol Go Core connection pool
-                val socksPort = NativeCoreBridge.startTunnel(currentProfile).getOrThrow()
+                val socksPort = NativeCoreBridge.startTunnel(effectiveProfile).getOrThrow()
 
                 // 2. Establish Android TUN Interface (tun0)
                 val dns1 = currentProfile.dnsServer.ifBlank { "1.1.1.1" }

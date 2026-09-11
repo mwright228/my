@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MubxVpnTheme {
                 val vpnState by MubxVpnService.vpnState.collectAsState()
-                var activeProfile by remember { mutableStateOf(MubxVpnService.currentProfile) }
+                var activeProfile by remember { mutableStateOf(id.my.mub.data.ProfileStore.getActiveProfile()) }
                 // Default screen is NOTES for stealth disguise in restricted countries
                 var currentScreen by remember { mutableStateOf(AppScreen.NOTES) }
 
@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
                         AppScreen.NOTES -> {
                             NotesScreen(
                                 onOpenRelay = {
+                                    activeProfile = id.my.mub.data.ProfileStore.getActiveProfile()
                                     currentScreen = AppScreen.RELAY
                                 }
                             )
@@ -84,7 +85,9 @@ class MainActivity : ComponentActivity() {
                                     if (vpnState is VpnState.Connected || vpnState is VpnState.Connecting) {
                                         stopVpnService()
                                     } else {
-                                        MubxVpnService.setProfile(activeProfile)
+                                        val latest = id.my.mub.data.ProfileStore.getActiveProfile()
+                                        activeProfile = latest
+                                        MubxVpnService.setProfile(latest)
                                         requestAndStartVpn()
                                     }
                                 },
@@ -93,6 +96,8 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onUpdateProfile = { updated ->
                                     activeProfile = updated
+                                    id.my.mub.data.ProfileStore.saveProfile(updated)
+                                    id.my.mub.data.ProfileStore.setActiveProfileId(updated.id)
                                     MubxVpnService.setProfile(updated)
                                 }
                             )

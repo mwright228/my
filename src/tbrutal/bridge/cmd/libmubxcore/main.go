@@ -39,16 +39,20 @@ static inline jstring newStringUTF(JNIEnv* env, const char* str) {
     return (*env)->NewStringUTF(env, str);
 }
 
-static inline int callProtectSocket(int fd) {
-    if (!g_vm) return 0;
+static inline JNIEnv* getJNIEnv() {
+    if (!g_vm) return NULL;
     JNIEnv* env = NULL;
-    int attached = 0;
     int status = (*g_vm)->GetEnv(g_vm, (void**)&env, JNI_VERSION_1_6);
     if (status != JNI_OK) {
-        status = (*g_vm)->AttachCurrentThread(g_vm, &env, NULL);
-        if (status != JNI_OK || !env) return 0;
-        attached = 1;
+        status = (*g_vm)->AttachCurrentThreadAsDaemon(g_vm, &env, NULL);
+        if (status != JNI_OK) return NULL;
     }
+    return env;
+}
+
+static inline int callProtectSocket(int fd) {
+    JNIEnv* env = getJNIEnv();
+    if (!env) return 0;
     if (!g_bridgeClass || !g_protectMid) {
         jclass clazz = (*env)->FindClass(env, "id/my/mub/service/NativeCoreBridge");
         if (clazz) {
@@ -60,23 +64,16 @@ static inline int callProtectSocket(int fd) {
     jboolean res = 0;
     if (g_bridgeClass && g_protectMid) {
         res = (*env)->CallStaticBooleanMethod(env, g_bridgeClass, g_protectMid, (jint)fd);
-    }
-    if (attached) {
-        (*g_vm)->DetachCurrentThread(g_vm);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
     }
     return res ? 1 : 0;
 }
 
 static inline void callNativeLog(const char* tag, const char* msg) {
-    if (!g_vm) return;
-    JNIEnv* env = NULL;
-    int attached = 0;
-    int status = (*g_vm)->GetEnv(g_vm, (void**)&env, JNI_VERSION_1_6);
-    if (status != JNI_OK) {
-        status = (*g_vm)->AttachCurrentThread(g_vm, &env, NULL);
-        if (status != JNI_OK || !env) return;
-        attached = 1;
-    }
+    JNIEnv* env = getJNIEnv();
+    if (!env) return;
     if (!g_bridgeClass || !g_logMid) {
         jclass clazz = (*env)->FindClass(env, "id/my/mub/service/NativeCoreBridge");
         if (clazz) {
@@ -89,11 +86,11 @@ static inline void callNativeLog(const char* tag, const char* msg) {
         jstring jTag = (*env)->NewStringUTF(env, tag);
         jstring jMsg = (*env)->NewStringUTF(env, msg);
         (*env)->CallStaticVoidMethod(env, g_bridgeClass, g_logMid, jTag, jMsg);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
         if (jTag) (*env)->DeleteLocalRef(env, jTag);
         if (jMsg) (*env)->DeleteLocalRef(env, jMsg);
-    }
-    if (attached) {
-        (*g_vm)->DetachCurrentThread(g_vm);
     }
 }
 */

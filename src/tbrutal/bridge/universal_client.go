@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -206,8 +207,55 @@ func (uc *UniversalClient) dialUpstream(atyp byte, targetHost string, targetPort
 	}
 }
 
+var physDnsCache sync.Map // host -> IP string
+
 // dialPhysical establishes a protected TCP connection to the destination server.
 func (uc *UniversalClient) dialPhysical(addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+		port = "443"
+	}
+
+	targetIP := host
+	// If host is not a raw numeric IP, resolve via protected UDP socket to prevent VPN routing loop
+	if net.ParseIP(host) == nil {
+		if cached, ok := physDnsCache.Load(host); ok {
+			targetIP = cached.(string)
+		} else {
+			dnsServer := uc.cfg.DNSServer
+			if dnsServer == "" {
+				dnsServer = "1.1.1.1:53"
+			}
+			if !hasPort(dnsServer) {
+				dnsServer = net.JoinHostPort(dnsServer, "53")
+			}
+			resolver := &net.Resolver{
+				PreferGo: true,
+				Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+					d := net.Dialer{
+						Timeout: 3 * time.Second,
+						Control: func(network, address string, c syscall.RawConn) error {
+							return c.Control(func(fd uintptr) {
+								ProtectSocket(int(fd))
+							})
+						},
+					}
+					return d.DialContext(ctx, "udp", dnsServer)
+				},
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			ips, err := resolver.LookupIP(ctx, "ip4", host)
+			cancel()
+			if err == nil && len(ips) > 0 {
+				targetIP = ips[0].String()
+				physDnsCache.Store(host, targetIP)
+				LogMsg("CLIENT", fmt.Sprintf("Resolved %s to %s via protected DNS", host, targetIP))
+			}
+		}
+	}
+
+	dialAddr := net.JoinHostPort(targetIP, port)
 	dialer := &net.Dialer{
 		Timeout: 10 * time.Second,
 		Control: func(network, address string, c syscall.RawConn) error {
@@ -216,7 +264,7 @@ func (uc *UniversalClient) dialPhysical(addr string) (net.Conn, error) {
 			})
 		},
 	}
-	conn, err := dialer.Dial("tcp", addr)
+	conn, err := dialer.Dial("tcp", dialAddr)
 	if err != nil {
 		return nil, err
 	}
