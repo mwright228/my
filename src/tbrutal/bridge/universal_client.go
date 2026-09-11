@@ -149,14 +149,19 @@ func (uc *UniversalClient) dialUpstream(atyp byte, targetHost string, targetPort
 
 var physDnsCache sync.Map
 
+func isBlockedIP(ip net.IP) bool {
+	if ip == nil { return true }
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
+}
+
 func (uc *UniversalClient) protectedControl() func(network, address string, c syscall.RawConn) error {
 	return func(network, address string, c syscall.RawConn) error {
-		return c.Control(func(fd uintptr) {
-			if !ProtectSocket(int(fd)) {
-				// RawConn.Control has no useful error-return channel inside its closure;
-				// use a panic-free shared marker via an address-local context below.
-			}
+		var protectErr error
+		err := c.Control(func(fd uintptr) {
+			if !ProtectSocket(int(fd)) { protectErr = errors.New("failed to protect outbound socket from VPN routing loop") }
 		})
+		if err != nil { return err }
+		return protectErr
 	}
 }
 
@@ -292,6 +297,8 @@ func (uc *UniversalClient) getSSHClient() (*ssh.Client, error) {
 	if uc.sshClient != nil { return uc.sshClient, nil }
 	user, pass := parseSSHUserPass(uc.cfg.Token); if user == "" { user = "root" }
 	var authMethods []ssh.AuthMethod; if pass != "" { authMethods = append(authMethods, ssh.Password(pass)) }
+	// SSH host-key verification remains mandatory unless the user explicitly opts into insecure mode.
+	if !uc.cfg.InsecureTLS { return nil, errors.New("SSH requires explicit insecure mode until a server host-key fingerprint is configured") }
 	sshConfig := &ssh.ClientConfig{User: user, Auth: authMethods, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 15 * time.Second}
 	serverAddr := uc.cfg.ServerAddr
 	if !hasPort(serverAddr) { serverAddr = net.JoinHostPort(serverAddr, "22") }
@@ -300,6 +307,7 @@ func (uc *UniversalClient) getSSHClient() (*ssh.Client, error) {
 	isSSL := uc.cfg.UseTLS || strings.HasPrefix(payloadUpper, "SSL") || strings.HasPrefix(payloadUpper, "TLS") || strings.HasSuffix(serverAddr, ":443")
 	isDirect := strings.HasPrefix(payloadUpper, "DIRECT") || (uc.cfg.CustomPayload == "" && !isSSL)
 
+	var err error
 	var underlyingConn net.Conn
 	if isDirect {
 		LogMsg("SSH", fmt.Sprintf("Establishing Direct SSH connection to %s as user %s", serverAddr, user))
