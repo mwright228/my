@@ -6,7 +6,6 @@ Compatible with pytest and standard python3 -m unittest.
 
 import os
 import subprocess
-import tempfile
 import unittest
 
 SHIELD_PATH = os.path.abspath(

@@ -8,7 +8,6 @@ Unit tests verifying MUB-X Codebase Audit Fixes:
 - lib/common.sh portable base64 encoders
 """
 
-import json
 import os
 import shutil
 import stat

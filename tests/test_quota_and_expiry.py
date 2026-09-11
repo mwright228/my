@@ -11,11 +11,9 @@ Unit tests for MUB-X Automated Account Expiry and Bandwidth Quota System:
 import json
 import os
 import shutil
-import stat
 import subprocess
 import tempfile
 import unittest
-from datetime import datetime, timedelta
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 

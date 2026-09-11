@@ -42,7 +42,7 @@ jobs:
 
       - name: Lint Python code with ruff
         run: |
-          ruff check bin/mubx-chameleon tests/
+          ruff check --select E,F --ignore E501 bin/mubx-chameleon tests/
 
       - name: Run unit tests with pytest
         run: |

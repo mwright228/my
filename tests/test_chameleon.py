@@ -10,7 +10,6 @@ import json
 import os
 import runpy
 import socket
-import sys
 import tempfile
 import time
 import unittest
