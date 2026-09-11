@@ -203,7 +203,7 @@ shield_sync() {
     for ip in $jailed_ips; do
       if [ -n "$ip" ] && is_valid_ip_or_cidr "$ip"; then
         shield_block "$ip" "chameleon_sync" 300 >/dev/null
-        ((jailed_count++))
+        jailed_count=$((jailed_count + 1))
       fi
     done
   fi
@@ -253,7 +253,7 @@ shield_update_scanners() {
   for cidr in "${scanner_cidrs[@]}"; do
     run_cmd ipset add "$SET_STATIC" "$cidr" comment "scanner_intel" -exist 2>/dev/null || \
     run_cmd ipset add "$SET_STATIC" "$cidr" -exist 2>/dev/null || true
-    ((added++))
+    added=$((added + 1))
   done
 
   echo -e "${C_GREEN}[+] Loaded ${added} mass-scanner subnets into kernel filter.${C_RESET}"
