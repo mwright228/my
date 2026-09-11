@@ -316,36 +316,25 @@ func (c *SingBoxClient) Start() (int, error) {
 	}
 
 	// 4. Construct complete sing-box configuration
-	dnsServer := c.cfg.DNSServer
-	if dnsServer == "" {
-		dnsServer = "1.1.1.1"
-	}
-
 	fullConfig := map[string]any{
 		"log": map[string]any{
 			"level":     "info",
 			"timestamp": true,
 		},
+		// DNS: always use local/system resolver. Routing DNS via the proxy
+		// outbound before the WebSocket handshake completes causes sing-box to
+		// attempt a WS upgrade to the DNS server (e.g. 1.1.1.1:53), which
+		// returns 502 and prevents the tunnel from ever starting.
 		"dns": map[string]any{
 			"servers": []map[string]any{
-				{
-					"tag":     "remote",
-					"address": fmt.Sprintf("https://%s/dns-query", dnsServer),
-					"detour":  "proxy",
-				},
 				{
 					"tag":     "local",
 					"address": "local",
 					"detour":  "direct",
 				},
 			},
-			"rules": []map[string]any{
-				{
-					"outbound": "any",
-					"server":   "local",
-				},
-			},
 			"strategy": "prefer_ipv4",
+			"independent_cache": true,
 		},
 		"inbounds": []map[string]any{
 			{
@@ -369,10 +358,7 @@ func (c *SingBoxClient) Start() (int, error) {
 		"route": map[string]any{
 			"auto_detect_interface": true,
 			"rules": []map[string]any{
-				{
-					"protocol": "dns",
-					"outbound": "proxy",
-				},
+				// Private/loopback ranges go direct — never proxy local traffic.
 				{
 					"ip_cidr": []string{
 						"127.0.0.0/8",

@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -131,10 +132,12 @@ fun WardenLoadBars(
 @Composable
 fun WardenChip(
     text: String,
-    color: Color
+    color: Color,
+    maxWidth: androidx.compose.ui.unit.Dp = 160.dp
 ) {
     Box(
         modifier = Modifier
+            .widthIn(max = maxWidth)
             .clip(RoundedCornerShape(7.dp))
             .background(color.copy(alpha = 0.12f))
             .border(1.dp, color.copy(alpha = 0.35f), RoundedCornerShape(7.dp))
@@ -145,7 +148,9 @@ fun WardenChip(
             fontFamily = FontFamily.Monospace,
             fontSize = 10.5.sp,
             fontWeight = FontWeight.Medium,
-            color = color
+            color = color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
