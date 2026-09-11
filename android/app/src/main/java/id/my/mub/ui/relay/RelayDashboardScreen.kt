@@ -315,8 +315,8 @@ fun ManualConfigDialog(
     val protocols = listOf(
         ProtocolType.VLESS_WS,
         ProtocolType.VLESS_TCP,
-        ProtocolType.SHADOWSOCKS,
-        ProtocolType.SSH_DIRECT,
+        ProtocolType.SHADOWSOCKS_2022,
+        ProtocolType.SSH_PAYLOAD,
         ProtocolType.ZIVPN_UDP,
         ProtocolType.T_BRUTAL
     )
@@ -452,7 +452,7 @@ fun ManualConfigDialog(
                     )
                 )
 
-                if (protocol == ProtocolType.SSH_DIRECT) {
+                if (protocol == ProtocolType.SSH_PAYLOAD) {
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = customPayload,
