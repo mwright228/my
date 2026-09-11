@@ -68,3 +68,45 @@ func TestTunRouterLifecycle(t *testing.T) {
 	_ = w.Close()
 	StopTunRouter()
 }
+
+func TestMSSSegmentation(t *testing.T) {
+	src := net.ParseIP("10.0.0.1")
+	dst := net.ParseIP("172.19.0.2")
+
+	// Simulate 5000 bytes data received from proxy (exceeding standard 1500 MTU)
+	largeData := make([]byte, 5000)
+	for i := range largeData {
+		largeData[i] = byte(i % 256)
+	}
+
+	const maxPayload = 1460
+	var packets [][]byte
+	data := largeData
+	seq := uint32(1000)
+
+	for len(data) > 0 {
+		chunkSize := len(data)
+		flags := byte(0x18)
+		if chunkSize > maxPayload {
+			chunkSize = maxPayload
+			flags = 0x10
+		}
+		pkt := craftTCPPacket(src, dst, 443, 50000, seq, 1, flags, data[:chunkSize])
+		if len(pkt) > 1500 {
+			t.Fatalf("Packet length %d exceeds standard MTU 1500!", len(pkt))
+		}
+		packets = append(packets, pkt)
+		seq += uint32(chunkSize)
+		data = data[chunkSize:]
+	}
+
+	if len(packets) != 4 { // 1460 + 1460 + 1460 + 620 = 5000 bytes -> 4 segments
+		t.Fatalf("Expected 4 segments, got %d", len(packets))
+	}
+
+	// Verify last packet has PSH-ACK flag (0x18)
+	lastPkt := packets[len(packets)-1]
+	if lastPkt[33] != 0x18 {
+		t.Fatalf("Expected PSH-ACK (0x18) on last segment, got 0x%02x", lastPkt[33])
+	}
+}

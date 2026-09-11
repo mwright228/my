@@ -65,36 +65,13 @@ fun WardenServersScreen(
     var pasteInput by remember { mutableStateOf("") }
     var storedProfiles by remember { mutableStateOf(ProfileStore.getAllProfiles()) }
 
-    // SSH state — starts EMPTY, user adds their own accounts
-    var sshAccounts by remember { mutableStateOf<List<SshAccount>>(emptyList()) }
+    // SSH state
     var showSshEditor by remember { mutableStateOf(false) }
-    var editingSsh by remember { mutableStateOf<SshAccount?>(null) }
+    var editingSshProfile by remember { mutableStateOf<VpnProfile?>(null) }
 
     // UDPGW
     var udpgwOn by remember { mutableStateOf(false) }
     var udpgwServer by remember { mutableStateOf("127.0.0.1:7300") }
-
-    // Remote proxy
-    var remoteProxies by remember { mutableStateOf<List<RemoteProxyItem>>(emptyList()) }
-    var activeProxyIdx by remember { mutableStateOf(0) }
-    var showAddProxyDialog by remember { mutableStateOf(false) }
-    var newProxyLabel by remember { mutableStateOf("") }
-    var newProxyValue by remember { mutableStateOf("") }
-
-    // Payload editor (ZiVPN style)
-    var payloadScheme by remember { mutableStateOf("HTTP") }
-    var payloadHttp by remember {
-        mutableStateOf("GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf][crlf]")
-    }
-    var payloadHttps by remember {
-        mutableStateOf("CONNECT [host_port] HTTP/1.1[crlf]Host: [host][crlf]Connection: Keep-Alive[crlf][crlf]")
-    }
-    var frontSni by remember { mutableStateOf("") }
-    var routeViaRemoteProxy by remember { mutableStateOf(false) }
-
-    // Port forwarding
-    var portForwardType by remember { mutableStateOf("Dynamic (SOCKS)") }
-    var portForwardPort by remember { mutableStateOf("1080") }
 
     Column(
         modifier = Modifier
@@ -230,6 +207,8 @@ fun WardenServersScreen(
                     val protoColor = when (prof.protocol) {
                         ProtocolType.VLESS_WS, ProtocolType.VLESS_TCP -> WardenIndigo
                         ProtocolType.SHADOWSOCKS_2022 -> WardenMint
+                        ProtocolType.T_BRUTAL -> WardenMint
+                        ProtocolType.SHADOWTLS_V3 -> WardenViolet
                         ProtocolType.SSH_PAYLOAD -> WardenAmber
                         else -> WardenViolet
                     }
@@ -353,6 +332,7 @@ fun WardenServersScreen(
 
         // ── SSH / PAYLOAD TAB ─────────────────────────────────────────────────
         } else {
+            val sshProfiles = storedProfiles.filter { it.protocol == ProtocolType.SSH_PAYLOAD }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -364,7 +344,7 @@ fun WardenServersScreen(
                         label = "Add account",
                         color = WardenViolet,
                         onClick = {
-                            editingSsh = null
+                            editingSshProfile = null
                             showSshEditor = true
                         }
                     )
@@ -372,7 +352,7 @@ fun WardenServersScreen(
                 Box(modifier = Modifier.weight(1f)) {
                     WardenQuickAction(
                         icon = Icons.Default.ImportExport,
-                        label = "Import SSH",
+                        label = "Import config",
                         color = WardenViolet,
                         onClick = { showPasteDialog = true }
                     )
@@ -383,30 +363,31 @@ fun WardenServersScreen(
 
             WardenSectionLabel(
                 title = "SSH accounts",
-                rightText = "${sshAccounts.size} accounts"
+                rightText = "${sshProfiles.size} accounts"
             )
 
-            if (sshAccounts.isNotEmpty()) {
+            if (sshProfiles.isNotEmpty()) {
                 WardenCard(padding = PaddingValues(0.dp)) {
-                    sshAccounts.forEachIndexed { i, a ->
+                    sshProfiles.forEachIndexed { i, prof ->
+                        val isActive = prof.id == activeProfile.id
+                        val modeText = when {
+                            prof.customPayload.startsWith("DIRECT", ignoreCase = true) -> "Direct"
+                            prof.customPayload.startsWith("SSL", ignoreCase = true) || prof.serverPort == 443 -> "SSL / TLS"
+                            else -> "HTTP Custom"
+                        }
+                        val modeColor = when (modeText) {
+                            "Direct" -> WardenIndigo
+                            "SSL / TLS" -> WardenMint
+                            else -> WardenViolet
+                        }
+
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    val sshProf = VpnProfile(
-                                        id = UUID.randomUUID().toString(),
-                                        name = a.label,
-                                        serverHost = a.host,
-                                        serverIp = a.host,
-                                        serverPort = a.port,
-                                        protocol = ProtocolType.SSH_PAYLOAD,
-                                        sshUser = a.user,
-                                        sshPassword = a.password
-                                    )
-                                    ProfileStore.saveProfile(sshProf)
-                                    ProfileStore.setActiveProfileId(sshProf.id)
-                                    onSelectProfile(sshProf)
-                                    Toast.makeText(context, "Active: ${a.label}", Toast.LENGTH_SHORT).show()
+                                    ProfileStore.setActiveProfileId(prof.id)
+                                    onSelectProfile(prof)
+                                    Toast.makeText(context, "Active: ${prof.name}", Toast.LENGTH_SHORT).show()
                                 }
                                 .padding(12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -414,18 +395,19 @@ fun WardenServersScreen(
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.weight(1f)
                             ) {
-                                Text(a.flag, fontSize = 18.sp)
+                                Text("🔒", fontSize = 18.sp)
                                 Column {
                                     Text(
-                                        a.label,
+                                        prof.name,
                                         fontSize = 12.5.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         color = WardenText
                                     )
                                     Text(
-                                        "${a.user}@${a.host}:${a.port}",
+                                        "${prof.sshUser.ifBlank { "root" }}@${prof.serverHost}:${prof.serverPort}",
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 10.sp,
                                         color = WardenMutedDim
@@ -436,10 +418,18 @@ fun WardenServersScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                WardenChip(text = a.mode, color = WardenViolet)
+                                WardenChip(text = modeText, color = modeColor)
+                                if (isActive) {
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = "Active",
+                                        tint = WardenMint,
+                                        modifier = Modifier.size(16.dp).padding(horizontal = 2.dp)
+                                    )
+                                }
                                 IconButton(
                                     onClick = {
-                                        editingSsh = a
+                                        editingSshProfile = prof
                                         showSshEditor = true
                                     },
                                     modifier = Modifier.size(28.dp)
@@ -447,14 +437,17 @@ fun WardenServersScreen(
                                     Icon(Icons.Default.Edit, contentDescription = "Edit", tint = WardenMint, modifier = Modifier.size(14.dp))
                                 }
                                 IconButton(
-                                    onClick = { sshAccounts = sshAccounts.filter { it.id != a.id } },
+                                    onClick = {
+                                        ProfileStore.deleteProfile(prof.id)
+                                        storedProfiles = ProfileStore.getAllProfiles()
+                                    },
                                     modifier = Modifier.size(28.dp)
                                 ) {
                                     Icon(Icons.Default.Delete, contentDescription = "Delete", tint = WardenMutedDim, modifier = Modifier.size(14.dp))
                                 }
                             }
                         }
-                        if (i < sshAccounts.size - 1) {
+                        if (i < sshProfiles.size - 1) {
                             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(WardenBorder))
                         }
                     }
@@ -470,7 +463,7 @@ fun WardenServersScreen(
                         Text("No SSH accounts", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = WardenText)
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            "Tap \"Add account\" to enter your SSH server credentials.",
+                            "Tap \"Add account\" to configure your Direct, SSL/TLS, or HTTP Custom SSH server.",
                             fontSize = 11.sp,
                             color = WardenMutedDim
                         )
@@ -493,8 +486,8 @@ fun WardenServersScreen(
                     ) {
                         Icon(Icons.Default.Wifi, contentDescription = null, tint = WardenIndigo, modifier = Modifier.size(14.dp))
                         Column {
-                            Text("UDP support (UDPGW)", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = WardenText)
-                            Text("Enables UDP / game traffic over SSH", fontSize = 10.sp, color = WardenMutedDim)
+                            Text("UDP forwarding (UDPGW)", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = WardenText)
+                            Text("Enables UDP DNS & gaming traffic over SSH", fontSize = 10.sp, color = WardenMutedDim)
                         }
                     }
                     WardenToggle(on = udpgwOn, onToggle = { udpgwOn = !udpgwOn }, color = WardenIndigo)
@@ -507,154 +500,20 @@ fun WardenServersScreen(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Remote proxy manager
+            // SSH Connection Modes Guide card
             WardenCard {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Remote proxy servers", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = WardenText)
-                    Row(
-                        modifier = Modifier.clickable { showAddProxyDialog = true },
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = null, tint = WardenMint, modifier = Modifier.size(13.dp))
-                        Text("Add", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = WardenMint)
-                    }
-                }
-
-                if (remoteProxies.isEmpty()) {
-                    Spacer(modifier = Modifier.height(8.dp))
+                Column {
+                    Text("SSH connection modes", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = WardenText)
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        "No proxy servers added. Tap Add to enter a Cloudflare / Squid / HTTP proxy.",
+                        "• Direct (TCP): Standard SSH connection to port 22 or custom port.\n" +
+                        "• SSL / TLS (Stunnel): Wrapped in encrypted TLS on port 443 with Bug Host SNI camouflage.\n" +
+                        "• HTTP Custom: Injected HTTP CONNECT payload to bypass carrier DPI firewalls.",
                         fontSize = 10.5.sp,
-                        color = WardenMutedDim
+                        color = WardenMutedDim,
+                        lineHeight = 16.sp
                     )
-                } else {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    remoteProxies.forEachIndexed { i, p ->
-                        val isActiveProxy = i == activeProxyIdx
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable { activeProxyIdx = i },
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                if (isActiveProxy) {
-                                    Icon(Icons.Default.Check, contentDescription = null, tint = WardenMint, modifier = Modifier.size(14.dp))
-                                } else {
-                                    Spacer(modifier = Modifier.size(14.dp))
-                                }
-                                Column {
-                                    Text(p.label, fontSize = 11.5.sp, color = WardenText)
-                                    Text(p.value, fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = WardenMutedDim)
-                                }
-                            }
-                            IconButton(
-                                onClick = {
-                                    remoteProxies = remoteProxies.filterIndexed { idx, _ -> idx != i }
-                                    if (activeProxyIdx >= remoteProxies.size) activeProxyIdx = 0
-                                },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = WardenMutedDim, modifier = Modifier.size(13.dp))
-                            }
-                        }
-                        if (i < remoteProxies.size - 1) {
-                            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(WardenBorder))
-                        }
-                    }
                 }
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // ZiVPN-style payload editor
-            WardenCard {
-                Text("HTTP payload editor", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = WardenText)
-                Spacer(modifier = Modifier.height(2.dp))
-                Text("ZiVPN-style custom payload for SSH injection", fontSize = 10.sp, color = WardenMutedDim)
-                Spacer(modifier = Modifier.height(10.dp))
-
-                WardenSelectRow(
-                    options = listOf("HTTP", "HTTPS"),
-                    selected = payloadScheme,
-                    onSelect = { payloadScheme = it },
-                    color = WardenMint
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-                WardenField(
-                    label = "SNI / front domain (bug host)",
-                    value = frontSni,
-                    onValueChange = { frontSni = it }
-                )
-
-                val currentPayload = if (payloadScheme == "HTTP") payloadHttp else payloadHttps
-                Text("Payload template", fontSize = 10.sp, color = WardenMutedDim, modifier = Modifier.padding(bottom = 4.dp))
-                OutlinedTextField(
-                    value = currentPayload,
-                    onValueChange = {
-                        if (payloadScheme == "HTTP") payloadHttp = it else payloadHttps = it
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 4,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = WardenMint,
-                        unfocusedBorderColor = WardenBorder,
-                        focusedContainerColor = WardenSurface2,
-                        unfocusedContainerColor = WardenSurface2,
-                        focusedTextColor = WardenMint,
-                        unfocusedTextColor = WardenMint
-                    ),
-                    shape = RoundedCornerShape(8.dp)
-                )
-                Text(
-                    text = "tokens: [host] [port] [host_port] [crlf] [cr] [lf] [split]",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 9.5.sp,
-                    color = WardenMutedDim,
-                    modifier = Modifier.padding(top = 6.dp)
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(WardenBorder))
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Route payload via remote proxy", fontSize = 11.5.sp, color = WardenText)
-                    WardenToggle(on = routeViaRemoteProxy, onToggle = { routeViaRemoteProxy = !routeViaRemoteProxy })
-                }
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Port forwarding
-            WardenCard {
-                Text("Port forwarding", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = WardenText)
-                Spacer(modifier = Modifier.height(6.dp))
-                WardenSelectRow(
-                    options = listOf("Local", "Remote", "Dynamic (SOCKS)"),
-                    selected = portForwardType,
-                    onSelect = { portForwardType = it },
-                    color = WardenIndigo
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                WardenField(label = "Local bind port", value = portForwardPort, onValueChange = { portForwardPort = it })
             }
         }
 
@@ -684,31 +543,18 @@ fun WardenServersScreen(
 
     if (showSshEditor) {
         WardenSSHEditor(
+            initialProfile = editingSshProfile,
             onClose = {
                 showSshEditor = false
-                editingSsh = null
+                editingSshProfile = null
             },
             onSave = { saved ->
                 ProfileStore.saveProfile(saved)
                 ProfileStore.setActiveProfileId(saved.id)
                 storedProfiles = ProfileStore.getAllProfiles()
                 onSelectProfile(saved)
-                val displayAccount = SshAccount(
-                    label = saved.name,
-                    host = saved.serverHost,
-                    port = saved.serverPort,
-                    user = saved.sshUser,
-                    password = saved.sshPassword,
-                    mode = "SSH · Custom",
-                    flag = "🌐"
-                )
-                sshAccounts = if (editingSsh != null) {
-                    sshAccounts.map { if (it.id == editingSsh!!.id) displayAccount.copy(id = editingSsh!!.id) else it }
-                } else {
-                    sshAccounts + displayAccount
-                }
                 showSshEditor = false
-                editingSsh = null
+                editingSshProfile = null
                 Toast.makeText(context, "Saved SSH: ${saved.name}", Toast.LENGTH_SHORT).show()
             }
         )

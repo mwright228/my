@@ -32,7 +32,16 @@ fun WardenXrayEditor(
     onClose: () -> Unit,
     onSave: (VpnProfile) -> Unit
 ) {
-    var protocol by remember { mutableStateOf(if (initialProfile?.protocol == ProtocolType.SHADOWSOCKS_2022) "Shadowsocks" else "VLESS") }
+    var protocol by remember {
+        mutableStateOf(
+            when (initialProfile?.protocol) {
+                ProtocolType.SHADOWSOCKS_2022 -> "Shadowsocks"
+                ProtocolType.T_BRUTAL -> "T-Brutal"
+                ProtocolType.SHADOWTLS_V3 -> "ShadowTLS"
+                else -> "VLESS"
+            }
+        )
+    }
     var transport by remember { mutableStateOf(if (initialProfile?.protocol == ProtocolType.VLESS_TCP) "TCP" else "WS") }
     var security by remember { mutableStateOf(if (initialProfile?.serverPort == 443 || initialProfile?.serverPort == 8443) "TLS" else "None") }
 
@@ -47,13 +56,16 @@ fun WardenXrayEditor(
     var path by remember { mutableStateOf(initialProfile?.wsPath ?: "/vless-ws") }
     var hostHeader by remember { mutableStateOf(initialProfile?.wsHost ?: "") }
     var sni by remember { mutableStateOf(initialProfile?.bugHostSNI ?: "") }
+    var brutalRate by remember { mutableStateOf(initialProfile?.brutalRateMbps?.toString() ?: "50") }
+    var poolConcurrency by remember { mutableStateOf(initialProfile?.poolConcurrency?.toString() ?: "2") }
+    var shadowTlsPassword by remember { mutableStateOf(initialProfile?.udpObfsPassword ?: "") }
     var allowInsecureTLS by remember {
         mutableStateOf(
             initialProfile?.allowInsecureTLS ?: true
         )
     }
 
-    val protocols = listOf("VLESS", "VMess", "Trojan", "Shadowsocks")
+    val protocols = listOf("VLESS", "VMess", "Trojan", "Shadowsocks", "T-Brutal", "ShadowTLS")
     val transports = listOf("TCP", "WS", "gRPC", "HTTP/2", "XHTTP", "mKCP")
     val securities = listOf("Reality", "TLS", "AnyTLS", "None")
 
@@ -102,11 +114,13 @@ fun WardenXrayEditor(
                     Text("Protocol", fontSize = 10.sp, color = WardenMutedDim, modifier = Modifier.padding(bottom = 3.dp))
                     WardenSelectRow(options = protocols, selected = protocol, onSelect = { protocol = it }, color = WardenIndigo)
 
-                    Text("Transport", fontSize = 10.sp, color = WardenMutedDim, modifier = Modifier.padding(vertical = 3.dp))
-                    WardenSelectRow(options = transports, selected = transport, onSelect = { transport = it }, color = WardenMint)
+                    if (protocol != "T-Brutal" && protocol != "ShadowTLS") {
+                        Text("Transport", fontSize = 10.sp, color = WardenMutedDim, modifier = Modifier.padding(vertical = 3.dp))
+                        WardenSelectRow(options = transports, selected = transport, onSelect = { transport = it }, color = WardenMint)
 
-                    Text("Security", fontSize = 10.sp, color = WardenMutedDim, modifier = Modifier.padding(vertical = 3.dp))
-                    WardenSelectRow(options = securities, selected = security, onSelect = { security = it }, color = WardenViolet)
+                        Text("Security", fontSize = 10.sp, color = WardenMutedDim, modifier = Modifier.padding(vertical = 3.dp))
+                        WardenSelectRow(options = securities, selected = security, onSelect = { security = it }, color = WardenViolet)
+                    }
 
                     Spacer(modifier = Modifier.height(8.dp))
 
@@ -131,27 +145,39 @@ fun WardenXrayEditor(
                             WardenField(label = "Password", value = password, onValueChange = { password = it })
                             WardenField(label = "Method", value = method, onValueChange = { method = it })
                         }
+                        "T-Brutal" -> {
+                            WardenField(label = "Congestion Pacing Rate (Mbps)", value = brutalRate, onValueChange = { brutalRate = it })
+                            WardenField(label = "Pool Concurrency (Lanes)", value = poolConcurrency, onValueChange = { poolConcurrency = it })
+                            WardenField(label = "WebSocket Path", value = path, onValueChange = { path = it })
+                            WardenField(label = "Host Header / SNI", value = hostHeader, onValueChange = { hostHeader = it })
+                        }
+                        "ShadowTLS" -> {
+                            WardenField(label = "SNI Bug Host", value = sni, onValueChange = { sni = it })
+                            WardenField(label = "ShadowTLS Password", value = shadowTlsPassword, onValueChange = { shadowTlsPassword = it })
+                            WardenField(label = "Shadowsocks Password", value = password, onValueChange = { password = it })
+                            WardenField(label = "Shadowsocks Cipher", value = method, onValueChange = { method = it })
+                        }
                     }
 
-                    if (transport in listOf("WS", "HTTP/2", "XHTTP")) {
+                    if (protocol in listOf("VLESS", "VMess", "Trojan") && transport in listOf("WS", "HTTP/2", "XHTTP")) {
                         WardenField(label = "Path", value = path, onValueChange = { path = it })
                         WardenField(label = "Host header", value = hostHeader, onValueChange = { hostHeader = it })
-                    } else if (transport == "gRPC") {
+                    } else if (protocol in listOf("VLESS", "VMess", "Trojan") && transport == "gRPC") {
                         WardenField(label = "Service name", value = "warden-grpc")
-                    } else if (transport == "mKCP") {
+                    } else if (protocol in listOf("VLESS", "VMess", "Trojan") && transport == "mKCP") {
                         WardenField(label = "Seed", value = "warden-seed-01")
                     }
 
-                    if (security == "Reality") {
+                    if (protocol in listOf("VLESS", "VMess", "Trojan") && security == "Reality") {
                         WardenField(label = "SNI", value = sni.ifBlank { "www.microsoft.com" }, onValueChange = { sni = it })
                         WardenField(label = "Public key", value = "8sV9mQ1x...kZ2p")
                         WardenField(label = "Short ID", value = "4a2e")
                         WardenField(label = "Fingerprint", value = "chrome")
-                    } else if (security == "TLS") {
+                    } else if (protocol in listOf("VLESS", "VMess", "Trojan") && security == "TLS") {
                         WardenField(label = "SNI", value = sni.ifBlank { address }, onValueChange = { sni = it })
                         WardenField(label = "ALPN", value = "h2, http/1.1")
                         WardenField(label = "Fingerprint", value = "chrome")
-                    } else if (security == "AnyTLS") {
+                    } else if (protocol in listOf("VLESS", "VMess", "Trojan") && security == "AnyTLS") {
                         WardenField(label = "SNI", value = sni.ifBlank { "cdn.warden.app" }, onValueChange = { sni = it })
                         WardenField(label = "Fingerprint", value = "chrome")
                         WardenField(label = "Padding scheme", value = "default")
@@ -189,6 +215,8 @@ fun WardenXrayEditor(
                     onClick = {
                         val portInt = port.toIntOrNull() ?: 443
                         val pType = when (protocol) {
+                            "T-Brutal" -> ProtocolType.T_BRUTAL
+                            "ShadowTLS" -> ProtocolType.SHADOWTLS_V3
                             "Shadowsocks" -> ProtocolType.SHADOWSOCKS_2022
                             else -> if (transport == "WS") ProtocolType.VLESS_WS else ProtocolType.VLESS_TCP
                         }
@@ -198,12 +226,15 @@ fun WardenXrayEditor(
                             serverIp = address.trim(),
                             serverPort = portInt,
                             protocol = pType,
-                            userUUID = if (protocol == "Shadowsocks") password.trim() else uuid.trim(),
+                            userUUID = if (protocol == "Shadowsocks" || protocol == "ShadowTLS") password.trim() else uuid.trim(),
                             bugHostSNI = sni.trim(),
-                            wsPath = path.trim(),
+                            wsPath = if (protocol == "T-Brutal") path.trim().ifBlank { "/tbrutal" } else path.trim(),
                             wsHost = hostHeader.trim(),
                             vlessFlow = flow.trim(),
                             ssCipher = method.trim(),
+                            udpObfsPassword = shadowTlsPassword.trim(),
+                            brutalRateMbps = brutalRate.toIntOrNull() ?: 50,
+                            poolConcurrency = poolConcurrency.toIntOrNull() ?: 2,
                             allowInsecureTLS = allowInsecureTLS
                         )
                         onSave(prof)
@@ -221,17 +252,38 @@ fun WardenSSHEditor(
     onClose: () -> Unit,
     onSave: (VpnProfile) -> Unit
 ) {
-    var modeSel by remember { mutableStateOf("SSH · TLS") }
-    var auth by remember { mutableStateOf("Password") }
+    val modes = listOf("Direct (TCP)", "SSL / TLS (Stunnel)", "HTTP Custom (Payload)")
+    var modeSel by remember {
+        mutableStateOf(
+            when {
+                initialProfile?.customPayload?.startsWith("DIRECT", ignoreCase = true) == true -> "Direct (TCP)"
+                initialProfile?.customPayload?.startsWith("SSL", ignoreCase = true) == true || initialProfile?.serverPort == 443 -> "SSL / TLS (Stunnel)"
+                initialProfile?.customPayload?.isNotBlank() == true -> "HTTP Custom (Payload)"
+                else -> "Direct (TCP)"
+            }
+        )
+    }
 
     var label by remember { mutableStateOf(initialProfile?.name ?: "my-ssh-server") }
     var host by remember { mutableStateOf(initialProfile?.serverHost ?: "ssh.provider.net") }
-    var port by remember { mutableStateOf(initialProfile?.serverPort?.toString() ?: "443") }
-    var username by remember { mutableStateOf(initialProfile?.sshUser ?: "myuser21") }
+    var port by remember {
+        mutableStateOf(
+            initialProfile?.serverPort?.toString() ?: when (modeSel) {
+                "Direct (TCP)" -> "22"
+                "SSL / TLS (Stunnel)" -> "443"
+                else -> "8080"
+            }
+        )
+    }
+    var username by remember { mutableStateOf(initialProfile?.sshUser ?: "root") }
     var password by remember { mutableStateOf(initialProfile?.sshPassword ?: "") }
-
-    val modes = listOf("SSH · Direct", "SSH · TLS", "SSH · WS", "Dropbear")
-    val authTypes = listOf("Password", "Private key")
+    var sni by remember { mutableStateOf(initialProfile?.bugHostSNI ?: "") }
+    var payload by remember {
+        mutableStateOf(
+            if (initialProfile?.customPayload?.startsWith("DIRECT") == true || initialProfile?.customPayload?.startsWith("SSL") == true) ""
+            else initialProfile?.customPayload ?: "CONNECT [host_port] HTTP/1.1[crlf]Host: [host][crlf]Connection: Keep-Alive[crlf][crlf]"
+        )
+    }
 
     Dialog(
         onDismissRequest = onClose,
@@ -257,7 +309,7 @@ fun WardenSSHEditor(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Add SSH account",
+                        text = if (initialProfile != null) "Edit SSH Account" else "Add SSH Account",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = WardenText
@@ -274,31 +326,72 @@ fun WardenSSHEditor(
                         .weight(1f)
                         .verticalScroll(rememberScrollState())
                 ) {
-                    Text("Mode", fontSize = 10.sp, color = WardenMutedDim, modifier = Modifier.padding(bottom = 3.dp))
-                    WardenSelectRow(options = modes, selected = modeSel, onSelect = { modeSel = it }, color = WardenViolet)
-
-                    Text("Authentication", fontSize = 10.sp, color = WardenMutedDim, modifier = Modifier.padding(vertical = 3.dp))
-                    WardenSelectRow(options = authTypes, selected = auth, onSelect = { auth = it }, color = WardenIndigo)
+                    Text("Connection Mode", fontSize = 10.sp, color = WardenMutedDim, modifier = Modifier.padding(bottom = 3.dp))
+                    WardenSelectRow(
+                        options = modes,
+                        selected = modeSel,
+                        onSelect = {
+                            modeSel = it
+                            if (port == "22" && it == "SSL / TLS (Stunnel)") port = "443"
+                            if (port == "443" && it == "Direct (TCP)") port = "22"
+                        },
+                        color = WardenViolet
+                    )
 
                     Spacer(modifier = Modifier.height(8.dp))
 
                     WardenField(label = "Label", value = label, onValueChange = { label = it })
-                    WardenField(label = "Host", value = host, onValueChange = { host = it })
-                    WardenField(label = "Port", value = port, onValueChange = { port = it })
+                    WardenField(label = "Server Host / IP", value = host, onValueChange = { host = it })
+                    WardenField(label = "Server Port", value = port, onValueChange = { port = it })
                     WardenField(label = "Username", value = username, onValueChange = { username = it })
-                    WardenField(
-                        label = if (auth == "Password") "Password" else "Private key",
-                        value = password,
-                        onValueChange = { password = it }
-                    )
+                    WardenField(label = "Password", value = password, onValueChange = { password = it })
+
+                    if (modeSel == "SSL / TLS (Stunnel)") {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        WardenField(label = "SNI / Bug Host (Camouflage)", value = sni, onValueChange = { sni = it })
+                    }
+
+                    if (modeSel == "HTTP Custom (Payload)") {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        WardenField(label = "SNI / Bug Host", value = sni, onValueChange = { sni = it })
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("HTTP Payload Template", fontSize = 10.sp, color = WardenMutedDim, modifier = Modifier.padding(bottom = 4.dp))
+                        OutlinedTextField(
+                            value = payload,
+                            onValueChange = { payload = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 3,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = WardenMint,
+                                unfocusedBorderColor = WardenBorder,
+                                focusedContainerColor = WardenSurface2,
+                                unfocusedContainerColor = WardenSurface2,
+                                focusedTextColor = WardenMint,
+                                unfocusedTextColor = WardenMint
+                            ),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        Text(
+                            text = "tokens: [host] [port] [host_port] [crlf] [cr] [lf] [ua]",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 9.5.sp,
+                            color = WardenMutedDim,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
                 WardenSaveButton(
-                    label = "Save account",
+                    label = "Save Account",
                     onClick = {
-                        val portInt = port.toIntOrNull() ?: 443
+                        val portInt = port.toIntOrNull() ?: if (modeSel == "SSL / TLS (Stunnel)") 443 else 22
+                        val effectivePayload = when (modeSel) {
+                            "Direct (TCP)" -> "DIRECT"
+                            "SSL / TLS (Stunnel)" -> "SSL"
+                            else -> payload.ifBlank { "CONNECT [host_port] HTTP/1.1[crlf]Host: [host][crlf]Connection: Keep-Alive[crlf][crlf]" }
+                        }
                         val prof = (initialProfile ?: VpnProfile()).copy(
                             name = label.ifBlank { "my-ssh-server" },
                             serverHost = host.trim(),
@@ -306,7 +399,9 @@ fun WardenSSHEditor(
                             serverPort = portInt,
                             protocol = ProtocolType.SSH_PAYLOAD,
                             sshUser = username.trim(),
-                            sshPassword = password.trim()
+                            sshPassword = password.trim(),
+                            bugHostSNI = sni.trim(),
+                            customPayload = effectivePayload
                         )
                         onSave(prof)
                     },

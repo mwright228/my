@@ -277,6 +277,8 @@ class MubxVpnService : VpnService() {
         }
     }
 
+    private val isCleaningUp = java.util.concurrent.atomic.AtomicBoolean(false)
+
     private fun disconnect() {
         serviceScope.launch {
             _vpnState.value = VpnState.Disconnecting
@@ -289,21 +291,25 @@ class MubxVpnService : VpnService() {
         }
     }
 
-    // CRASH FIX #4: Extracted synchronous cleanup so onDestroy() does not
-    // launch new coroutines into a scope that may already be shutting down.
     private suspend fun cleanupResources() {
+        if (!isCleaningUp.compareAndSet(false, true)) {
+            return
+        }
         try {
+            telemetryJob?.cancel()
             NativeCoreBridge.stopTunRouter()
             NativeCoreBridge.stopTunnel()
-            vpnInterface?.close()
+            try {
+                vpnInterface?.close()
+            } catch (_: Exception) {}
             vpnInterface = null
         } catch (ignored: Exception) {
+        } finally {
+            isCleaningUp.set(false)
         }
     }
 
     override fun onDestroy() {
-        // Run cleanup on the IO dispatcher without launching a new coroutine into a dying scope.
-        // If the scope is still alive, cancel running jobs first.
         telemetryJob?.cancel()
         serviceScope.launch {
             try {

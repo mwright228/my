@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -124,16 +125,16 @@ func StopTunRouter() {
 	activeRouterMu.Lock()
 	defer activeRouterMu.Unlock()
 
-	if activeRouter == nil {
+	if activeRouter == nil || !activeRouter.running.Load() {
 		return
 	}
 
-	activeRouter.running.Store(false)
-	close(activeRouter.stopChan)
-	_ = activeRouter.tunFile.Close()
+	router := activeRouter
+	router.running.Store(false)
+	close(router.stopChan)
 
 	// Close all active sessions
-	activeRouter.sessions.Range(func(key, val interface{}) bool {
+	router.sessions.Range(func(key, val interface{}) bool {
 		if sess, ok := val.(*TcpSession); ok {
 			sess.closed.Store(true)
 			sess.mu.Lock()
@@ -145,7 +146,19 @@ func StopTunRouter() {
 		return true
 	})
 
-	activeRouter.wg.Wait()
+	// Wait with timeout to guarantee JNI never hangs Android Main thread
+	done := make(chan struct{})
+	go func() {
+		router.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(400 * time.Millisecond):
+		LogMsg("ROUTER", "TunRouter wait timed out; force finalizing")
+	}
+
 	activeRouter = nil
 	LogMsg("ROUTER", "TunRouter stopped cleanly")
 }
@@ -335,21 +348,55 @@ func (r *TunRouter) handleUDP(packet []byte, ihl int, srcIP, dstIP net.IP) {
 	}
 }
 
-// resolveDNS queries DNS over SOCKS5 TCP tunnel first, falling back to direct protected UDP.
+// resolveDNS queries DNS: first tries pre-protected direct UDP to configured DNS, then public DNS fallbacks, and SOCKS TCP.
 func (r *TunRouter) resolveDNS(query []byte) ([]byte, error) {
-	// 1. Primary: DNS-over-TCP through encrypted proxy tunnel (bypasses carrier UDP 53 blocking)
+	// 1. Primary: Direct UDP query via pre-protected socket (bypasses VPN routing loop)
+	targetDNS := r.dnsServer
+	if targetDNS == "" {
+		targetDNS = "1.1.1.1:53"
+	}
+	if !hasPort(targetDNS) {
+		targetDNS = net.JoinHostPort(targetDNS, "53")
+	}
+
+	resp, err := queryProtectedUDP(targetDNS, query)
+	if err == nil && len(resp) > 0 {
+		return resp, nil
+	}
+
+	// 2. Fallback to 1.1.1.1 or 8.8.8.8 if primary DNS failed
+	if !strings.HasPrefix(targetDNS, "1.1.1.1") {
+		resp, err = queryProtectedUDP("1.1.1.1:53", query)
+		if err == nil && len(resp) > 0 {
+			return resp, nil
+		}
+	}
+	if !strings.HasPrefix(targetDNS, "8.8.8.8") {
+		resp, err = queryProtectedUDP("8.8.8.8:53", query)
+		if err == nil && len(resp) > 0 {
+			return resp, nil
+		}
+	}
+
+	// 3. Fallback to DNS over SOCKS5 TCP
 	if r.socksAddr != "" {
 		if resp, err := r.queryDNSOverSocks(query); err == nil && len(resp) > 0 {
 			return resp, nil
 		}
 	}
 
-	// 2. Secondary fallback: Direct protected UDP query
-	rAddr, err := net.ResolveUDPAddr("udp", r.dnsServer)
+	return nil, errors.New("dns resolution failed on all upstream resolvers")
+}
+
+// queryProtectedUDP creates an unbound UDP socket, protects it via Android VpnService.protect(fd),
+// and sends the DNS query directly through the physical network interface.
+func queryProtectedUDP(dnsServer string, query []byte) ([]byte, error) {
+	rAddr, err := net.ResolveUDPAddr("udp4", dnsServer)
 	if err != nil {
 		return nil, err
 	}
-	conn, err := net.DialUDP("udp", nil, rAddr)
+
+	conn, err := net.ListenUDP("udp4", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -362,12 +409,12 @@ func (r *TunRouter) resolveDNS(query []byte) ([]byte, error) {
 	}
 
 	_ = conn.SetDeadline(time.Now().Add(2500 * time.Millisecond))
-	if _, err := conn.Write(query); err != nil {
+	if _, err := conn.WriteToUDP(query, rAddr); err != nil {
 		return nil, err
 	}
 
 	respBuf := make([]byte, 4096)
-	n, err := conn.Read(respBuf)
+	n, _, err := conn.ReadFromUDP(respBuf)
 	if err != nil || n == 0 {
 		return nil, err
 	}
@@ -621,6 +668,8 @@ func (r *TunRouter) initSocksConnection(sess *TcpSession, targetHost string, tar
 	sess.mu.Unlock()
 
 	// Pipe SOCKS responses back into TUN
+	// Pipe SOCKS responses back into TUN with MSS segmentation (max 1460 bytes per packet)
+	const maxTCPPayload = 1460
 	buf := make([]byte, 16*1024)
 	for {
 		if sess.closed.Load() {
@@ -632,9 +681,23 @@ func (r *TunRouter) initSocksConnection(sess *TcpSession, targetHost string, tar
 			sess.lastActive = time.Now()
 			srcIP := net.ParseIP(sess.key.dstIP).To4()
 			dstIP := net.ParseIP(sess.key.srcIP).To4()
-			tcpPkt := craftTCPPacket(srcIP, dstIP, sess.key.dstPort, sess.key.srcPort, sess.serverSeq, sess.clientSeq, 0x18, buf[:n])
-			sess.serverSeq += uint32(n)
-			_, _ = r.writeTun(tcpPkt)
+			if srcIP != nil && dstIP != nil {
+				data := buf[:n]
+				for len(data) > 0 {
+					chunkSize := len(data)
+					flags := byte(0x18) // PSH-ACK for final chunk
+					if chunkSize > maxTCPPayload {
+						chunkSize = maxTCPPayload
+						flags = 0x10 // ACK for intermediate chunks
+					}
+					tcpPkt := craftTCPPacket(srcIP, dstIP, sess.key.dstPort, sess.key.srcPort, sess.serverSeq, sess.clientSeq, flags, data[:chunkSize])
+					sess.serverSeq += uint32(chunkSize)
+					if _, wErr := r.writeTun(tcpPkt); wErr != nil {
+						break
+					}
+					data = data[chunkSize:]
+				}
+			}
 		}
 		if err != nil {
 			sess.closed.Store(true)
@@ -644,8 +707,10 @@ func (r *TunRouter) initSocksConnection(sess *TcpSession, targetHost string, tar
 
 			srcIP := net.ParseIP(sess.key.dstIP).To4()
 			dstIP := net.ParseIP(sess.key.srcIP).To4()
-			finPkt := craftTCPPacket(srcIP, dstIP, sess.key.dstPort, sess.key.srcPort, sess.serverSeq, sess.clientSeq, 0x11, nil)
-			_, _ = r.writeTun(finPkt)
+			if srcIP != nil && dstIP != nil {
+				finPkt := craftTCPPacket(srcIP, dstIP, sess.key.dstPort, sess.key.srcPort, sess.serverSeq, sess.clientSeq, 0x11, nil)
+				_, _ = r.writeTun(finPkt)
+			}
 			return
 		}
 	}

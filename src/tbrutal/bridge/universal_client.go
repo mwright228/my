@@ -18,16 +18,20 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // UniversalClient provides a multi-protocol SOCKS5 local bridge supporting:
 // VLESS (WS / TCP / TLS), Trojan, VMess, Shadowsocks, SSH/Custom Payload, ZiVPN, and T-Brutal.
 type UniversalClient struct {
-	cfg      BridgeConfig
-	listener net.Listener
-	closed   atomic.Bool
-	stopChan chan struct{}
-	wg       sync.WaitGroup
+	cfg         BridgeConfig
+	listener    net.Listener
+	closed      atomic.Bool
+	stopChan    chan struct{}
+	wg          sync.WaitGroup
+	sshClient   *ssh.Client
+	sshClientMu sync.Mutex
 }
 
 func NewUniversalClient(cfg BridgeConfig) *UniversalClient {
@@ -70,6 +74,12 @@ func (uc *UniversalClient) Stop() {
 	if uc.listener != nil {
 		_ = uc.listener.Close()
 	}
+	uc.sshClientMu.Lock()
+	if uc.sshClient != nil {
+		_ = uc.sshClient.Close()
+		uc.sshClient = nil
+	}
+	uc.sshClientMu.Unlock()
 	uc.wg.Wait()
 	LogMsg("CLIENT", "Universal client stopped")
 }
@@ -200,7 +210,7 @@ func (uc *UniversalClient) dialUpstream(atyp byte, targetHost string, targetPort
 	case strings.Contains(proto, "TROJAN"):
 		return uc.dialTrojan(atyp, targetHost, targetPort, rawAddr)
 	case strings.Contains(proto, "SSH") || strings.Contains(proto, "CUSTOM") || strings.Contains(proto, "INJECTOR"):
-		return uc.dialSSHPayload(targetHost, targetPort)
+		return uc.dialSSH(targetHost, targetPort)
 	default:
 		// Default to VLESS / Direct SOCKS
 		return uc.dialVLESS(atyp, targetHost, targetPort, rawAddr)
@@ -467,19 +477,37 @@ func (uc *UniversalClient) dialTrojan(atyp byte, targetHost string, targetPort u
 	return tlsConn, nil
 }
 
-// dialSSHPayload establishes an HTTP CONNECT proxy connection (HTTP Custom / Injector style).
-func (uc *UniversalClient) dialSSHPayload(targetHost string, targetPort uint16) (net.Conn, error) {
+// getSSHClient returns an authenticated, multiplexed SSH client connection.
+func (uc *UniversalClient) getSSHClient() (*ssh.Client, error) {
+	uc.sshClientMu.Lock()
+	defer uc.sshClientMu.Unlock()
+
+	if uc.sshClient != nil {
+		return uc.sshClient, nil
+	}
+
+	user, pass := parseSSHUserPass(uc.cfg.Token)
+	if user == "" {
+		user = "root"
+	}
+
+	var authMethods []ssh.AuthMethod
+	if pass != "" {
+		authMethods = append(authMethods, ssh.Password(pass))
+	}
+
+	sshConfig := &ssh.ClientConfig{
+		User:            user,
+		Auth:            authMethods,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         15 * time.Second,
+	}
+
 	serverAddr := uc.cfg.ServerAddr
 	if !hasPort(serverAddr) {
-		serverAddr = net.JoinHostPort(serverAddr, "8080")
+		serverAddr = net.JoinHostPort(serverAddr, "22")
 	}
 
-	conn, err := uc.dialPhysical(serverAddr)
-	if err != nil {
-		return nil, err
-	}
-
-	target := fmt.Sprintf("%s:%d", targetHost, targetPort)
 	sni := uc.cfg.SNI
 	if sni == "" {
 		sni = uc.cfg.HostHeader
@@ -488,67 +516,120 @@ func (uc *UniversalClient) dialSSHPayload(targetHost string, targetPort uint16) 
 		sni, _, _ = net.SplitHostPort(serverAddr)
 	}
 
-	payload := uc.cfg.CustomPayload
-	if payload == "" {
-		payload = fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n\r\n", target, sni)
-	} else {
-		payload = strings.ReplaceAll(payload, "[host_port]", target)
-		payload = strings.ReplaceAll(payload, "[host]", targetHost)
-		payload = strings.ReplaceAll(payload, "[port]", fmt.Sprintf("%d", targetPort))
-		payload = strings.ReplaceAll(payload, "[protocol]", "HTTP/1.1")
-		payload = strings.ReplaceAll(payload, "[ua]", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-		payload = strings.ReplaceAll(payload, "[raw]", "\r\n")
-		payload = strings.ReplaceAll(payload, "[crlf]", "\r\n")
-		payload = strings.ReplaceAll(payload, "[lf]", "\n")
-		payload = strings.ReplaceAll(payload, "[cr]", "\r")
-	}
+	payloadUpper := strings.ToUpper(strings.TrimSpace(uc.cfg.CustomPayload))
+	isSSL := uc.cfg.UseTLS || strings.HasPrefix(payloadUpper, "SSL") || strings.HasPrefix(payloadUpper, "TLS") || strings.HasSuffix(serverAddr, ":443")
+	isDirect := strings.HasPrefix(payloadUpper, "DIRECT") || (uc.cfg.CustomPayload == "" && !isSSL)
 
-	// Handle [split] or [instant_split] if user configured split injection
-	if strings.Contains(payload, "[split]") || strings.Contains(payload, "[instant_split]") {
-		sep := "[split]"
-		if strings.Contains(payload, "[instant_split]") {
-			sep = "[instant_split]"
+	var underlyingConn net.Conn
+	var err error
+
+	if isDirect {
+		// 1. Direct SSH connection (Plain TCP)
+		LogMsg("SSH", fmt.Sprintf("Establishing Direct SSH connection to %s as user %s", serverAddr, user))
+		underlyingConn, err = uc.dialPhysical(serverAddr)
+		if err != nil {
+			return nil, fmt.Errorf("direct ssh dial failed: %w", err)
 		}
-		parts := strings.SplitN(payload, sep, 2)
-		if len(parts) == 2 {
-			if _, err := conn.Write([]byte(parts[0])); err != nil {
-				_ = conn.Close()
-				return nil, err
-			}
-			time.Sleep(20 * time.Millisecond)
-			if _, err := conn.Write([]byte(parts[1])); err != nil {
-				_ = conn.Close()
-				return nil, err
-			}
+	} else if isSSL {
+		// 2. SSL/TLS Stunnel SSH connection (SNI Camouflage on port 443)
+		LogMsg("SSH", fmt.Sprintf("Establishing SSL/TLS SSH tunnel to %s (SNI: %s) as user %s", serverAddr, sni, user))
+		rawConn, dErr := uc.dialPhysical(serverAddr)
+		if dErr != nil {
+			return nil, fmt.Errorf("tls ssh dial failed: %w", dErr)
+		}
+		tlsConfig := &tls.Config{
+			ServerName:         sni,
+			InsecureSkipVerify: true,
+		}
+		tlsConn := tls.Client(rawConn, tlsConfig)
+		if hErr := tlsConn.Handshake(); hErr != nil {
+			_ = rawConn.Close()
+			return nil, fmt.Errorf("tls handshake for ssh failed: %w", hErr)
+		}
+		underlyingConn = tlsConn
+	} else {
+		// 3. HTTP Custom Payload Injection SSH connection
+		LogMsg("SSH", fmt.Sprintf("Establishing HTTP Custom SSH tunnel to %s with payload injection", serverAddr))
+		rawConn, dErr := uc.dialPhysical(serverAddr)
+		if dErr != nil {
+			return nil, fmt.Errorf("http custom dial failed: %w", dErr)
+		}
+
+		payload := uc.cfg.CustomPayload
+		if payload == "" {
+			payload = fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n\r\n", serverAddr, sni)
 		} else {
-			if _, err := conn.Write([]byte(payload)); err != nil {
-				_ = conn.Close()
-				return nil, err
+			payload = strings.ReplaceAll(payload, "[host_port]", serverAddr)
+			payload = strings.ReplaceAll(payload, "[host]", sni)
+			payload = strings.ReplaceAll(payload, "[port]", "22")
+			payload = strings.ReplaceAll(payload, "[protocol]", "HTTP/1.1")
+			payload = strings.ReplaceAll(payload, "[ua]", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+			payload = strings.ReplaceAll(payload, "[raw]", "\r\n")
+			payload = strings.ReplaceAll(payload, "[crlf]", "\r\n")
+			payload = strings.ReplaceAll(payload, "[lf]", "\n")
+			payload = strings.ReplaceAll(payload, "[cr]", "\r")
+		}
+
+		if _, wErr := rawConn.Write([]byte(payload)); wErr != nil {
+			_ = rawConn.Close()
+			return nil, fmt.Errorf("payload injection write failed: %w", wErr)
+		}
+
+		reader := bufio.NewReader(rawConn)
+		respLine, rErr := reader.ReadString('\n')
+		if rErr != nil || (!strings.Contains(respLine, "200") && !strings.Contains(respLine, "Established")) {
+			_ = rawConn.Close()
+			return nil, fmt.Errorf("HTTP Proxy CONNECT failed: %s", strings.TrimSpace(respLine))
+		}
+		for {
+			line, rErr2 := reader.ReadString('\n')
+			if rErr2 != nil || strings.TrimSpace(line) == "" {
+				break
 			}
 		}
-	} else {
-		if _, err := conn.Write([]byte(payload)); err != nil {
-			_ = conn.Close()
-			return nil, err
+		underlyingConn = rawConn
+	}
+
+	c, chans, reqs, err := ssh.NewClientConn(underlyingConn, serverAddr, sshConfig)
+	if err != nil {
+		_ = underlyingConn.Close()
+		return nil, fmt.Errorf("ssh client handshake failed: %w", err)
+	}
+
+	client := ssh.NewClient(c, chans, reqs)
+	uc.sshClient = client
+	LogMsg("SSH", fmt.Sprintf("SSH authenticated & tunnel established to %s", serverAddr))
+	return client, nil
+}
+
+// dialSSH forwards a SOCKS5 target connection through the active SSH client tunnel.
+func (uc *UniversalClient) dialSSH(targetHost string, targetPort uint16) (net.Conn, error) {
+	client, err := uc.getSSHClient()
+	if err != nil {
+		return nil, err
+	}
+
+	target := net.JoinHostPort(targetHost, fmt.Sprintf("%d", targetPort))
+	conn, err := client.Dial("tcp", target)
+	if err != nil {
+		// Connection dropped: clear client so subsequent connections trigger reconnect
+		uc.sshClientMu.Lock()
+		if uc.sshClient == client {
+			_ = uc.sshClient.Close()
+			uc.sshClient = nil
 		}
+		uc.sshClientMu.Unlock()
+		return nil, fmt.Errorf("ssh dial to %s failed: %w", target, err)
 	}
-
-	reader := bufio.NewReader(conn)
-	respLine, err := reader.ReadString('\n')
-	if err != nil || (!strings.Contains(respLine, "200") && !strings.Contains(respLine, "Established")) {
-		_ = conn.Close()
-		return nil, fmt.Errorf("HTTP Proxy CONNECT failed: %s", strings.TrimSpace(respLine))
-	}
-
-	// Flush remaining headers
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil || strings.TrimSpace(line) == "" {
-			break
-		}
-	}
-
 	return conn, nil
+}
+
+func parseSSHUserPass(token string) (string, string) {
+	parts := strings.SplitN(token, ":", 2)
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return token, ""
 }
 
 func parseUUIDBytes(s string) [16]byte {
