@@ -50,6 +50,14 @@ object NativeCoreBridge {
         try {
             val host = profile.serverIp.ifBlank { profile.serverHost }
             if (host.isBlank()) return@withContext Result.failure(IllegalArgumentException("Server host/IP is required"))
+            if (profile.protocol == id.my.mub.data.ProtocolType.SSH_PAYLOAD) {
+                if (!profile.allowInsecureTLS && profile.sshHostKeySHA256.isBlank()) {
+                    return@withContext Result.failure(IllegalArgumentException("Secure SSH requires an SSH host-key SHA256 fingerprint"))
+                }
+                nativeSetSSHHostKeySHA256(profile.sshHostKeySHA256)
+            } else {
+                nativeSetSSHHostKeySHA256("")
+            }
             val dialAddr = if (profile.protocol == id.my.mub.data.ProtocolType.SSH_PAYLOAD && profile.proxyHost.isNotBlank()) {
                 "${profile.proxyHost}:${if (profile.proxyPort > 0) profile.proxyPort else 80}"
             } else "$host:${profile.serverPort}"
@@ -153,6 +161,7 @@ object NativeCoreBridge {
         }
     }
 
+    private external fun nativeSetSSHHostKeySHA256(fingerprint: String)
     private external fun nativeStartTunnel(protocol: String, serverAddr: String, sni: String, hostHeader: String, token: String, poolSize: Int, rateMbps: Int, useTLS: Boolean, insecureTLS: Boolean, rawMode: Boolean, obfsKey: String, portHopRange: String, dnsServer: String, customPayload: String): Int
     private external fun nativeStopTunnel()
     private external fun nativeStartTunRouter(tunFd: Int, socksPort: Int, dnsServer: String): Boolean
