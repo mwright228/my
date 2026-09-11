@@ -38,6 +38,7 @@ class MubxTileService : TileService() {
         super.onStopListening()
     }
 
+    @SuppressLint("StartActivityAndCollapseDeprecated")
     override fun onClick() {
         super.onClick()
         val currentState = MubxVpnService.vpnState.value
@@ -69,12 +70,8 @@ class MubxTileService : TileService() {
                     )
                     startActivityAndCollapse(pendingIntent)
                 } else {
-                    @SuppressLint("StartActivityAndCollapseDeprecated")
                     @Suppress("DEPRECATION")
-                    fun launchLegacyTileActivity() {
-                        startActivityAndCollapse(activityIntent)
-                    }
-                    launchLegacyTileActivity()
+                    startActivityAndCollapse(activityIntent)
                 }
             }
         }
