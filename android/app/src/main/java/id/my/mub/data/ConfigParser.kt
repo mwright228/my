@@ -169,6 +169,10 @@ object ConfigParser {
                 ProtocolType.VLESS_TCP
             }
 
+            val path = uri.getQueryParameter("path") ?: "/vless-ws"
+            val headerHost = uri.getQueryParameter("host") ?: ""
+            val flow = uri.getQueryParameter("flow") ?: "none"
+
             VpnProfile(
                 name = fragment,
                 serverHost = host,
@@ -178,7 +182,10 @@ object ConfigParser {
                 userUUID = uuid,
                 protocol = proto,
                 poolConcurrency = 2,
-                brutalRateMbps = 0
+                brutalRateMbps = 0,
+                wsPath = path,
+                wsHost = headerHost,
+                vlessFlow = flow
             )
         } catch (e: Exception) {
             null

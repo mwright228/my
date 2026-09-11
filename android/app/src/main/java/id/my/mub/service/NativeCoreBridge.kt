@@ -65,13 +65,29 @@ object NativeCoreBridge {
                 return@withContext Result.failure(IllegalArgumentException(err))
             }
 
-            LogRepository.log("TUNNEL", "Initiating ${profile.protocol.displayName} to $host:${profile.serverPort}")
+            val dialAddr = if (profile.protocol == id.my.mub.data.ProtocolType.SSH_PAYLOAD && profile.proxyHost.isNotBlank()) {
+                val pPort = if (profile.proxyPort > 0) profile.proxyPort else 80
+                "${profile.proxyHost}:$pPort"
+            } else {
+                "$host:${profile.serverPort}"
+            }
+            val effectiveSni = if (profile.bugHostSNI.isNotBlank()) profile.bugHostSNI else host
+            val effectiveHostHeader = if (profile.wsHost.isNotBlank()) profile.wsHost else host
+            val effectiveToken = if (profile.protocol == id.my.mub.data.ProtocolType.SHADOWSOCKS_2022) {
+                profile.userUUID
+            } else if (profile.protocol == id.my.mub.data.ProtocolType.SSH_PAYLOAD) {
+                "${profile.sshUser}:${profile.sshPassword}"
+            } else {
+                profile.userUUID
+            }
+
+            LogRepository.log("TUNNEL", "Initiating ${profile.protocol.displayName} to $dialAddr")
             val port = nativeStartTunnel(
                 protocol = profile.protocol.name,
-                serverAddr = "$host:${profile.serverPort}",
-                sni = profile.bugHostSNI,
-                hostHeader = profile.serverHost,
-                token = profile.userUUID,
+                serverAddr = dialAddr,
+                sni = effectiveSni,
+                hostHeader = effectiveHostHeader,
+                token = effectiveToken,
                 poolSize = profile.poolConcurrency,
                 rateMbps = profile.brutalRateMbps,
                 useTLS = profile.serverPort == 443 || profile.serverPort == 8443,

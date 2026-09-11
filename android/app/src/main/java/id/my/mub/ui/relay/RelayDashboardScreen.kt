@@ -51,7 +51,8 @@ fun RelayDashboardScreen(
     var activeProfile by remember { mutableStateOf(currentProfile) }
 
     // Dialog states
-    var showAddDialog by remember { mutableStateOf(false) }
+    var showProtocolSelection by remember { mutableStateOf(false) }
+    var addingWithProtocol by remember { mutableStateOf<ProtocolType?>(null) }
     var editingProfile by remember { mutableStateOf<VpnProfile?>(null) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
 
@@ -63,15 +64,26 @@ fun RelayDashboardScreen(
         onUpdateProfile(current)
     }
 
-    if (showAddDialog) {
+    if (showProtocolSelection) {
+        ProtocolSelectionDialog(
+            onDismiss = { showProtocolSelection = false },
+            onProtocolSelected = { selectedProto ->
+                showProtocolSelection = false
+                addingWithProtocol = selectedProto
+            }
+        )
+    }
+
+    if (addingWithProtocol != null) {
         ProtocolConfigDialog(
+            initialProtocol = addingWithProtocol!!,
             initialProfile = null,
-            onDismiss = { showAddDialog = false },
+            onDismiss = { addingWithProtocol = null },
             onSave = { newProfile ->
                 ProfileStore.saveProfile(newProfile)
                 ProfileStore.setActiveProfileId(newProfile.id)
                 refreshProfiles()
-                showAddDialog = false
+                addingWithProtocol = null
                 statusMessage = "Added ${newProfile.name}"
             }
         )
@@ -79,6 +91,7 @@ fun RelayDashboardScreen(
 
     if (editingProfile != null) {
         ProtocolConfigDialog(
+            initialProtocol = editingProfile!!.protocol,
             initialProfile = editingProfile,
             onDismiss = { editingProfile = null },
             onSave = { updatedProfile ->
@@ -178,7 +191,7 @@ fun RelayDashboardScreen(
 
                     // 2. Add Manually
                     Button(
-                        onClick = { showAddDialog = true },
+                        onClick = { showProtocolSelection = true },
                         colors = ButtonDefaults.buttonColors(containerColor = AccentPrimary),
                         shape = RoundedCornerShape(10.dp)
                     ) {

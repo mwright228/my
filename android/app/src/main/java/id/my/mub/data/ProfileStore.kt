@@ -117,7 +117,10 @@ object ProfileStore {
             put("sshPassword", p.sshPassword)
             put("proxyHost", p.proxyHost)
             put("proxyPort", p.proxyPort)
-            put("lastLatencyMs", p.lastLatencyMs)
+            put("wsPath", p.wsPath)
+            put("wsHost", p.wsHost)
+            put("ssCipher", p.ssCipher)
+            put("vlessFlow", p.vlessFlow)
         }
     }
 
@@ -150,7 +153,10 @@ object ProfileStore {
             sshPassword = obj.optString("sshPassword", ""),
             proxyHost = obj.optString("proxyHost", ""),
             proxyPort = obj.optInt("proxyPort", 0),
-            lastLatencyMs = obj.optLong("lastLatencyMs", 0L)
+            wsPath = obj.optString("wsPath", "/vless-ws"),
+            wsHost = obj.optString("wsHost", ""),
+            ssCipher = obj.optString("ssCipher", "2022-blake3-aes-128-gcm"),
+            vlessFlow = obj.optString("vlessFlow", "")
         )
     }
 }

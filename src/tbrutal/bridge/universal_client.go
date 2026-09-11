@@ -452,22 +452,49 @@ func (uc *UniversalClient) dialSSHPayload(targetHost string, targetPort uint16) 
 		sni, _, _ = net.SplitHostPort(serverAddr)
 	}
 
-	// Formulate HTTP CONNECT request with optional user payload
 	payload := uc.cfg.CustomPayload
 	if payload == "" {
-		payload = fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: NetPulse/1.0\r\n\r\n", target, sni)
+		payload = fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n\r\n", target, sni)
 	} else {
 		payload = strings.ReplaceAll(payload, "[host_port]", target)
 		payload = strings.ReplaceAll(payload, "[host]", targetHost)
 		payload = strings.ReplaceAll(payload, "[port]", fmt.Sprintf("%d", targetPort))
+		payload = strings.ReplaceAll(payload, "[protocol]", "HTTP/1.1")
+		payload = strings.ReplaceAll(payload, "[ua]", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+		payload = strings.ReplaceAll(payload, "[raw]", "\r\n")
 		payload = strings.ReplaceAll(payload, "[crlf]", "\r\n")
 		payload = strings.ReplaceAll(payload, "[lf]", "\n")
 		payload = strings.ReplaceAll(payload, "[cr]", "\r")
 	}
 
-	if _, err := conn.Write([]byte(payload)); err != nil {
-		_ = conn.Close()
-		return nil, err
+	// Handle [split] or [instant_split] if user configured split injection
+	if strings.Contains(payload, "[split]") || strings.Contains(payload, "[instant_split]") {
+		sep := "[split]"
+		if strings.Contains(payload, "[instant_split]") {
+			sep = "[instant_split]"
+		}
+		parts := strings.SplitN(payload, sep, 2)
+		if len(parts) == 2 {
+			if _, err := conn.Write([]byte(parts[0])); err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+			time.Sleep(20 * time.Millisecond)
+			if _, err := conn.Write([]byte(parts[1])); err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+		} else {
+			if _, err := conn.Write([]byte(payload)); err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+		}
+	} else {
+		if _, err := conn.Write([]byte(payload)); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
 	}
 
 	reader := bufio.NewReader(conn)

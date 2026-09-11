@@ -1,18 +1,26 @@
 package id.my.mub.ui.relay
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -22,9 +30,15 @@ import androidx.compose.ui.window.DialogProperties
 import id.my.mub.ui.theme.*
 
 enum class InjectionMethod(val displayName: String, val desc: String) {
-    NORMAL("Normal", "Standard payload injection"),
-    FRONT_INJECT("Front Inject", "Front inject before CONNECT"),
-    BACK_INJECT("Back Inject", "Back inject after CONNECT")
+    NORMAL("Normal", "Standard proxy request"),
+    FRONT_INJECT("Front Inject", "Front injection before CONNECT request"),
+    BACK_INJECT("Back Inject", "Back injection after CONNECT request")
+}
+
+enum class SplitMethod(val displayName: String, val token: String) {
+    NONE("None", ""),
+    NORMAL_SPLIT("Normal Split", "[split]"),
+    INSTANT_SPLIT("Instant Split", "[instant_split]")
 }
 
 @Composable
@@ -33,17 +47,24 @@ fun PayloadGeneratorDialog(
     onDismiss: () -> Unit,
     onGenerated: (String) -> Unit
 ) {
+    val context = LocalContext.current
     var targetHost by remember { mutableStateOf(initialTargetHost.ifBlank { "m.facebook.com" }) }
     var selectedMethod by remember { mutableStateOf("CONNECT") }
     var selectedInjection by remember { mutableStateOf(InjectionMethod.NORMAL) }
+    var selectedSplit by remember { mutableStateOf(SplitMethod.NONE) }
 
-    // Header checkboxes
+    // Header options (HTTP Injector classic)
     var optOnlineHost by remember { mutableStateOf(true) }
+    var optForwardHost by remember { mutableStateOf(false) }
+    var optReverseProxy by remember { mutableStateOf(false) }
     var optKeepAlive by remember { mutableStateOf(true) }
     var optUserAgent by remember { mutableStateOf(true) }
-    var optReverseProxy by remember { mutableStateOf(false) }
+    var optReferer by remember { mutableStateOf(false) }
+    var optDualConnect by remember { mutableStateOf(false) }
 
-    // Computes HTTP Injector payload string based on current user options
+    var copiedToast by remember { mutableStateOf(false) }
+
+    // Computes HTTP Injector payload string dynamically
     fun generatePayloadString(): String {
         val host = targetHost.trim().ifBlank { "[host]" }
         val sb = StringBuilder()
@@ -51,33 +72,53 @@ fun PayloadGeneratorDialog(
         val headers = StringBuilder()
         headers.append("Host: $host[crlf]")
         if (optOnlineHost) headers.append("X-Online-Host: $host[crlf]")
-        if (optReverseProxy) headers.append("X-Forward-Host: $host[crlf]")
+        if (optForwardHost) headers.append("X-Forward-Host: $host[crlf]")
+        if (optReverseProxy) headers.append("X-Forwarded-For: $host[crlf]")
         if (optKeepAlive) headers.append("Connection: Keep-Alive[crlf]")
         if (optUserAgent) headers.append("User-Agent: [ua][crlf]")
+        if (optReferer) headers.append("Referer: http://$host/[crlf]")
+
+        val splitToken = selectedSplit.token
 
         when (selectedInjection) {
             InjectionMethod.NORMAL -> {
+                if (optDualConnect) {
+                    sb.append("CONNECT [host_port] HTTP/1.1[crlf]")
+                }
                 sb.append("$selectedMethod [host_port] [protocol][crlf]")
+                if (splitToken.isNotEmpty()) sb.append(splitToken)
                 sb.append(headers)
                 sb.append("[crlf]")
             }
             InjectionMethod.FRONT_INJECT -> {
                 sb.append("GET http://$host/ [protocol][crlf]Host: $host[crlf][crlf]")
+                if (splitToken.isNotEmpty()) sb.append(splitToken)
+                if (optDualConnect) {
+                    sb.append("CONNECT [host_port] HTTP/1.1[crlf]")
+                }
                 sb.append("$selectedMethod [host_port] [protocol][crlf]")
                 sb.append(headers)
                 sb.append("[crlf]")
             }
             InjectionMethod.BACK_INJECT -> {
+                if (optDualConnect) {
+                    sb.append("CONNECT [host_port] HTTP/1.1[crlf]")
+                }
                 sb.append("$selectedMethod [host_port] [protocol][crlf]")
                 sb.append(headers)
                 sb.append("[crlf]")
+                if (splitToken.isNotEmpty()) sb.append(splitToken)
                 sb.append("GET http://$host/ [protocol][crlf]Host: $host[crlf][crlf]")
             }
         }
         return sb.toString()
     }
 
-    val previewPayload = remember(targetHost, selectedMethod, selectedInjection, optOnlineHost, optKeepAlive, optUserAgent, optReverseProxy) {
+    val previewPayload = remember(
+        targetHost, selectedMethod, selectedInjection, selectedSplit,
+        optOnlineHost, optForwardHost, optReverseProxy, optKeepAlive,
+        optUserAgent, optReferer, optDualConnect
+    ) {
         generatePayloadString()
     }
 
@@ -88,7 +129,7 @@ fun PayloadGeneratorDialog(
         Card(
             modifier = Modifier
                 .fillMaxWidth(0.94f)
-                .fillMaxHeight(0.88f)
+                .fillMaxHeight(0.90f)
                 .clip(RoundedCornerShape(20.dp)),
             colors = CardDefaults.cardColors(containerColor = SurfaceCard),
             border = androidx.compose.foundation.BorderStroke(1.dp, SurfaceCardBorder)
@@ -99,26 +140,39 @@ fun PayloadGeneratorDialog(
                     .padding(20.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                Text(
-                    text = "Payload Generator",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
-                Text(
-                    text = "Configure and generate custom HTTP carrier payloads",
-                    fontSize = 12.sp,
-                    color = TextSecondary,
-                    modifier = Modifier.padding(top = 2.dp, bottom = 14.dp)
-                )
+                // Header
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Payload Generator",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "HTTP Injector format carrier payload generator",
+                            fontSize = 12.sp,
+                            color = TextSecondary
+                        )
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary, modifier = Modifier.size(18.dp))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
 
                 // 1. Target URL / Host
-                Text("URL / Host (Target)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                Text("URL / Host (Carrier Bug)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                 Spacer(modifier = Modifier.height(4.dp))
                 OutlinedTextField(
                     value = targetHost,
                     onValueChange = { targetHost = it },
-                    placeholder = { Text("e.g. m.facebook.com", fontSize = 12.sp, color = TextMuted) },
+                    placeholder = { Text("e.g. m.facebook.com or fast.com", fontSize = 12.sp, color = TextMuted) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -131,24 +185,25 @@ fun PayloadGeneratorDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // 2. Request Method
+                // 2. Request Method (Horizontal Scrollable Chips)
                 Text("Request Method", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                 Spacer(modifier = Modifier.height(6.dp))
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val methods = listOf("CONNECT", "GET", "POST", "HEAD")
+                    val methods = listOf("CONNECT", "GET", "POST", "HEAD", "TRACE", "OPTIONS", "PUT", "DELETE", "PATCH")
                     for (m in methods) {
                         val isSelected = selectedMethod == m
                         Box(
                             modifier = Modifier
-                                .weight(1f)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(if (isSelected) AccentPrimary else BgMain)
                                 .border(1.dp, if (isSelected) AccentPrimary else SurfaceCardBorder, RoundedCornerShape(8.dp))
                                 .clickable { selectedMethod = m }
-                                .padding(vertical = 8.dp),
+                                .padding(horizontal = 12.dp, vertical = 7.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
@@ -173,9 +228,10 @@ fun PayloadGeneratorDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(if (isSelected) BgMain.copy(alpha = 0.8f) else Color.Transparent)
+                                .background(if (isSelected) BgMain else Color.Transparent)
+                                .border(1.dp, if (isSelected) AccentPrimary.copy(alpha = 0.5f) else Color.Transparent, RoundedCornerShape(8.dp))
                                 .clickable { selectedInjection = inj }
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
@@ -183,7 +239,7 @@ fun PayloadGeneratorDialog(
                                 onClick = { selectedInjection = inj },
                                 colors = RadioButtonDefaults.colors(selectedColor = AccentPrimary)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             Column {
                                 Text(inj.displayName, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                                 Text(inj.desc, fontSize = 11.sp, color = TextSecondary)
@@ -194,58 +250,107 @@ fun PayloadGeneratorDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // 4. Extra Headers Checkboxes
-                Text("Extra Headers", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = optOnlineHost,
-                            onCheckedChange = { optOnlineHost = it },
-                            colors = CheckboxDefaults.colors(checkedColor = AccentPrimary)
-                        )
-                        Text("Online Host", fontSize = 12.sp, color = TextPrimary)
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = optKeepAlive,
-                            onCheckedChange = { optKeepAlive = it },
-                            colors = CheckboxDefaults.colors(checkedColor = AccentPrimary)
-                        )
-                        Text("Keep-Alive", fontSize = 12.sp, color = TextPrimary)
-                    }
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = optUserAgent,
-                            onCheckedChange = { optUserAgent = it },
-                            colors = CheckboxDefaults.colors(checkedColor = AccentPrimary)
-                        )
-                        Text("User-Agent", fontSize = 12.sp, color = TextPrimary)
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = optReverseProxy,
-                            onCheckedChange = { optReverseProxy = it },
-                            colors = CheckboxDefaults.colors(checkedColor = AccentPrimary)
-                        )
-                        Text("Reverse Proxy", fontSize = 12.sp, color = TextPrimary)
+                // 4. Split Method
+                Text("Split Injection", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (sm in SplitMethod.values()) {
+                        val isSelected = selectedSplit == sm
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) AccentPrimary else BgMain)
+                                .border(1.dp, if (isSelected) AccentPrimary else SurfaceCardBorder, RoundedCornerShape(8.dp))
+                                .clickable { selectedSplit = sm }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = sm.displayName,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isSelected) Color.White else TextSecondary
+                            )
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // 5. Payload Preview
-                Text("Payload Preview", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                // 5. Extra Headers Checkboxes
+                Text("Extra Headers", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                 Spacer(modifier = Modifier.height(4.dp))
+
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = optOnlineHost, onCheckedChange = { optOnlineHost = it }, colors = CheckboxDefaults.colors(checkedColor = AccentPrimary))
+                        Text("Online Host", fontSize = 12.sp, color = TextPrimary)
+                    }
+                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = optForwardHost, onCheckedChange = { optForwardHost = it }, colors = CheckboxDefaults.colors(checkedColor = AccentPrimary))
+                        Text("Forward Host", fontSize = 12.sp, color = TextPrimary)
+                    }
+                }
+
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = optReverseProxy, onCheckedChange = { optReverseProxy = it }, colors = CheckboxDefaults.colors(checkedColor = AccentPrimary))
+                        Text("Reverse Proxy", fontSize = 12.sp, color = TextPrimary)
+                    }
+                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = optKeepAlive, onCheckedChange = { optKeepAlive = it }, colors = CheckboxDefaults.colors(checkedColor = AccentPrimary))
+                        Text("Keep-Alive", fontSize = 12.sp, color = TextPrimary)
+                    }
+                }
+
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = optUserAgent, onCheckedChange = { optUserAgent = it }, colors = CheckboxDefaults.colors(checkedColor = AccentPrimary))
+                        Text("User-Agent", fontSize = 12.sp, color = TextPrimary)
+                    }
+                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = optReferer, onCheckedChange = { optReferer = it }, colors = CheckboxDefaults.colors(checkedColor = AccentPrimary))
+                        Text("Referer", fontSize = 12.sp, color = TextPrimary)
+                    }
+                }
+
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = optDualConnect, onCheckedChange = { optDualConnect = it }, colors = CheckboxDefaults.colors(checkedColor = AccentPrimary))
+                    Text("Dual Connect (Double CONNECT Header)", fontSize = 12.sp, color = TextPrimary)
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // 6. Payload Preview Box with Copy
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Payload Preview", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                    TextButton(
+                        onClick = {
+                            val clipMgr = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                            clipMgr?.setPrimaryClip(ClipData.newPlainText("payload", previewPayload))
+                            copiedToast = true
+                        }
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, tint = CyberMint, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(if (copiedToast) "Copied!" else "Copy", fontSize = 11.sp, color = CyberMint)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
                         .background(BgMain)
                         .border(1.dp, SurfaceCardBorder, RoundedCornerShape(8.dp))
-                        .padding(10.dp)
+                        .padding(12.dp)
                 ) {
                     Text(
                         text = previewPayload,
@@ -258,7 +363,7 @@ fun PayloadGeneratorDialog(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // 6. Action Buttons
+                // 7. Action Buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -267,7 +372,8 @@ fun PayloadGeneratorDialog(
                         onClick = onDismiss,
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, SurfaceCardBorder)
+                        border = androidx.compose.foundation.BorderStroke(1.dp, SurfaceCardBorder),
+                        shape = RoundedCornerShape(10.dp)
                     ) {
                         Text("Cancel", fontSize = 13.sp)
                     }
@@ -277,9 +383,10 @@ fun PayloadGeneratorDialog(
                             onGenerated(previewPayload)
                         },
                         modifier = Modifier.weight(1.5f),
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentPrimary)
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentPrimary),
+                        shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("Apply Payload", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Text("Apply to Payload", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     }
                 }
             }

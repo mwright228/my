@@ -38,6 +38,10 @@ data class VpnProfile(
     val sshPassword: String = "",
     val proxyHost: String = "",
     val proxyPort: Int = 0,
+    val wsPath: String = "/vless-ws",
+    val wsHost: String = "",
+    val ssCipher: String = "2022-blake3-aes-128-gcm",
+    val vlessFlow: String = "",
     val killSwitchEnabled: Boolean = false
 )
 
