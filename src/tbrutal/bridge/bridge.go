@@ -89,7 +89,21 @@ type BugHostResult struct {
 	ErrorMsg   string
 }
 
-// StartTunnel initializes the selected protocol engine (T-Brutal or ZiVPN UDP) and local SOCKS5 engine.
+func usesSingBox(proto string) bool {
+	p := strings.ToUpper(strings.TrimSpace(proto))
+	return strings.Contains(p, "VLESS") ||
+		strings.Contains(p, "REALITY") ||
+		strings.Contains(p, "HYSTERIA") ||
+		strings.Contains(p, "TUIC") ||
+		strings.Contains(p, "TROJAN") ||
+		strings.Contains(p, "VMESS") ||
+		strings.Contains(p, "SHADOWSOCKS") ||
+		strings.Contains(p, "SHADOWTLS") ||
+		strings.HasPrefix(p, "SS_") ||
+		p == "SS"
+}
+
+// StartTunnel initializes the selected protocol engine and local SOCKS5 engine.
 func StartTunnel(cfg BridgeConfig) (int, error) {
 	activeMu.Lock()
 	defer activeMu.Unlock()
@@ -102,10 +116,10 @@ func StartTunnel(cfg BridgeConfig) (int, error) {
 	LogMsg("TUNNEL", fmt.Sprintf("Initializing %s tunnel to %s...", cfg.Protocol, cfg.ServerAddr))
 
 	if cfg.SocksListenAddr == "" {
-		cfg.SocksListenAddr = "127.0.0.1:0" // Dynamic ephemeral port
+		cfg.SocksListenAddr = "127.0.0.1:0"
 	}
 
-	// 1. ZiVPN UDP Protocol Mode
+	// ZiVPN UDP mode.
 	if strings.EqualFold(cfg.Protocol, "ZIVPN_UDP") || strings.EqualFold(cfg.Protocol, "ZIVPN") {
 		host, _, err := net.SplitHostPort(cfg.ServerAddr)
 		if err != nil {
@@ -127,43 +141,25 @@ func StartTunnel(cfg BridgeConfig) (int, error) {
 		return socksPort, nil
 	}
 
-	// 2. Production-Grade Sing-Box Core (VLESS, Reality, Hysteria2, TUIC, Shadowsocks, ShadowTLS, Trojan, VMess)
+	// Protocols implemented by the embedded sing-box engine. Do not silently
+	// fall back to a different protocol implementation when startup fails.
 	protoUpper := strings.ToUpper(strings.TrimSpace(cfg.Protocol))
-	if strings.Contains(protoUpper, "VLESS") ||
-		strings.Contains(protoUpper, "REALITY") ||
-		strings.Contains(protoUpper, "HYSTERIA") ||
-		strings.Contains(protoUpper, "TUIC") ||
-		strings.Contains(protoUpper, "TROJAN") ||
-		strings.Contains(protoUpper, "VMESS") ||
-		strings.Contains(protoUpper, "SHADOWSOCKS") ||
-		strings.Contains(protoUpper, "SHADOWTLS") ||
-		strings.Contains(protoUpper, "STLS") ||
-		strings.Contains(protoUpper, "SS") {
-
+	if usesSingBox(protoUpper) {
 		sbc := NewSingBoxClient(cfg)
 		p, err := sbc.Start()
 		if err != nil {
-			LogMsg("WARN", fmt.Sprintf("Sing-Box start note: %v. Falling back to universal client...", err))
-			uc := NewUniversalClient(cfg)
-			p2, err2 := uc.Start()
-			if err2 != nil {
-				return 0, fmt.Errorf("failed to start %s client: %w", cfg.Protocol, err2)
-			}
-			socksPort = p2
-			activeUniversal = uc
-		} else {
-			socksPort = p
-			activeSingBox = sbc
+			return 0, fmt.Errorf("failed to start %s client: %w", cfg.Protocol, err)
 		}
+		socksPort = p
+		activeSingBox = sbc
 		runningStatus.Store(true)
 		return socksPort, nil
 	}
 
-	// 2b. SSH / HTTP Injector Mode
+	// SSH / HTTP Injector / custom payload mode.
 	if strings.Contains(protoUpper, "SSH") ||
 		strings.Contains(protoUpper, "CUSTOM") ||
 		strings.Contains(protoUpper, "INJECTOR") {
-
 		uc := NewUniversalClient(cfg)
 		p, err := uc.Start()
 		if err != nil {
@@ -175,7 +171,11 @@ func StartTunnel(cfg BridgeConfig) (int, error) {
 		return socksPort, nil
 	}
 
-	// 3. Default: T-Brutal Wire-Speed Paced Mode
+	// T-Brutal is the only remaining protocol handled by the dedicated client.
+	if !strings.EqualFold(protoUpper, "T_BRUTAL") && !strings.EqualFold(protoUpper, "T-BRUTAL") && protoUpper != "TBRUTAL" {
+		return 0, fmt.Errorf("unsupported protocol %q", cfg.Protocol)
+	}
+
 	if cfg.PoolSize <= 0 {
 		cfg.PoolSize = 1
 	}
@@ -259,10 +259,11 @@ func ProbeBugHost(targetURL string, sni string, timeoutMs int) BugHostResult {
 
 	result := BugHostResult{}
 
+	// Certificate inspection is intentionally performed without verification:
+	// this function is a diagnostic probe, not an authenticated application
+	// connection. The actual tunnel paths keep verification policy explicit.
 	isHTTPS := strings.HasPrefix(strings.ToLower(targetURL), "https://")
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true,
-	}
+	tlsConfig := &tls.Config{InsecureSkipVerify: true} //nolint:gosec // diagnostic certificate inspection
 	if sni != "" {
 		tlsConfig.ServerName = sni
 	}
@@ -279,7 +280,7 @@ func ProbeBugHost(targetURL string, sni string, timeoutMs int) BugHostResult {
 		Transport: transport,
 		Timeout:   timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse // Do not follow redirects to see raw 301/302
+			return http.ErrUseLastResponse
 		},
 	}
 
