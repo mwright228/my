@@ -44,6 +44,13 @@ fi
 TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/$HOST_TAG"
 API_LEVEL=35 # Android 15
 
+# Keep the module cache and go.sum state complete before any cgo cross-build.
+# This is required because the dependency graph imports packages from modules
+# whose package-level checksums are not necessarily present in a stale go.sum.
+echo "[*] Resolving Go module cache and checksums..."
+cd "$WORKSPACE_ROOT"
+go mod download all
+
 # 2. Compile for ARM64-v8a (Android 15 Flagship & 16KB Page-Size Aligned)
 echo "[*] Building libmubxcore.so for arm64-v8a (16KB Page Aligned)..."
 mkdir -p "$JNI_LIBS_DIR/arm64-v8a"
