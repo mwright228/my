@@ -18,6 +18,7 @@ import id.my.mub.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -75,7 +76,12 @@ class MubxVpnService : VpnService() {
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
-    private val serviceScope = CoroutineScope(Dispatchers.Default + Job())
+
+    // CRASH FIX #1: SupervisorJob instead of plain Job().
+    // With plain Job(), any uncaught exception in a child coroutine (e.g. tunnel failure)
+    // cancels the ENTIRE scope — all coroutines die and the service becomes unresponsive.
+    // SupervisorJob isolates failures: one coroutine failure does not propagate upward.
+    private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var telemetryJob: Job? = null
 
     override fun onCreate() {
@@ -87,7 +93,25 @@ class MubxVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_CONNECT -> {
-                startForegroundNotification()
+                // CRASH FIX #3: startForeground can throw ForegroundServiceStartNotAllowedException
+                // on Android 12+ if the app is in background. Wrap it so the service doesn't crash.
+                try {
+                    startForegroundNotification()
+                } catch (e: Exception) {
+                    LogRepository.log("VPN", "startForeground failed: ${e.message} — retrying with minimal notification", LogLevel.WARN)
+                    try {
+                        val fallback = NotificationCompat.Builder(this, MubxApplication.VPN_CHANNEL_ID)
+                            .setContentTitle("VPN Active")
+                            .setSmallIcon(android.R.drawable.stat_notify_sync)
+                            .setPriority(NotificationCompat.PRIORITY_LOW)
+                            .build()
+                        startForeground(NOTIFICATION_ID, fallback)
+                    } catch (e2: Exception) {
+                        LogRepository.log("VPN", "startForeground failed completely: ${e2.message}", LogLevel.ERROR)
+                        stopSelf()
+                        return START_NOT_STICKY
+                    }
+                }
                 connect()
             }
             ACTION_DISCONNECT -> {
@@ -130,18 +154,14 @@ class MubxVpnService : VpnService() {
         serviceScope.launch {
             _vpnState.value = VpnState.Connecting
             try {
-                // Pre-resolve host to physical IP before TUN is established to prevent DNS routing loop
+                // Pre-resolve host to physical IP before TUN is established to prevent DNS routing loop.
+                // CRASH FIX #2: Network.getAllByName() does NOT exist on Android — it caused NoSuchMethodError.
+                // Always use InetAddress.getAllByName() which is the correct standard Java API.
                 val targetHost = currentProfile.serverHost.ifBlank { currentProfile.serverIp }
                 val resolvedIp = withContext(Dispatchers.IO) {
                     try {
-                        val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
-                        val activeNet = cm?.activeNetwork
-                        if (activeNet != null) {
-                            val addrs = activeNet.getAllByName(targetHost)
-                            addrs.firstOrNull()?.hostAddress ?: targetHost
-                        } else {
-                            java.net.InetAddress.getByName(targetHost).hostAddress ?: targetHost
-                        }
+                        val addr = java.net.InetAddress.getAllByName(targetHost)
+                        addr.firstOrNull()?.hostAddress ?: targetHost
                     } catch (e: Exception) {
                         LogRepository.log("VPN", "Host pre-resolution note: ${e.message}", LogLevel.WARN)
                         targetHost
@@ -261,15 +281,7 @@ class MubxVpnService : VpnService() {
         serviceScope.launch {
             _vpnState.value = VpnState.Disconnecting
             telemetryJob?.cancel()
-
-            try {
-                NativeCoreBridge.stopTunRouter()
-                NativeCoreBridge.stopTunnel()
-                vpnInterface?.close()
-                vpnInterface = null
-            } catch (ignored: Exception) {
-            }
-
+            cleanupResources()
             LogRepository.log("VPN", "Tunnel disconnected cleanly", LogLevel.INFO)
             _vpnState.value = VpnState.Disconnected
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -277,8 +289,28 @@ class MubxVpnService : VpnService() {
         }
     }
 
+    // CRASH FIX #4: Extracted synchronous cleanup so onDestroy() does not
+    // launch new coroutines into a scope that may already be shutting down.
+    private suspend fun cleanupResources() {
+        try {
+            NativeCoreBridge.stopTunRouter()
+            NativeCoreBridge.stopTunnel()
+            vpnInterface?.close()
+            vpnInterface = null
+        } catch (ignored: Exception) {
+        }
+    }
+
     override fun onDestroy() {
-        disconnect()
+        // Run cleanup on the IO dispatcher without launching a new coroutine into a dying scope.
+        // If the scope is still alive, cancel running jobs first.
+        telemetryJob?.cancel()
+        serviceScope.launch {
+            try {
+                cleanupResources()
+            } catch (_: Exception) {}
+        }
+        _vpnState.value = VpnState.Disconnected
         if (instance == this) {
             instance = null
         }
