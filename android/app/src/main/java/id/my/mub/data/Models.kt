@@ -41,6 +41,7 @@ data class VpnProfile(
     val udpForwarding: Boolean = true,
     val sshUser: String = "",
     val sshPassword: String = "",
+    val sshHostKeySHA256: String = "",
     val proxyHost: String = "",
     val proxyPort: Int = 0,
     val wsPath: String = "/vless-ws",
@@ -77,8 +78,7 @@ data class BugHostProbeResult(
     val certSANs: List<String> = emptyList(),
     val errorMessage: String? = null
 ) {
-    val isWhitelisted: Boolean
-        get() = statusCode in 200..399 && errorMessage == null
+    val isWhitelisted: Boolean get() = statusCode in 200..399 && errorMessage == null
 }
 
 enum class LogLevel { INFO, SUCCESS, WARN, ERROR, NET }
@@ -89,8 +89,7 @@ data class LogEntry(
     val message: String,
     val level: LogLevel = LogLevel.INFO
 ) {
-    val formattedTime: String
-        get() = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(timestamp))
+    val formattedTime: String get() = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(timestamp))
 }
 
 data class RealTelemetry(val rxBytes: Long, val txBytes: Long, val activeConns: Int)
