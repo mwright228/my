@@ -66,17 +66,17 @@ jobs:
         run: |
           ruff check --select E,F --ignore E501 bin/mubx-chameleon tests/
 
+      - name: Populate Go module cache and sums
+        run: go mod download all
+
       - name: Run Go tests
-        run: |
-          go test ./...
+        run: go test ./...
 
       - name: Run Go vet
-        run: |
-          go vet ./...
+        run: go vet ./...
 
       - name: Run Go race tests
-        run: |
-          go test -race ./src/tbrutal/...
+        run: go test -race ./src/tbrutal/...
 
       - name: Run Go vulnerability scan
         run: |
@@ -84,9 +84,7 @@ jobs:
           govulncheck ./...
 
       - name: Run unit tests with pytest
-        run: |
-          pytest -v tests/
+        run: pytest -v tests/
 
       - name: Run comprehensive repository checks
-        run: |
-          bash .github/ci-check.sh
+        run: bash .github/ci-check.sh
