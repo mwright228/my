@@ -620,38 +620,4 @@ fun WardenServersScreen(
             }
         }
     }
-
-    if (showAddProxyDialog) {
-        Dialog(onDismissRequest = { showAddProxyDialog = false }) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth(0.95f)
-                    .clip(RoundedCornerShape(16.dp)),
-                colors = CardDefaults.cardColors(containerColor = WardenScreen),
-                border = androidx.compose.foundation.BorderStroke(1.dp, WardenBorder)
-            ) {
-                Column(modifier = Modifier.padding(18.dp)) {
-                    Text("Add Remote Proxy", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = WardenText)
-                    Spacer(modifier = Modifier.height(10.dp))
-                    WardenField(label = "Label (e.g. Cloudflare)", value = newProxyLabel, onValueChange = { newProxyLabel = it })
-                    WardenField(label = "Host:Port (e.g. 104.16.0.1:443)", value = newProxyValue, onValueChange = { newProxyValue = it })
-                    Spacer(modifier = Modifier.height(14.dp))
-                    WardenSaveButton(
-                        label = "Save proxy",
-                        onClick = {
-                            if (newProxyValue.isNotBlank()) {
-                                remoteProxies = remoteProxies + RemoteProxyItem(
-                                    newProxyLabel.ifBlank { "Proxy ${remoteProxies.size + 1}" },
-                                    newProxyValue.trim()
-                                )
-                                newProxyLabel = ""
-                                newProxyValue = ""
-                                showAddProxyDialog = false
-                            }
-                        }
-                    )
-                }
-            }
-        }
-    }
 }
