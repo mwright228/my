@@ -121,9 +121,9 @@ func websocketAccept(key string) string {
 }
 
 func (s *Server) newSession(conn net.Conn) *Session {
-	s := NewSession(conn, s.authStore, s.pacer)
-	s.allowPrivateTargets = s.cfg.AllowPrivateTargetsForTests
-	return s
+	sess := NewSession(conn, s.authStore, s.pacer)
+	sess.allowPrivateTargets = s.cfg.AllowPrivateTargetsForTests
+	return sess
 }
 
 func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
