@@ -172,6 +172,12 @@ object ConfigParser {
             val path = uri.getQueryParameter("path") ?: "/vless-ws"
             val headerHost = uri.getQueryParameter("host") ?: ""
             val flow = uri.getQueryParameter("flow") ?: "none"
+            val insecureParam = uri.getQueryParameter("allowInsecure") ?: uri.getQueryParameter("insecure")
+            val allowInsecure = when {
+                insecureParam == "1" || insecureParam.equals("true", ignoreCase = true) -> true
+                sni.isNotBlank() && !sni.equals(host, ignoreCase = true) -> true
+                else -> false
+            }
 
             VpnProfile(
                 name = fragment,
@@ -185,7 +191,8 @@ object ConfigParser {
                 brutalRateMbps = 0,
                 wsPath = path,
                 wsHost = headerHost,
-                vlessFlow = flow
+                vlessFlow = flow,
+                allowInsecureTLS = allowInsecure
             )
         } catch (e: Exception) {
             null
@@ -202,6 +209,7 @@ object ConfigParser {
             val id = json.optString("id", "")
             val sni = json.optString("sni", json.optString("host", add))
             val ps = json.optString("ps", "MUBX-VMess")
+            val allowInsecure = json.optBoolean("insecure", false) || (sni.isNotBlank() && !sni.equals(add, ignoreCase = true))
 
             VpnProfile(
                 name = ps,
@@ -212,7 +220,8 @@ object ConfigParser {
                 userUUID = id,
                 protocol = ProtocolType.VLESS_WS,
                 poolConcurrency = 2,
-                brutalRateMbps = 0
+                brutalRateMbps = 0,
+                allowInsecureTLS = allowInsecure
             )
         } catch (e: Exception) {
             null
@@ -227,6 +236,12 @@ object ConfigParser {
             val port = if (uri.port > 0) uri.port else 443
             val sni = uri.getQueryParameter("sni") ?: host
             val fragment = uri.fragment ?: "MUBX-Trojan"
+            val insecureParam = uri.getQueryParameter("allowInsecure") ?: uri.getQueryParameter("insecure")
+            val allowInsecure = when {
+                insecureParam == "1" || insecureParam.equals("true", ignoreCase = true) -> true
+                sni.isNotBlank() && !sni.equals(host, ignoreCase = true) -> true
+                else -> false
+            }
 
             VpnProfile(
                 name = fragment,
@@ -237,7 +252,8 @@ object ConfigParser {
                 userUUID = pass,
                 protocol = ProtocolType.VLESS_TCP,
                 poolConcurrency = 2,
-                brutalRateMbps = 0
+                brutalRateMbps = 0,
+                allowInsecureTLS = allowInsecure
             )
         } catch (e: Exception) {
             null

@@ -297,9 +297,21 @@ func (uc *UniversalClient) dialVLESS(atyp byte, targetHost string, targetPort ui
 
 	// TLS Layer
 	if uc.cfg.UseTLS || strings.HasSuffix(serverAddr, ":443") || strings.HasSuffix(serverAddr, ":8443") {
+		hostPart, _, _ := net.SplitHostPort(serverAddr)
+		if hostPart == "" {
+			hostPart = serverAddr
+		}
+		insecure := uc.cfg.InsecureTLS
+		// When SNI is spoofed (e.g. downloads.vodafone.co.uk vs gr.mub.my.id),
+		// the server's certificate belongs to the server host, not the carrier's SNI bug-host.
+		// Certificate verification must be skipped to allow the SNI spoofing handshake to succeed.
+		if sni != "" && hostPart != "" && !strings.EqualFold(sni, hostPart) {
+			insecure = true
+		}
+
 		tlsConfig := &tls.Config{
 			ServerName:         sni,
-			InsecureSkipVerify: uc.cfg.InsecureTLS,
+			InsecureSkipVerify: insecure,
 			MinVersion:         tls.VersionTLS12,
 		}
 		tlsConn := tls.Client(rawConn, tlsConfig)
@@ -416,9 +428,18 @@ func (uc *UniversalClient) dialTrojan(atyp byte, targetHost string, targetPort u
 		sni, _, _ = net.SplitHostPort(serverAddr)
 	}
 
+	hostPart, _, _ := net.SplitHostPort(serverAddr)
+	if hostPart == "" {
+		hostPart = serverAddr
+	}
+	insecure := uc.cfg.InsecureTLS
+	if sni != "" && hostPart != "" && !strings.EqualFold(sni, hostPart) {
+		insecure = true
+	}
+
 	tlsConfig := &tls.Config{
 		ServerName:         sni,
-		InsecureSkipVerify: uc.cfg.InsecureTLS,
+		InsecureSkipVerify: insecure,
 		MinVersion:         tls.VersionTLS12,
 	}
 	tlsConn := tls.Client(rawConn, tlsConfig)

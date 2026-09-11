@@ -33,20 +33,25 @@ fun WardenXrayEditor(
     onSave: (VpnProfile) -> Unit
 ) {
     var protocol by remember { mutableStateOf(if (initialProfile?.protocol == ProtocolType.SHADOWSOCKS_2022) "Shadowsocks" else "VLESS") }
-    var transport by remember { mutableStateOf("WS") }
-    var security by remember { mutableStateOf("TLS") }
+    var transport by remember { mutableStateOf(if (initialProfile?.protocol == ProtocolType.VLESS_TCP) "TCP" else "WS") }
+    var security by remember { mutableStateOf(if (initialProfile?.serverPort == 443 || initialProfile?.serverPort == 8443) "TLS" else "None") }
 
     var remarks by remember { mutableStateOf(initialProfile?.name ?: "warden-new-profile") }
     var address by remember { mutableStateOf(initialProfile?.serverHost ?: "104.21.44.12") }
     var port by remember { mutableStateOf(initialProfile?.serverPort?.toString() ?: "443") }
     var uuid by remember { mutableStateOf(initialProfile?.userUUID ?: UUID.randomUUID().toString()) }
-    var flow by remember { mutableStateOf(initialProfile?.vlessFlow ?: "xtls-rprx-vision") }
+    var flow by remember { mutableStateOf(initialProfile?.vlessFlow ?: "none") }
     var password by remember { mutableStateOf(initialProfile?.userUUID ?: "warden-pass-21") }
     var method by remember { mutableStateOf(initialProfile?.ssCipher ?: "2022-blake3-aes-128-gcm") }
 
     var path by remember { mutableStateOf(initialProfile?.wsPath ?: "/vless-ws") }
     var hostHeader by remember { mutableStateOf(initialProfile?.wsHost ?: "") }
     var sni by remember { mutableStateOf(initialProfile?.bugHostSNI ?: "") }
+    var allowInsecureTLS by remember {
+        mutableStateOf(
+            initialProfile?.allowInsecureTLS ?: true
+        )
+    }
 
     val protocols = listOf("VLESS", "VMess", "Trojan", "Shadowsocks")
     val transports = listOf("TCP", "WS", "gRPC", "HTTP/2", "XHTTP", "mKCP")
@@ -76,7 +81,7 @@ fun WardenXrayEditor(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "New Xray profile",
+                        text = if (initialProfile != null) "Edit Xray profile" else "New Xray profile",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = WardenText
@@ -151,12 +156,36 @@ fun WardenXrayEditor(
                         WardenField(label = "Fingerprint", value = "chrome")
                         WardenField(label = "Padding scheme", value = "default")
                     }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Allow Insecure TLS toggle (Critical for BugHost / Carrier SNI spoofing)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(WardenSurface2)
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text("Allow Insecure TLS", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = WardenText)
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                "Skip certificate verification. Required when BugHost/SNI does not match the server's certificate.",
+                                fontSize = 10.sp,
+                                color = WardenMutedDim
+                            )
+                        }
+                        WardenToggle(on = allowInsecureTLS, onToggle = { allowInsecureTLS = !allowInsecureTLS })
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
                 WardenSaveButton(
-                    label = "Save profile",
+                    label = if (initialProfile != null) "Update profile" else "Save profile",
                     onClick = {
                         val portInt = port.toIntOrNull() ?: 443
                         val pType = when (protocol) {
@@ -174,7 +203,8 @@ fun WardenXrayEditor(
                             wsPath = path.trim(),
                             wsHost = hostHeader.trim(),
                             vlessFlow = flow.trim(),
-                            ssCipher = method.trim()
+                            ssCipher = method.trim(),
+                            allowInsecureTLS = allowInsecureTLS
                         )
                         onSave(prof)
                     },

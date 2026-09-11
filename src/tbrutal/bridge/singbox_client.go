@@ -153,6 +153,11 @@ func (c *SingBoxClient) Start() (int, error) {
 		effectiveHostHeader = host
 	}
 
+	insecure := c.cfg.InsecureTLS
+	if effectiveSni != "" && host != "" && !strings.EqualFold(effectiveSni, host) {
+		insecure = true
+	}
+
 	path := c.cfg.Path
 	if path == "" {
 		path = "/vless-ws"
@@ -181,7 +186,7 @@ func (c *SingBoxClient) Start() (int, error) {
 			"tls": map[string]any{
 				"enabled":     true,
 				"server_name": effectiveSni,
-				"insecure":    c.cfg.InsecureTLS,
+				"insecure":    insecure,
 			},
 			"brutal": map[string]any{
 				"enabled":   true,
@@ -202,7 +207,7 @@ func (c *SingBoxClient) Start() (int, error) {
 			"tls": map[string]any{
 				"enabled":     true,
 				"server_name": effectiveSni,
-				"insecure":    c.cfg.InsecureTLS,
+				"insecure":    insecure,
 			},
 		}
 
@@ -230,7 +235,7 @@ func (c *SingBoxClient) Start() (int, error) {
 			"tls": map[string]any{
 				"enabled":     true,
 				"server_name": effectiveSni,
-				"insecure":    c.cfg.InsecureTLS,
+				"insecure":    insecure,
 			},
 			"transport": map[string]any{
 				"type": "ws",
@@ -294,7 +299,7 @@ func (c *SingBoxClient) Start() (int, error) {
 			"tls": map[string]any{
 				"enabled":     true,
 				"server_name": effectiveSni,
-				"insecure":    c.cfg.InsecureTLS,
+				"insecure":    insecure,
 				"utls": map[string]any{
 					"enabled":     true,
 					"fingerprint": "chrome",
@@ -369,7 +374,12 @@ func (c *SingBoxClient) Start() (int, error) {
 					"outbound": "proxy",
 				},
 				{
-					"geoip":    "private",
+					"ip_cidr": []string{
+						"127.0.0.0/8",
+						"10.0.0.0/8",
+						"172.16.0.0/12",
+						"192.168.0.0/16",
+					},
 					"outbound": "direct",
 				},
 			},

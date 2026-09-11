@@ -78,6 +78,7 @@ fun WardenServersScreen(
     val context = LocalContext.current
     var mode by remember { mutableStateOf("xray") } // "xray" or "ssh"
     var showXrayEditor by remember { mutableStateOf(false) }
+    var editingProfile by remember { mutableStateOf<VpnProfile?>(null) }
     var showSshEditor by remember { mutableStateOf(false) }
     var showPasteDialog by remember { mutableStateOf(false) }
     var pasteInput by remember { mutableStateOf("") }
@@ -199,7 +200,10 @@ fun WardenServersScreen(
                         icon = Icons.Default.Add,
                         label = "Manual",
                         color = WardenMint,
-                        onClick = { showXrayEditor = true }
+                        onClick = {
+                            editingProfile = null
+                            showXrayEditor = true
+                        }
                     )
                 }
             }
@@ -281,35 +285,72 @@ fun WardenServersScreen(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Row(
+                                modifier = Modifier.weight(1f),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 Text("⚡", fontSize = 18.sp)
-                                Column {
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = prof.name.ifBlank { prof.serverHost },
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.SemiBold,
-                                        color = WardenText
+                                        color = WardenText,
+                                        maxLines = 1
                                     )
                                     Spacer(modifier = Modifier.height(3.dp))
-                                    WardenChip(text = prof.protocol.displayName, color = protoColor)
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        WardenChip(text = prof.protocol.displayName, color = protoColor)
+                                        if (prof.bugHostSNI.isNotBlank() && !prof.bugHostSNI.equals(prof.serverHost, ignoreCase = true)) {
+                                            WardenChip(text = "SNI: ${prof.bugHostSNI}", color = WardenAmber)
+                                        }
+                                        if (prof.allowInsecureTLS) {
+                                            WardenChip(text = "Insecure", color = WardenRose)
+                                        }
+                                    }
                                 }
                             }
 
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Text(
-                                        text = "38ms",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 11.5.sp,
-                                        color = WardenText
+                                IconButton(
+                                    onClick = {
+                                        editingProfile = prof
+                                        showXrayEditor = true
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Edit,
+                                        contentDescription = "Edit Profile",
+                                        tint = WardenMint,
+                                        modifier = Modifier.size(16.dp)
                                     )
-                                    Spacer(modifier = Modifier.height(3.dp))
-                                    WardenLoadBars(load = 5, color = protoColor)
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        ProfileStore.deleteProfile(prof.id)
+                                        storedProfiles = ProfileStore.getAllProfiles()
+                                        if (isActive) {
+                                            val next = storedProfiles.firstOrNull() ?: VpnProfile()
+                                            onSelectProfile(next)
+                                        }
+                                        Toast.makeText(context, "Deleted ${prof.name}", Toast.LENGTH_SHORT).show()
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Delete Profile",
+                                        tint = WardenMutedDim,
+                                        modifier = Modifier.size(16.dp)
+                                    )
                                 }
 
                                 if (isActive) {
@@ -317,14 +358,7 @@ fun WardenServersScreen(
                                         Icons.Default.Check,
                                         contentDescription = "Active",
                                         tint = WardenMint,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                } else {
-                                    Icon(
-                                        Icons.Default.ChevronRight,
-                                        contentDescription = null,
-                                        tint = WardenMutedDim,
-                                        modifier = Modifier.size(18.dp)
+                                        modifier = Modifier.size(20.dp).padding(start = 2.dp)
                                     )
                                 }
                             }
@@ -681,13 +715,18 @@ fun WardenServersScreen(
     // Modal Editors
     if (showXrayEditor) {
         WardenXrayEditor(
-            onClose = { showXrayEditor = false },
+            initialProfile = editingProfile,
+            onClose = {
+                showXrayEditor = false
+                editingProfile = null
+            },
             onSave = { saved ->
                 ProfileStore.saveProfile(saved)
                 ProfileStore.setActiveProfileId(saved.id)
                 storedProfiles = ProfileStore.getAllProfiles()
                 onSelectProfile(saved)
                 showXrayEditor = false
+                editingProfile = null
                 Toast.makeText(context, "Saved profile: ${saved.name}", Toast.LENGTH_SHORT).show()
             }
         )
