@@ -4,11 +4,19 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   ci-pipeline:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -43,6 +51,18 @@ jobs:
       - name: Lint Python code with ruff
         run: |
           ruff check --select E,F --ignore E501 bin/mubx-chameleon tests/
+
+      - name: Run Go tests
+        run: |
+          go test ./...
+
+      - name: Run Go vet
+        run: |
+          go vet ./...
+
+      - name: Run Go race tests
+        run: |
+          go test -race ./src/tbrutal/...
 
       - name: Run unit tests with pytest
         run: |
