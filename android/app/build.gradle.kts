@@ -12,8 +12,8 @@ android {
         applicationId = "id.my.mub"
         minSdk = 28
         targetSdk = 35
-        versionCode = 1
-        versionName = "2.5.0"
+        versionCode = 2
+        versionName = "2.5.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
@@ -23,7 +23,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
