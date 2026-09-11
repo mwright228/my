@@ -123,14 +123,14 @@ object ConfigParser {
     } catch (_: Exception) { null }
 
     private fun parseTuic(raw: String): VpnProfile? = try {
-        val uri=Uri.parse(raw); val user=uri.userInfo.orEmpty(); val uuid=user.substringBefore(':'); val password=uri.getQueryParameter("password") ?: user.substringAfter(':','\u0000').takeIf { it != "\u0000" }.orEmpty()
+        val uri = Uri.parse(raw); val user = uri.userInfo.orEmpty(); val uuid = user.substringBefore(':'); val password = uri.getQueryParameter("password") ?: user.substringAfter(':', "")
         if (uuid.isBlank() || password.isBlank()) return null
         VpnProfile(name=uri.fragment ?: "MUBX-TUIC",serverHost=uri.host.orEmpty(),serverIp=uri.host.orEmpty(),serverPort=if(uri.port>0)uri.port else 8444,
             bugHostSNI=uri.getQueryParameter("sni") ?: uri.host.orEmpty(),userUUID=uuid,tuicPassword=password,protocol=ProtocolType.TUIC,poolConcurrency=4,brutalRateMbps=100,
             allowInsecureTLS=uri.getQueryParameter("allowInsecure") == "1" || uri.getQueryParameter("allowInsecure").equals("true", true))
     } catch (_: Exception) { null }
 
-    private fun parseHttpChameleon(raw: String): VpnProfile? = try { val uri=Uri.parse(raw); VpnProfile(name=uri.fragment ?: "MUBX-Chameleon",serverHost=uri.host.orEmpty(),serverIp=uri.host.orEmpty(),serverPort=if(uri.port>0)uri.port else 8080,userUUID=uri.userInfo.orEmpty(),protocol=ProtocolType.SSH_PAYLOAD,poolConcurrency=2,brutalRateMbps=40) } catch (_: Exception) { null }
+    private fun parseHttpChameleon(raw: String): VpnProfile? = try { val uri=Uri.parse(raw); VpnProfile(name=uri.fragment ?: "MUBX-Chameleon",serverHost=uri.host.orEmpty(),serverIp=uri.host.orEmpty(),serverPort=if(uri.port>0)uri.port else 8080,userUUID=uri.userInfo.orEmpty(),protocol=ProtocolType.SSH_PAYLOAD,poolConcurrency=2,brutalRateMbps=40) } catch (_:Exception) { null }
 
     private fun tryDecodeBase64(input:String):String=try{val clean=input.replace("\r","").replace("\n","").trim();val decoded=String(Base64.decode(clean,Base64.DEFAULT or Base64.URL_SAFE));if(decoded.contains("://"))decoded else input}catch(_:Exception){input}
 }
