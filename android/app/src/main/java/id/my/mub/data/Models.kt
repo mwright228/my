@@ -7,11 +7,16 @@ import java.util.Locale
 enum class ProtocolType(val displayName: String, val badge: String) {
     VLESS_WS("VLESS (WebSocket)", "CDN / TLS"),
     VLESS_TCP("VLESS (Direct TCP)", "Direct TLS"),
-    SHADOWSOCKS_2022("Shadowsocks", "AEAD Cipher"),
+    VLESS_REALITY("VLESS (Reality)", "Reality / uTLS"),
+    VMESS_WS("VMess (WebSocket)", "VMess / WS"),
+    TROJAN_WS("Trojan (WebSocket)", "Trojan / WS"),
+    SHADOWSOCKS("Shadowsocks", "AEAD Cipher"),
+    SHADOWSOCKS_2022("Shadowsocks 2022", "AEAD / BLAKE3"),
     ZIVPN_UDP("ZiVPN (UDP Custom)", "UDP Obfuscation"),
     SSH_PAYLOAD("SSH / HTTP Injector", "Payload Injection"),
     T_BRUTAL("T-Brutal", "Congestion Pacing"),
     HYSTERIA_2("Hysteria 2", "QUIC Protocol"),
+    TUIC("TUIC", "QUIC Protocol"),
     SHADOWTLS_V3("ShadowTLS", "TLS Camouflage"),
     AMNEZIA_WG("AmneziaWG", "WireGuard Obfs")
 }
@@ -42,6 +47,8 @@ data class VpnProfile(
     val wsHost: String = "",
     val ssCipher: String = "2022-blake3-aes-128-gcm",
     val vlessFlow: String = "",
+    val realityPublicKey: String = "",
+    val realityShortId: String = "",
     val killSwitchEnabled: Boolean = false
 )
 
