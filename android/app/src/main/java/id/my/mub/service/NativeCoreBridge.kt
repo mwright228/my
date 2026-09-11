@@ -49,9 +49,6 @@ object NativeCoreBridge {
     suspend fun startTunnel(profile: VpnProfile): Result<Int> = withContext(Dispatchers.IO) {
         if (!nativeLoaded) return@withContext Result.failure(IllegalStateException("Native VPN core is unavailable"))
         try {
-            if (profile.protocol == id.my.mub.data.ProtocolType.VLESS_TCP || profile.protocol == id.my.mub.data.ProtocolType.VLESS_REALITY) {
-                return@withContext Result.failure(IllegalArgumentException("${profile.protocol.displayName} is not enabled until its dedicated transport engine is available"))
-            }
             val host = if (profile.serverIp.isNotBlank()) profile.serverIp else profile.serverHost
             if (host.isBlank()) return@withContext Result.failure(IllegalArgumentException("Server host/IP is required"))
             val dialAddr = if (profile.protocol == id.my.mub.data.ProtocolType.SSH_PAYLOAD && profile.proxyHost.isNotBlank()) {
