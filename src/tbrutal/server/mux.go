@@ -16,6 +16,9 @@ import (
 
 const maxStreamsPerSession = 128
 
+// ActiveConns tracks all currently live relay streams across server sessions.
+var ActiveConns atomic.Int32
+
 type Stream struct {
 	id         uint32
 	targetConn net.Conn
