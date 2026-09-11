@@ -123,9 +123,9 @@ object ProfileStore {
         put("bugHostSNI",p.bugHostSNI); put("userUUID",p.userUUID); put("protocol",p.protocol.name); put("poolConcurrency",p.poolConcurrency)
         put("brutalRateMbps",p.brutalRateMbps); put("allowInsecureTLS",p.allowInsecureTLS); put("customPayload",p.customPayload)
         put("udpObfsPassword",p.udpObfsPassword); put("udpPortHopRange",p.udpPortHopRange); put("dnsServer",p.dnsServer); put("dnsSecondary",p.dnsSecondary)
-        put("udpForwarding",p.udpForwarding); put("sshUser",p.sshUser); put("sshPassword",p.sshPassword); put("proxyHost",p.proxyHost); put("proxyPort",p.proxyPort)
-        put("wsPath",p.wsPath); put("wsHost",p.wsHost); put("ssCipher",p.ssCipher); put("vlessFlow",p.vlessFlow); put("tuicPassword",p.tuicPassword)
-        put("realityPublicKey",p.realityPublicKey); put("realityShortId",p.realityShortId); put("killSwitchEnabled",p.killSwitchEnabled)
+        put("udpForwarding",p.udpForwarding); put("sshUser",p.sshUser); put("sshPassword",p.sshPassword); put("sshHostKeySHA256",p.sshHostKeySHA256)
+        put("proxyHost",p.proxyHost); put("proxyPort",p.proxyPort); put("wsPath",p.wsPath); put("wsHost",p.wsHost); put("ssCipher",p.ssCipher)
+        put("vlessFlow",p.vlessFlow); put("tuicPassword",p.tuicPassword); put("realityPublicKey",p.realityPublicKey); put("realityShortId",p.realityShortId); put("killSwitchEnabled",p.killSwitchEnabled)
     }
 
     private fun profileFromJson(obj: JSONObject): VpnProfile {
@@ -135,7 +135,7 @@ object ProfileStore {
             bugHostSNI=obj.optString("bugHostSNI",""), userUUID=obj.optString("userUUID",""), protocol=proto, poolConcurrency=obj.optInt("poolConcurrency",2), brutalRateMbps=obj.optInt("brutalRateMbps",50),
             allowInsecureTLS=obj.optBoolean("allowInsecureTLS",false), customPayload=obj.optString("customPayload",""), udpObfsPassword=obj.optString("udpObfsPassword",""), udpPortHopRange=obj.optString("udpPortHopRange",""),
             dnsServer=obj.optString("dnsServer","1.1.1.1"), dnsSecondary=obj.optString("dnsSecondary","8.8.8.8"), udpForwarding=obj.optBoolean("udpForwarding",true), sshUser=obj.optString("sshUser",""), sshPassword=obj.optString("sshPassword",""),
-            proxyHost=obj.optString("proxyHost",""), proxyPort=obj.optInt("proxyPort",0), wsPath=obj.optString("wsPath","/vless-ws"), wsHost=obj.optString("wsHost",""), ssCipher=obj.optString("ssCipher","2022-blake3-aes-128-gcm"),
+            sshHostKeySHA256=obj.optString("sshHostKeySHA256",""), proxyHost=obj.optString("proxyHost",""), proxyPort=obj.optInt("proxyPort",0), wsPath=obj.optString("wsPath","/vless-ws"), wsHost=obj.optString("wsHost",""), ssCipher=obj.optString("ssCipher","2022-blake3-aes-128-gcm"),
             vlessFlow=obj.optString("vlessFlow",""), tuicPassword=obj.optString("tuicPassword",""), realityPublicKey=obj.optString("realityPublicKey",""), realityShortId=obj.optString("realityShortId",""), killSwitchEnabled=obj.optBoolean("killSwitchEnabled",false)
         )
     }
