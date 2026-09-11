@@ -41,13 +41,13 @@ static inline jstring newStringUTF(JNIEnv* env, const char* str) {
 
 static inline JNIEnv* getJNIEnv() {
     if (!g_vm) return NULL;
-    void* raw_env = NULL;
-    int status = (*g_vm)->GetEnv(g_vm, (JNIEnv**)&raw_env, JNI_VERSION_1_6);
+    void* env_ptr = NULL;
+    int status = (*g_vm)->GetEnv(g_vm, &env_ptr, JNI_VERSION_1_6);
     if (status != JNI_OK) {
-        status = (*g_vm)->AttachCurrentThreadAsDaemon(g_vm, (JNIEnv**)&raw_env, NULL);
+        status = (*g_vm)->AttachCurrentThreadAsDaemon(g_vm, &env_ptr, NULL);
         if (status != JNI_OK) return NULL;
     }
-    return (JNIEnv*)raw_env;
+    return (JNIEnv*)env_ptr;
 }
 
 static inline int callProtectSocket(int fd) {
