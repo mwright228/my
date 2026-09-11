@@ -34,7 +34,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.27.1'
+          go-version: '1.26.7'
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -80,7 +80,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.27.1'
+          go-version: '1.26.7'
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
