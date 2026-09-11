@@ -18,8 +18,12 @@ object ConfigParser {
      */
     suspend fun fetchSubscription(subUrl: String): List<VpnProfile> = withContext(Dispatchers.IO) {
         val profiles = mutableListOf<VpnProfile>()
+        val trimmedUrl = subUrl.trim()
+        if (!trimmedUrl.startsWith("http://", ignoreCase = true) && !trimmedUrl.startsWith("https://", ignoreCase = true)) {
+            return@withContext emptyList()
+        }
         try {
-            val url = URL(subUrl)
+            val url = URL(trimmedUrl)
             val conn = url.openConnection() as HttpURLConnection
             conn.connectTimeout = 8000
             conn.readTimeout = 8000

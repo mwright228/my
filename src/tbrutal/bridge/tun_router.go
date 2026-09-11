@@ -77,8 +77,9 @@ func StartTunRouter(fd int, socksPort int) error {
 	}
 	router.running.Store(true)
 
-	router.wg.Add(1)
+	router.wg.Add(2)
 	go router.readLoop()
+	go router.reaperLoop()
 
 	activeRouter = router
 	return nil
@@ -110,6 +111,33 @@ func StopTunRouter() {
 
 	activeRouter.wg.Wait()
 	activeRouter = nil
+}
+
+func (r *TunRouter) reaperLoop() {
+	defer r.wg.Done()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.stopChan:
+			return
+		case <-ticker.C:
+			now := time.Now()
+			r.sessions.Range(func(key, val interface{}) bool {
+				if sess, ok := val.(*TcpSession); ok {
+					if sess.closed.Load() || now.Sub(sess.lastActive) > 90*time.Second {
+						sess.closed.Store(true)
+						if sess.socksConn != nil {
+							_ = sess.socksConn.Close()
+						}
+						r.sessions.Delete(key)
+					}
+				}
+				return true
+			})
+		}
+	}
 }
 
 func (r *TunRouter) readLoop() {
@@ -346,17 +374,22 @@ func (r *TunRouter) initSocksConnection(sess *TcpSession, targetHost string, tar
 	conn, err := net.DialTimeout("tcp", r.socksAddr, 4*time.Second)
 	if err != nil {
 		sess.closed.Store(true)
+		r.sessions.Delete(sess.key)
 		return
 	}
 	sess.socksConn = conn
 
 	// SOCKS5 handshake
 	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+		sess.closed.Store(true)
+		r.sessions.Delete(sess.key)
 		conn.Close()
 		return
 	}
 	var authResp [2]byte
 	if _, err := io.ReadFull(conn, authResp[:]); err != nil || authResp[1] != 0x00 {
+		sess.closed.Store(true)
+		r.sessions.Delete(sess.key)
 		conn.Close()
 		return
 	}
@@ -374,12 +407,16 @@ func (r *TunRouter) initSocksConnection(sess *TcpSession, targetHost string, tar
 	req = append(req, pBytes...)
 
 	if _, err := conn.Write(req); err != nil {
+		sess.closed.Store(true)
+		r.sessions.Delete(sess.key)
 		conn.Close()
 		return
 	}
 
 	var resp [10]byte
 	if _, err := io.ReadFull(conn, resp[:]); err != nil || resp[1] != 0x00 {
+		sess.closed.Store(true)
+		r.sessions.Delete(sess.key)
 		conn.Close()
 		return
 	}
@@ -392,6 +429,7 @@ func (r *TunRouter) initSocksConnection(sess *TcpSession, targetHost string, tar
 		}
 		n, err := conn.Read(buf)
 		if n > 0 {
+			sess.lastActive = time.Now()
 			srcIP := net.ParseIP(sess.key.dstIP).To4()
 			dstIP := net.ParseIP(sess.key.srcIP).To4()
 			tcpPkt := craftTCPPacket(srcIP, dstIP, sess.key.dstPort, sess.key.srcPort, sess.serverSeq, sess.clientSeq, 0x18, buf[:n])
@@ -399,6 +437,12 @@ func (r *TunRouter) initSocksConnection(sess *TcpSession, targetHost string, tar
 			_, _ = r.tunFile.Write(tcpPkt)
 		}
 		if err != nil {
+			sess.closed.Store(true)
+			r.sessions.Delete(sess.key)
+			srcIP := net.ParseIP(sess.key.dstIP).To4()
+			dstIP := net.ParseIP(sess.key.srcIP).To4()
+			finPkt := craftTCPPacket(srcIP, dstIP, sess.key.dstPort, sess.key.srcPort, sess.serverSeq, sess.clientSeq, 0x11, nil)
+			_, _ = r.tunFile.Write(finPkt)
 			return
 		}
 	}

@@ -37,6 +37,32 @@ class MubxVpnService : VpnService() {
 
         var currentProfile: VpnProfile = VpnProfile()
             private set
+        private val BANKING_SECURITY_PACKAGES = listOf(
+            // Global Fintech & Wallets
+            "com.google.android.apps.walletnfcrel",
+            "com.paypal.android.p2pmobile",
+            "com.binance.dev",
+            "com.revolut.revolut",
+            "com.wise.android",
+            // Regional Banking & Wallets (JazzCash, EasyPaisa, SadaPay, NayaPay, Top Banks)
+            "com.techlogix.mobilinkcustomer",
+            "pk.com.telenor.phoenix",
+            "com.sadapay.app",
+            "com.nayapay.app",
+            "com.hbl.mobilebanking",
+            "com.innovative.meezan",
+            "com.mcb.mobile",
+            "com.ubl.digital",
+            "com.faysalbank.digibank",
+            "com.alfa.bankalfalah",
+            "com.abpl.mobilebanking",
+            // International Banks
+            "com.chase.sig.android",
+            "com.infonow.bofa",
+            "com.wf.wellsfargomobile",
+            "com.citi.citimobile",
+            "com.barclays.android.barclaysmobilebanking"
+        )
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
@@ -88,10 +114,10 @@ class MubxVpnService : VpnService() {
         serviceScope.launch {
             _vpnState.value = VpnState.Connecting
             try {
-                // 1. Launch T-Brutal Go Core connection pool
+                // 1. Launch multi-protocol Go Core connection pool
                 val socksPort = NativeCoreBridge.startTunnel(currentProfile).getOrThrow()
 
-                // 2. Establish Android TUN Interface (tun0)
+                // 2. Establish Android TUN Interface (tun0) with Banking App Protection
                 val builder = Builder().apply {
                     setSession("MUB-X Tunnel")
                     addAddress("172.19.0.1", 30)
@@ -100,6 +126,16 @@ class MubxVpnService : VpnService() {
                     addRoute("0.0.0.0", 0)
                     setMtu(1500)
                     setBlocking(true)
+
+                    // Banking Security Bypass: Exclude banking apps from VPN routing
+                    // to ensure they use direct carrier network and never trigger geo-fraud flags.
+                    for (pkg in BANKING_SECURITY_PACKAGES) {
+                        try {
+                            addDisallowedApplication(pkg)
+                        } catch (ignored: Exception) {
+                            // App not installed on device; safely skip
+                        }
+                    }
                 }
 
                 vpnInterface = builder.establish()

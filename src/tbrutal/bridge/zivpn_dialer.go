@@ -313,4 +313,6 @@ func (zc *ZiVPNClient) pipeObfuscated(tcpConn net.Conn, udpConn *net.UDPConn, ta
 	}()
 
 	<-done
+	_ = tcpConn.Close()
+	_ = udpConn.Close()
 }
