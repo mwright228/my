@@ -21,10 +21,29 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val keystorePath = providers.environmentVariable("MUBX_KEYSTORE_PATH")
+            val storePassword = providers.environmentVariable("MUBX_KEYSTORE_PASSWORD")
+            val keyAlias = providers.environmentVariable("MUBX_KEY_ALIAS")
+            val keyPassword = providers.environmentVariable("MUBX_KEY_PASSWORD")
+            if (keystorePath.isPresent && storePassword.isPresent && keyAlias.isPresent && keyPassword.isPresent) {
+                storeFile = file(keystorePath.get())
+                this.storePassword = storePassword.get()
+                this.keyAlias = keyAlias.get()
+                this.keyPassword = keyPassword.get()
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            val signingReady = listOf(
+                "MUBX_KEYSTORE_PATH", "MUBX_KEYSTORE_PASSWORD", "MUBX_KEY_ALIAS", "MUBX_KEY_PASSWORD"
+            ).all { providers.environmentVariable(it).isPresent }
+            if (signingReady) signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -63,6 +82,5 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.kotlinx.coroutines.android)
-
     debugImplementation(libs.androidx.ui.tooling)
 }
