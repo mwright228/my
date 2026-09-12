@@ -64,35 +64,33 @@ func TestServerPongsToPingAndReadsPayload(t *testing.T) {
 	defer clientRaw.Close()
 	defer serverRaw.Close()
 
-	pong := make(chan error, 1)
+	result := make(chan error, 1)
 	go func() {
 		if err := writeMaskedFrame(clientRaw, opcodePing, []byte("hello")); err != nil {
-			pong <- err
+			result <- err
 			return
 		}
 		header := make([]byte, 2)
 		if _, err := io.ReadFull(clientRaw, header); err != nil {
-			pong <- err
+			result <- err
 			return
 		}
 		if header[0] != finBit|opcodePong || header[1] != 5 {
-			pong <- io.ErrUnexpectedEOF
+			result <- io.ErrUnexpectedEOF
 			return
 		}
 		payload := make([]byte, 5)
 		if _, err := io.ReadFull(clientRaw, payload); err != nil {
-			pong <- err
+			result <- err
 			return
 		}
 		if string(payload) != "hello" {
-			pong <- io.ErrUnexpectedEOF
+			result <- io.ErrUnexpectedEOF
 			return
 		}
-		pong <- nil
-
 		// net.Pipe permits only synchronous writes. Keep the ping/pong exchange
 		// serialized with the data frame so frame bytes cannot interleave.
-		pong <- writeMaskedFrame(clientRaw, opcodeBinary, []byte("data"))
+		result <- writeMaskedFrame(clientRaw, opcodeBinary, []byte("data"))
 	}()
 
 	got := make([]byte, 4)
@@ -102,10 +100,7 @@ func TestServerPongsToPingAndReadsPayload(t *testing.T) {
 	if string(got) != "data" {
 		t.Fatalf("got %q, want data", got)
 	}
-	if err := <-pong; err != nil {
-		t.Fatal(err)
-	}
-	if err := <-pong; err != nil {
+	if err := <-result; err != nil {
 		t.Fatal(err)
 	}
 }
