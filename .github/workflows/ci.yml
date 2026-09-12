@@ -24,7 +24,7 @@ jobs:
 
       - name: Generate sing-box 1.14.0 dependency candidate
         id: singbox_refresh
-        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[dep-refresh]')
+        if: github.event_name == 'push' && github.ref == 'refs/heads/security/network-repair'
         continue-on-error: true
         run: |
           cp go.mod /tmp/go.mod.before
