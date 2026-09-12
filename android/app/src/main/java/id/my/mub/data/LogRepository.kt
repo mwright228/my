@@ -11,18 +11,23 @@ object LogRepository {
     val logs: StateFlow<List<LogEntry>> = _logs.asStateFlow()
 
     private const val MAX_LOG_ENTRIES = 500
+    private val mutationLock = Any()
 
     fun log(tag: String, message: String, level: LogLevel = LogLevel.INFO) {
         val entry = LogEntry(tag = tag, message = message, level = level)
-        buffer.add(entry)
-        if (buffer.size > MAX_LOG_ENTRIES) {
-            buffer.removeAt(0)
+        synchronized(mutationLock) {
+            buffer.add(entry)
+            while (buffer.size > MAX_LOG_ENTRIES) {
+                buffer.removeAt(0)
+            }
+            _logs.value = buffer.toList()
         }
-        _logs.value = buffer.toList()
     }
 
     fun clear() {
-        buffer.clear()
-        _logs.value = emptyList()
+        synchronized(mutationLock) {
+            buffer.clear()
+            _logs.value = emptyList()
+        }
     }
 }

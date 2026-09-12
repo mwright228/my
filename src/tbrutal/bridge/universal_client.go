@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha1"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
@@ -22,8 +23,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// UniversalClient provides a multi-protocol SOCKS5 local bridge supporting:
-// VLESS (WS / TCP / TLS), Trojan, VMess, Shadowsocks, SSH/Custom Payload, ZiVPN, and T-Brutal.
+// UniversalClient provides a multi-protocol SOCKS5 local bridge.
 type UniversalClient struct {
 	cfg         BridgeConfig
 	listener    net.Listener
@@ -34,51 +34,28 @@ type UniversalClient struct {
 	sshClientMu sync.Mutex
 }
 
-func NewUniversalClient(cfg BridgeConfig) *UniversalClient {
-	return &UniversalClient{
-		cfg:      cfg,
-		stopChan: make(chan struct{}),
-	}
-}
+func NewUniversalClient(cfg BridgeConfig) *UniversalClient { return &UniversalClient{cfg: cfg, stopChan: make(chan struct{})} }
 
 func (uc *UniversalClient) Start() (int, error) {
 	listenAddr := uc.cfg.SocksListenAddr
-	if listenAddr == "" {
-		listenAddr = "127.0.0.1:0"
-	}
-
+	if listenAddr == "" { listenAddr = "127.0.0.1:0" }
 	ln, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		return 0, fmt.Errorf("failed to bind SOCKS5 listener on %s: %w", listenAddr, err)
-	}
+	if err != nil { return 0, fmt.Errorf("failed to bind SOCKS5 listener on %s: %w", listenAddr, err) }
 	uc.listener = ln
-
 	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
-	if !ok {
-		_ = ln.Close()
-		return 0, errors.New("failed to get TCP address for SOCKS5 listener")
-	}
-
+	if !ok { _ = ln.Close(); return 0, errors.New("failed to get TCP address for SOCKS5 listener") }
 	uc.wg.Add(1)
 	go uc.acceptLoop()
-
 	LogMsg("CLIENT", fmt.Sprintf("Universal client active on %s for protocol %s", ln.Addr().String(), uc.cfg.Protocol))
 	return tcpAddr.Port, nil
 }
 
 func (uc *UniversalClient) Stop() {
-	if uc.closed.Swap(true) {
-		return
-	}
+	if uc.closed.Swap(true) { return }
 	close(uc.stopChan)
-	if uc.listener != nil {
-		_ = uc.listener.Close()
-	}
+	if uc.listener != nil { _ = uc.listener.Close() }
 	uc.sshClientMu.Lock()
-	if uc.sshClient != nil {
-		_ = uc.sshClient.Close()
-		uc.sshClient = nil
-	}
+	if uc.sshClient != nil { _ = uc.sshClient.Close(); uc.sshClient = nil }
 	uc.sshClientMu.Unlock()
 	uc.wg.Wait()
 	LogMsg("CLIENT", "Universal client stopped")
@@ -89,9 +66,7 @@ func (uc *UniversalClient) acceptLoop() {
 	for {
 		conn, err := uc.listener.Accept()
 		if err != nil {
-			if uc.closed.Load() {
-				return
-			}
+			if uc.closed.Load() { return }
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
@@ -101,30 +76,17 @@ func (uc *UniversalClient) acceptLoop() {
 
 func (uc *UniversalClient) handleSocksConnection(clientConn net.Conn) {
 	defer clientConn.Close()
+	_ = clientConn.SetDeadline(time.Now().Add(15 * time.Second))
+	if tc, ok := clientConn.(*net.TCPConn); ok { _ = tc.SetNoDelay(true) }
 
-	if tc, ok := clientConn.(*net.TCPConn); ok {
-		_ = tc.SetNoDelay(true)
-	}
-
-	// 1. SOCKS5 Greeting Handshake
 	var verAuth [2]byte
-	if _, err := io.ReadFull(clientConn, verAuth[:]); err != nil || verAuth[0] != 0x05 {
-		return
-	}
-	nMethods := int(verAuth[1])
-	methods := make([]byte, nMethods)
-	if _, err := io.ReadFull(clientConn, methods); err != nil {
-		return
-	}
-	// Reply: No Auth (0x00)
-	if _, err := clientConn.Write([]byte{0x05, 0x00}); err != nil {
-		return
-	}
+	if _, err := io.ReadFull(clientConn, verAuth[:]); err != nil || verAuth[0] != 0x05 { return }
+	methods := make([]byte, int(verAuth[1]))
+	if _, err := io.ReadFull(clientConn, methods); err != nil { return }
+	if _, err := clientConn.Write([]byte{0x05, 0x00}); err != nil { return }
 
-	// 2. SOCKS5 Request
 	var reqHdr [4]byte
 	if _, err := io.ReadFull(clientConn, reqHdr[:]); err != nil || reqHdr[0] != 0x05 || reqHdr[1] != 0x01 {
-		// Only CONNECT (0x01) supported
 		_, _ = clientConn.Write([]byte{0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return
 	}
@@ -132,519 +94,280 @@ func (uc *UniversalClient) handleSocksConnection(clientConn net.Conn) {
 	atyp := reqHdr[3]
 	var targetHost string
 	var rawAddr []byte
-
 	switch atyp {
-	case 0x01: // IPv4
+	case 0x01:
 		var ip [4]byte
-		if _, err := io.ReadFull(clientConn, ip[:]); err != nil {
-			return
-		}
-		rawAddr = append([]byte{0x01}, ip[:]...)
-		targetHost = net.IP(ip[:]).String()
-	case 0x03: // Domain
+		if _, err := io.ReadFull(clientConn, ip[:]); err != nil { return }
+		rawAddr = append([]byte{0x01}, ip[:]...); targetHost = net.IP(ip[:]).String()
+	case 0x03:
 		var dLen [1]byte
-		if _, err := io.ReadFull(clientConn, dLen[:]); err != nil {
-			return
-		}
+		if _, err := io.ReadFull(clientConn, dLen[:]); err != nil || dLen[0] == 0 { return }
 		dBytes := make([]byte, dLen[0])
-		if _, err := io.ReadFull(clientConn, dBytes); err != nil {
-			return
-		}
-		rawAddr = append([]byte{0x03, dLen[0]}, dBytes...)
-		targetHost = string(dBytes)
-	case 0x04: // IPv6
+		if _, err := io.ReadFull(clientConn, dBytes); err != nil { return }
+		rawAddr = append([]byte{0x03, dLen[0]}, dBytes...); targetHost = string(dBytes)
+	case 0x04:
 		var ip [16]byte
-		if _, err := io.ReadFull(clientConn, ip[:]); err != nil {
-			return
-		}
-		rawAddr = append([]byte{0x04}, ip[:]...)
-		targetHost = net.IP(ip[:]).String()
+		if _, err := io.ReadFull(clientConn, ip[:]); err != nil { return }
+		rawAddr = append([]byte{0x04}, ip[:]...); targetHost = net.IP(ip[:]).String()
 	default:
-		_, _ = clientConn.Write([]byte{0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
-		return
+		_, _ = clientConn.Write([]byte{0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0}); return
 	}
 
 	var portBuf [2]byte
-	if _, err := io.ReadFull(clientConn, portBuf[:]); err != nil {
-		return
-	}
+	if _, err := io.ReadFull(clientConn, portBuf[:]); err != nil { return }
 	targetPort := binary.BigEndian.Uint16(portBuf[:])
+	_ = clientConn.SetDeadline(time.Time{})
 
-	// 3. Dial Upstream Server via Chosen Protocol
 	upstreamConn, err := uc.dialUpstream(atyp, targetHost, targetPort, rawAddr)
 	if err != nil {
 		LogMsg("CLIENT", fmt.Sprintf("Dial upstream %s:%d failed: %v", targetHost, targetPort, err))
-		_, _ = clientConn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0}) // Host unreachable
+		_, _ = clientConn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return
 	}
 	defer upstreamConn.Close()
+	if _, err := clientConn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0}); err != nil { return }
 
-	// 4. Send SOCKS5 Success Response
-	if _, err := clientConn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0}); err != nil {
-		return
-	}
-
-	// 5. Bi-directional data piping
 	errChan := make(chan error, 2)
-	go func() {
-		buf := make([]byte, 32*1024)
-		_, err := io.CopyBuffer(upstreamConn, clientConn, buf)
-		errChan <- err
-	}()
-	go func() {
-		buf := make([]byte, 32*1024)
-		_, err := io.CopyBuffer(clientConn, upstreamConn, buf)
-		errChan <- err
-	}()
-
+	go func() { _, e := io.CopyBuffer(upstreamConn, clientConn, make([]byte, 32*1024)); errChan <- e }()
+	go func() { _, e := io.CopyBuffer(clientConn, upstreamConn, make([]byte, 32*1024)); errChan <- e }()
 	<-errChan
 }
 
-// dialUpstream connects to the server and executes the appropriate protocol handshake.
 func (uc *UniversalClient) dialUpstream(atyp byte, targetHost string, targetPort uint16, rawAddr []byte) (net.Conn, error) {
 	proto := strings.ToUpper(strings.TrimSpace(uc.cfg.Protocol))
-
-	switch {
-	case strings.Contains(proto, "VLESS"):
+	switch proto {
+	case "VLESS_WS":
 		return uc.dialVLESS(atyp, targetHost, targetPort, rawAddr)
-	case strings.Contains(proto, "TROJAN"):
+	case "TROJAN_WS", "TROJAN":
 		return uc.dialTrojan(atyp, targetHost, targetPort, rawAddr)
-	case strings.Contains(proto, "SSH") || strings.Contains(proto, "CUSTOM") || strings.Contains(proto, "INJECTOR"):
+	case "SSH_PAYLOAD", "SSH", "CUSTOM", "INJECTOR", "HTTP_INJECTOR":
 		return uc.dialSSH(targetHost, targetPort)
 	default:
-		// Default to VLESS / Direct SOCKS
-		return uc.dialVLESS(atyp, targetHost, targetPort, rawAddr)
+		return nil, fmt.Errorf("unsupported universal protocol %q", uc.cfg.Protocol)
 	}
 }
 
-var physDnsCache sync.Map // host -> IP string
+var physDnsCache sync.Map
 
-// dialPhysical establishes a protected TCP connection to the destination server.
+func isBlockedIP(ip net.IP) bool {
+	if ip == nil { return true }
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
+}
+
+func hasPort(s string) bool {
+	_, _, err := net.SplitHostPort(s)
+	return err == nil
+}
+
+func (uc *UniversalClient) protectedControl() func(network, address string, c syscall.RawConn) error {
+	return func(network, address string, c syscall.RawConn) error {
+		var protectErr error
+		err := c.Control(func(fd uintptr) {
+			if !ProtectSocket(int(fd)) { protectErr = errors.New("failed to protect outbound socket from VPN routing loop") }
+		})
+		if err != nil { return err }
+		return protectErr
+	}
+}
+
 func (uc *UniversalClient) dialPhysical(addr string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
-		port = "443"
-	}
+	if err != nil { host, port = addr, "443" }
+	if host == "" { return nil, errors.New("empty physical dial host") }
 
 	targetIP := host
-	// If host is not a raw numeric IP, resolve via protected UDP socket to prevent VPN routing loop
 	if net.ParseIP(host) == nil {
 		if cached, ok := physDnsCache.Load(host); ok {
 			targetIP = cached.(string)
 		} else {
 			dnsServer := uc.cfg.DNSServer
-			if dnsServer == "" {
-				dnsServer = "1.1.1.1:53"
-			}
-			if !hasPort(dnsServer) {
-				dnsServer = net.JoinHostPort(dnsServer, "53")
-			}
+			if dnsServer == "" { dnsServer = "1.1.1.1:53" }
+			if !hasPort(dnsServer) { dnsServer = net.JoinHostPort(dnsServer, "53") }
 			resolver := &net.Resolver{
 				PreferGo: true,
 				Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-					d := net.Dialer{
-						Timeout: 3 * time.Second,
-						Control: func(network, address string, c syscall.RawConn) error {
-							return c.Control(func(fd uintptr) {
-								ProtectSocket(int(fd))
-							})
-						},
-					}
-					return d.DialContext(ctx, "udp", dnsServer)
+					var protectErr error
+					d := net.Dialer{Timeout: 3 * time.Second, Control: func(network, address string, c syscall.RawConn) error {
+						return c.Control(func(fd uintptr) {
+							if !ProtectSocket(int(fd)) { protectErr = errors.New("failed to protect physical DNS socket") }
+						})
+					}}
+					conn, err := d.DialContext(ctx, "udp", dnsServer)
+					if protectErr != nil { if conn != nil { _ = conn.Close() }; return nil, protectErr }
+					return conn, err
 				},
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-			ips, err := resolver.LookupIP(ctx, "ip4", host)
+			ips, lookupErr := resolver.LookupIP(ctx, "ip4", host)
 			cancel()
-			if err == nil && len(ips) > 0 {
-				targetIP = ips[0].String()
-				physDnsCache.Store(host, targetIP)
-				LogMsg("CLIENT", fmt.Sprintf("Resolved %s to %s via protected DNS", host, targetIP))
+			if lookupErr != nil || len(ips) == 0 { return nil, fmt.Errorf("protected DNS resolution failed for %s", host) }
+			for _, ip := range ips {
+				if !isBlockedIP(ip) { targetIP = ip.String(); break }
 			}
+			if net.ParseIP(targetIP) == nil { return nil, errors.New("physical host resolved only to blocked addresses") }
+			physDnsCache.Store(host, targetIP)
 		}
 	}
 
-	dialAddr := net.JoinHostPort(targetIP, port)
-	dialer := &net.Dialer{
-		Timeout: 10 * time.Second,
-		Control: func(network, address string, c syscall.RawConn) error {
-			return c.Control(func(fd uintptr) {
-				ProtectSocket(int(fd))
-			})
-		},
-	}
-	conn, err := dialer.Dial("tcp", dialAddr)
-	if err != nil {
-		return nil, err
-	}
-	if tc, ok := conn.(*net.TCPConn); ok {
-		_ = tc.SetNoDelay(true)
-		_ = tc.SetKeepAlive(true)
-		_ = tc.SetKeepAlivePeriod(30 * time.Second)
-	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second, Control: func(network, address string, c syscall.RawConn) error {
+		var protectErr error
+		err := c.Control(func(fd uintptr) {
+			if !ProtectSocket(int(fd)) { protectErr = errors.New("failed to protect physical TCP socket") }
+		})
+		if err != nil { return err }
+		return protectErr
+	}}
+	conn, err := dialer.Dial("tcp", net.JoinHostPort(targetIP, port))
+	if err != nil { return nil, err }
+	if tc, ok := conn.(*net.TCPConn); ok { _ = tc.SetNoDelay(true); _ = tc.SetKeepAlive(true); _ = tc.SetKeepAlivePeriod(30 * time.Second) }
 	return conn, nil
 }
 
-// dialVLESS establishes a VLESS session over WebSocket/TLS or Direct TCP/TLS.
 func (uc *UniversalClient) dialVLESS(atyp byte, targetHost string, targetPort uint16, rawAddr []byte) (net.Conn, error) {
 	serverAddr := uc.cfg.ServerAddr
-	if !hasPort(serverAddr) {
-		serverAddr = net.JoinHostPort(serverAddr, "443")
-	}
-
+	if !hasPort(serverAddr) { serverAddr = net.JoinHostPort(serverAddr, "443") }
 	rawConn, err := uc.dialPhysical(serverAddr)
-	if err != nil {
-		return nil, fmt.Errorf("connect to %s failed: %w", serverAddr, err)
-	}
-
+	if err != nil { return nil, fmt.Errorf("connect to %s failed: %w", serverAddr, err) }
 	var conn net.Conn = rawConn
 
 	sni := uc.cfg.SNI
-	if sni == "" {
-		sni, _, _ = net.SplitHostPort(serverAddr)
-	}
-
-	// TLS Layer
+	if sni == "" { sni, _, _ = net.SplitHostPort(serverAddr) }
 	if uc.cfg.UseTLS || strings.HasSuffix(serverAddr, ":443") || strings.HasSuffix(serverAddr, ":8443") {
-		hostPart, _, _ := net.SplitHostPort(serverAddr)
-		if hostPart == "" {
-			hostPart = serverAddr
-		}
-		insecure := uc.cfg.InsecureTLS
-		// When SNI is spoofed (e.g. downloads.vodafone.co.uk vs gr.mub.my.id),
-		// the server's certificate belongs to the server host, not the carrier's SNI bug-host.
-		// Certificate verification must be skipped to allow the SNI spoofing handshake to succeed.
-		if sni != "" && hostPart != "" && !strings.EqualFold(sni, hostPart) {
-			insecure = true
-		}
-
-		tlsConfig := &tls.Config{
-			ServerName:         sni,
-			InsecureSkipVerify: insecure,
-			MinVersion:         tls.VersionTLS12,
-		}
-		tlsConn := tls.Client(rawConn, tlsConfig)
-		if err := tlsConn.Handshake(); err != nil {
-			_ = rawConn.Close()
-			return nil, fmt.Errorf("VLESS TLS handshake failed with SNI %s: %w", sni, err)
-		}
+		tlsConn := tls.Client(rawConn, &tls.Config{ServerName: sni, InsecureSkipVerify: uc.cfg.InsecureTLS, MinVersion: tls.VersionTLS12})
+		if err := tlsConn.Handshake(); err != nil { _ = rawConn.Close(); return nil, fmt.Errorf("VLESS TLS handshake failed with SNI %s: %w", sni, err) }
 		conn = tlsConn
 	}
 
-	// WebSocket Upgrade (if WS transport)
 	path := uc.cfg.Path
-	if path == "" {
-		path = "/vless-ws"
-	}
-	if strings.HasPrefix(path, "%2F") || strings.HasPrefix(path, "%2f") {
-		path = "/" + path[3:]
-	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-
+	if path == "" { path = "/vless-ws" }
+	if strings.HasPrefix(path, "%2F") || strings.HasPrefix(path, "%2f") { path = "/" + path[3:] }
+	if !strings.HasPrefix(path, "/") { path = "/" + path }
 	hostHeader := uc.cfg.HostHeader
-	if hostHeader == "" || net.ParseIP(hostHeader) != nil {
-		if uc.cfg.SNI != "" && net.ParseIP(uc.cfg.SNI) == nil {
-			hostHeader = uc.cfg.SNI
-		}
-	}
-	if hostHeader == "" {
-		h, _, _ := net.SplitHostPort(serverAddr)
-		hostHeader = h
-	}
+	if hostHeader == "" { hostHeader = sni }
 
-	isWS := strings.Contains(strings.ToUpper(uc.cfg.Protocol), "WS") || strings.Contains(path, "ws") || path != ""
-
+	isWS := strings.EqualFold(strings.TrimSpace(uc.cfg.Protocol), "VLESS_WS")
 	if isWS {
 		wsKey := make([]byte, 16)
-		_, _ = rand.Read(wsKey)
+		if _, err := rand.Read(wsKey); err != nil { _ = conn.Close(); return nil, fmt.Errorf("generate WebSocket key: %w", err) }
 		b64Key := base64.StdEncoding.EncodeToString(wsKey)
-
-		upgradeReq := fmt.Sprintf("GET %s HTTP/1.1\r\n"+
-			"Host: %s\r\n"+
-			"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n"+
-			"Upgrade: websocket\r\n"+
-			"Connection: Upgrade\r\n"+
-			"Sec-WebSocket-Key: %s\r\n"+
-			"Sec-WebSocket-Version: 13\r\n"+
-			"Origin: https://%s\r\n\r\n", path, hostHeader, b64Key, hostHeader)
-
-		if _, err := conn.Write([]byte(upgradeReq)); err != nil {
-			_ = conn.Close()
-			return nil, fmt.Errorf("failed to send WebSocket upgrade: %w", err)
-		}
-
+		upgradeReq := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nOrigin: https://%s\r\n\r\n", path, hostHeader, b64Key, hostHeader)
+		if _, err := conn.Write([]byte(upgradeReq)); err != nil { _ = conn.Close(); return nil, err }
 		reader := bufio.NewReader(conn)
 		statusLine, err := reader.ReadString('\n')
-		if err != nil || !strings.Contains(statusLine, "101") {
-			_ = conn.Close()
-			return nil, fmt.Errorf("WebSocket upgrade failed: %s", strings.TrimSpace(statusLine))
-		}
-		// Read remaining HTTP headers
+		if err != nil || !strings.Contains(statusLine, "101") { _ = conn.Close(); return nil, fmt.Errorf("WebSocket upgrade failed: %s", strings.TrimSpace(statusLine)) }
+		headers := map[string]string{}
 		for {
 			line, err := reader.ReadString('\n')
-			if err != nil || strings.TrimSpace(line) == "" {
-				break
-			}
+			if err != nil { _ = conn.Close(); return nil, fmt.Errorf("WebSocket response headers failed: %w", err) }
+			line = strings.TrimSpace(line)
+			if line == "" { break }
+			if k, v, ok := strings.Cut(line, ":"); ok { headers[strings.ToLower(strings.TrimSpace(k))] = strings.TrimSpace(v) }
 		}
+		want := base64.StdEncoding.EncodeToString(func() []byte { h := sha1.Sum([]byte(b64Key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")); return h[:] }())
+		if !strings.EqualFold(headers["sec-websocket-accept"], want) { _ = conn.Close(); return nil, errors.New("invalid WebSocket Sec-WebSocket-Accept") }
 	}
 
-	// VLESS Client Request Header
-	// [Version=0, UUID (16 bytes), AddonsLen=0, Command=1 (TCP), Port (2 bytes BE), Atyp + Address]
 	uuidBytes := parseUUIDBytes(uc.cfg.Token)
-
 	vlessReq := make([]byte, 0, 64)
-	vlessReq = append(vlessReq, 0x00)          // Version 0
-	vlessReq = append(vlessReq, uuidBytes[:]...) // 16 bytes UUID
-	vlessReq = append(vlessReq, 0x00)          // Proto addons length: 0
-	vlessReq = append(vlessReq, 0x01)          // Command: 1 (TCP)
-
-	var pBuf [2]byte
-	binary.BigEndian.PutUint16(pBuf[:], targetPort)
-	vlessReq = append(vlessReq, pBuf[:]...) // Port
-	vlessReq = append(vlessReq, rawAddr...)  // Address Type & Address
-
-	if _, err := conn.Write(vlessReq); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("failed to write VLESS request header: %w", err)
-	}
-
-	// Read VLESS Server Response Header: [Version=0, AddonsLen=0]
+	vlessReq = append(vlessReq, 0x00)
+	vlessReq = append(vlessReq, uuidBytes[:]...)
+	vlessReq = append(vlessReq, 0x00, 0x01)
+	var pBuf [2]byte; binary.BigEndian.PutUint16(pBuf[:], targetPort)
+	vlessReq = append(vlessReq, pBuf[:]...); vlessReq = append(vlessReq, rawAddr...)
+	if _, err := conn.Write(vlessReq); err != nil { _ = conn.Close(); return nil, err }
 	var respHdr [2]byte
-	if _, err := io.ReadFull(conn, respHdr[:]); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("failed to read VLESS response header: %w", err)
-	}
-
+	if _, err := io.ReadFull(conn, respHdr[:]); err != nil { _ = conn.Close(); return nil, fmt.Errorf("failed to read VLESS response header: %w", err) }
 	return conn, nil
 }
 
-// dialTrojan establishes a Trojan TLS session.
 func (uc *UniversalClient) dialTrojan(atyp byte, targetHost string, targetPort uint16, rawAddr []byte) (net.Conn, error) {
 	serverAddr := uc.cfg.ServerAddr
-	if !hasPort(serverAddr) {
-		serverAddr = net.JoinHostPort(serverAddr, "443")
-	}
-
+	if !hasPort(serverAddr) { serverAddr = net.JoinHostPort(serverAddr, "443") }
 	rawConn, err := uc.dialPhysical(serverAddr)
-	if err != nil {
-		return nil, err
-	}
-
+	if err != nil { return nil, err }
 	sni := uc.cfg.SNI
-	if sni == "" {
-		sni, _, _ = net.SplitHostPort(serverAddr)
-	}
-
-	hostPart, _, _ := net.SplitHostPort(serverAddr)
-	if hostPart == "" {
-		hostPart = serverAddr
-	}
-	insecure := uc.cfg.InsecureTLS
-	if sni != "" && hostPart != "" && !strings.EqualFold(sni, hostPart) {
-		insecure = true
-	}
-
-	tlsConfig := &tls.Config{
-		ServerName:         sni,
-		InsecureSkipVerify: insecure,
-		MinVersion:         tls.VersionTLS12,
-	}
-	tlsConn := tls.Client(rawConn, tlsConfig)
-	if err := tlsConn.Handshake(); err != nil {
-		_ = rawConn.Close()
-		return nil, fmt.Errorf("Trojan TLS handshake failed: %w", err)
-	}
-
-	// Trojan Request: hex(sha224(password)) + \r\n + [0x01 (TCP)] + rawAddr + port + \r\n
+	if sni == "" { sni, _, _ = net.SplitHostPort(serverAddr) }
+	tlsConn := tls.Client(rawConn, &tls.Config{ServerName: sni, InsecureSkipVerify: uc.cfg.InsecureTLS, MinVersion: tls.VersionTLS12})
+	if err := tlsConn.Handshake(); err != nil { _ = rawConn.Close(); return nil, fmt.Errorf("Trojan TLS handshake failed: %w", err) }
 	passHash := sha224Hex(uc.cfg.Token)
-
-	var pBuf [2]byte
-	binary.BigEndian.PutUint16(pBuf[:], targetPort)
-
-	trojanReq := append([]byte(passHash+"\r\n"), 0x01)
-	trojanReq = append(trojanReq, rawAddr...)
-	trojanReq = append(trojanReq, pBuf[:]...)
-	trojanReq = append(trojanReq, []byte("\r\n")...)
-
-	if _, err := tlsConn.Write(trojanReq); err != nil {
-		_ = tlsConn.Close()
-		return nil, err
-	}
-
+	var pBuf [2]byte; binary.BigEndian.PutUint16(pBuf[:], targetPort)
+	req := append([]byte(passHash+"\r\n"), 0x01); req = append(req, rawAddr...); req = append(req, pBuf[:]...); req = append(req, []byte("\r\n")...)
+	if _, err := tlsConn.Write(req); err != nil { _ = tlsConn.Close(); return nil, err }
 	return tlsConn, nil
 }
 
-// getSSHClient returns an authenticated, multiplexed SSH client connection.
 func (uc *UniversalClient) getSSHClient() (*ssh.Client, error) {
 	uc.sshClientMu.Lock()
 	defer uc.sshClientMu.Unlock()
-
-	if uc.sshClient != nil {
-		return uc.sshClient, nil
+	if uc.sshClient != nil { return uc.sshClient, nil }
+	user, pass := parseSSHUserPass(uc.cfg.Token); if user == "" { user = "root" }
+	var authMethods []ssh.AuthMethod; if pass != "" { authMethods = append(authMethods, ssh.Password(pass)) }
+	var hostKeyCallback ssh.HostKeyCallback
+	if uc.cfg.InsecureTLS {
+		hostKeyCallback = ssh.InsecureIgnoreHostKey()
+	} else {
+		expected := SSHHostKeySHA256()
+		if expected == "" { return nil, errors.New("secure SSH requires an SSH host-key SHA256 fingerprint") }
+		expected = strings.TrimSpace(expected)
+		hostKeyCallback = func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+			actual := ssh.FingerprintSHA256(key)
+			if actual != expected {
+				return fmt.Errorf("SSH host-key fingerprint mismatch for %s: got %s", hostname, actual)
+			}
+			return nil
+		}
 	}
-
-	user, pass := parseSSHUserPass(uc.cfg.Token)
-	if user == "" {
-		user = "root"
-	}
-
-	var authMethods []ssh.AuthMethod
-	if pass != "" {
-		authMethods = append(authMethods, ssh.Password(pass))
-	}
-
-	sshConfig := &ssh.ClientConfig{
-		User:            user,
-		Auth:            authMethods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         15 * time.Second,
-	}
-
+	sshConfig := &ssh.ClientConfig{User: user, Auth: authMethods, HostKeyCallback: hostKeyCallback, Timeout: 15 * time.Second}
 	serverAddr := uc.cfg.ServerAddr
-	if !hasPort(serverAddr) {
-		serverAddr = net.JoinHostPort(serverAddr, "22")
-	}
-
-	sni := uc.cfg.SNI
-	if sni == "" {
-		sni = uc.cfg.HostHeader
-	}
-	if sni == "" {
-		sni, _, _ = net.SplitHostPort(serverAddr)
-	}
-
+	if !hasPort(serverAddr) { serverAddr = net.JoinHostPort(serverAddr, "22") }
+	sni := uc.cfg.SNI; if sni == "" { sni = uc.cfg.HostHeader }; if sni == "" { sni, _, _ = net.SplitHostPort(serverAddr) }
 	payloadUpper := strings.ToUpper(strings.TrimSpace(uc.cfg.CustomPayload))
 	isSSL := uc.cfg.UseTLS || strings.HasPrefix(payloadUpper, "SSL") || strings.HasPrefix(payloadUpper, "TLS") || strings.HasSuffix(serverAddr, ":443")
 	isDirect := strings.HasPrefix(payloadUpper, "DIRECT") || (uc.cfg.CustomPayload == "" && !isSSL)
 
-	var underlyingConn net.Conn
 	var err error
-
+	var underlyingConn net.Conn
 	if isDirect {
-		// 1. Direct SSH connection (Plain TCP)
 		LogMsg("SSH", fmt.Sprintf("Establishing Direct SSH connection to %s as user %s", serverAddr, user))
 		underlyingConn, err = uc.dialPhysical(serverAddr)
-		if err != nil {
-			return nil, fmt.Errorf("direct ssh dial failed: %w", err)
-		}
+		if err != nil { return nil, fmt.Errorf("direct ssh dial failed: %w", err) }
 	} else if isSSL {
-		// 2. SSL/TLS Stunnel SSH connection (SNI Camouflage on port 443)
 		LogMsg("SSH", fmt.Sprintf("Establishing SSL/TLS SSH tunnel to %s (SNI: %s) as user %s", serverAddr, sni, user))
-		rawConn, dErr := uc.dialPhysical(serverAddr)
-		if dErr != nil {
-			return nil, fmt.Errorf("tls ssh dial failed: %w", dErr)
-		}
-		tlsConfig := &tls.Config{
-			ServerName:         sni,
-			InsecureSkipVerify: true,
-		}
-		tlsConn := tls.Client(rawConn, tlsConfig)
-		if hErr := tlsConn.Handshake(); hErr != nil {
-			_ = rawConn.Close()
-			return nil, fmt.Errorf("tls handshake for ssh failed: %w", hErr)
-		}
+		rawConn, dErr := uc.dialPhysical(serverAddr); if dErr != nil { return nil, fmt.Errorf("tls ssh dial failed: %w", dErr) }
+		tlsConn := tls.Client(rawConn, &tls.Config{ServerName: sni, InsecureSkipVerify: uc.cfg.InsecureTLS, MinVersion: tls.VersionTLS12})
+		if hErr := tlsConn.Handshake(); hErr != nil { _ = rawConn.Close(); return nil, fmt.Errorf("tls handshake for ssh failed: %w", hErr) }
 		underlyingConn = tlsConn
 	} else {
-		// 3. HTTP Custom Payload Injection SSH connection
 		LogMsg("SSH", fmt.Sprintf("Establishing HTTP Custom SSH tunnel to %s with payload injection", serverAddr))
-		rawConn, dErr := uc.dialPhysical(serverAddr)
-		if dErr != nil {
-			return nil, fmt.Errorf("http custom dial failed: %w", dErr)
-		}
-
+		rawConn, dErr := uc.dialPhysical(serverAddr); if dErr != nil { return nil, fmt.Errorf("http custom dial failed: %w", dErr) }
 		payload := uc.cfg.CustomPayload
-		if payload == "" {
-			payload = fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n\r\n", serverAddr, sni)
-		} else {
-			payload = strings.ReplaceAll(payload, "[host_port]", serverAddr)
-			payload = strings.ReplaceAll(payload, "[host]", sni)
-			payload = strings.ReplaceAll(payload, "[port]", "22")
-			payload = strings.ReplaceAll(payload, "[protocol]", "HTTP/1.1")
-			payload = strings.ReplaceAll(payload, "[ua]", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-			payload = strings.ReplaceAll(payload, "[raw]", "\r\n")
-			payload = strings.ReplaceAll(payload, "[crlf]", "\r\n")
-			payload = strings.ReplaceAll(payload, "[lf]", "\n")
-			payload = strings.ReplaceAll(payload, "[cr]", "\r")
+		if payload == "" { payload = fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0\r\n\r\n", serverAddr, sni) } else {
+			payload = strings.ReplaceAll(payload, "[host_port]", serverAddr); payload = strings.ReplaceAll(payload, "[host]", sni); payload = strings.ReplaceAll(payload, "[port]", "22"); payload = strings.ReplaceAll(payload, "[protocol]", "HTTP/1.1"); payload = strings.ReplaceAll(payload, "[ua]", "Mozilla/5.0"); payload = strings.ReplaceAll(payload, "[raw]", "\r\n"); payload = strings.ReplaceAll(payload, "[crlf]", "\r\n"); payload = strings.ReplaceAll(payload, "[lf]", "\n"); payload = strings.ReplaceAll(payload, "[cr]", "\r")
 		}
-
-		if _, wErr := rawConn.Write([]byte(payload)); wErr != nil {
-			_ = rawConn.Close()
-			return nil, fmt.Errorf("payload injection write failed: %w", wErr)
-		}
-
-		reader := bufio.NewReader(rawConn)
-		respLine, rErr := reader.ReadString('\n')
-		if rErr != nil || (!strings.Contains(respLine, "200") && !strings.Contains(respLine, "Established")) {
-			_ = rawConn.Close()
-			return nil, fmt.Errorf("HTTP Proxy CONNECT failed: %s", strings.TrimSpace(respLine))
-		}
-		for {
-			line, rErr2 := reader.ReadString('\n')
-			if rErr2 != nil || strings.TrimSpace(line) == "" {
-				break
-			}
-		}
+		if _, wErr := rawConn.Write([]byte(payload)); wErr != nil { _ = rawConn.Close(); return nil, wErr }
+		reader := bufio.NewReader(rawConn); respLine, rErr := reader.ReadString('\n')
+		if rErr != nil || (!strings.Contains(respLine, "200") && !strings.Contains(respLine, "Established")) { _ = rawConn.Close(); return nil, fmt.Errorf("HTTP Proxy CONNECT failed: %s", strings.TrimSpace(respLine)) }
+		for { line, rErr2 := reader.ReadString('\n'); if rErr2 != nil || strings.TrimSpace(line) == "" { break } }
 		underlyingConn = rawConn
 	}
 
 	c, chans, reqs, err := ssh.NewClientConn(underlyingConn, serverAddr, sshConfig)
-	if err != nil {
-		_ = underlyingConn.Close()
-		return nil, fmt.Errorf("ssh client handshake failed: %w", err)
-	}
-
-	client := ssh.NewClient(c, chans, reqs)
-	uc.sshClient = client
-	LogMsg("SSH", fmt.Sprintf("SSH authenticated & tunnel established to %s", serverAddr))
-	return client, nil
+	if err != nil { _ = underlyingConn.Close(); return nil, fmt.Errorf("ssh client handshake failed: %w", err) }
+	client := ssh.NewClient(c, chans, reqs); uc.sshClient = client
+	LogMsg("SSH", fmt.Sprintf("SSH authenticated & tunnel established to %s", serverAddr)); return client, nil
 }
 
-// dialSSH forwards a SOCKS5 target connection through the active SSH client tunnel.
 func (uc *UniversalClient) dialSSH(targetHost string, targetPort uint16) (net.Conn, error) {
-	client, err := uc.getSSHClient()
-	if err != nil {
-		return nil, err
-	}
-
+	client, err := uc.getSSHClient(); if err != nil { return nil, err }
 	target := net.JoinHostPort(targetHost, fmt.Sprintf("%d", targetPort))
 	conn, err := client.Dial("tcp", target)
 	if err != nil {
-		// Connection dropped: clear client so subsequent connections trigger reconnect
-		uc.sshClientMu.Lock()
-		if uc.sshClient == client {
-			_ = uc.sshClient.Close()
-			uc.sshClient = nil
-		}
-		uc.sshClientMu.Unlock()
+		uc.sshClientMu.Lock(); if uc.sshClient == client { _ = uc.sshClient.Close(); uc.sshClient = nil }; uc.sshClientMu.Unlock()
 		return nil, fmt.Errorf("ssh dial to %s failed: %w", target, err)
 	}
 	return conn, nil
 }
 
-func parseSSHUserPass(token string) (string, string) {
-	parts := strings.SplitN(token, ":", 2)
-	if len(parts) == 2 {
-		return parts[0], parts[1]
-	}
-	return token, ""
-}
-
-func parseUUIDBytes(s string) [16]byte {
-	var b [16]byte
-	clean := strings.ReplaceAll(strings.TrimSpace(s), "-", "")
-	if len(clean) == 32 {
-		if h, err := hex.DecodeString(clean); err == nil && len(h) == 16 {
-			copy(b[:], h)
-		}
-	}
-	return b
-}
-
-func sha224Hex(s string) string {
-	h := sha256.New224()
-	h.Write([]byte(s))
-	return hex.EncodeToString(h.Sum(nil))
-}
+func parseSSHUserPass(token string) (string, string) { parts := strings.SplitN(token, ":", 2); if len(parts) == 2 { return parts[0], parts[1] }; return token, "" }
+func parseUUIDBytes(s string) [16]byte { var b [16]byte; clean := strings.ReplaceAll(strings.TrimSpace(s), "-", ""); if len(clean) == 32 { if h, err := hex.DecodeString(clean); err == nil && len(h) == 16 { copy(b[:], h) } }; return b }
+func sha224Hex(s string) string { h := sha256.New224(); _, _ = h.Write([]byte(s)); return hex.EncodeToString(h.Sum(nil)) }

@@ -17,12 +17,17 @@ import (
 	"github.com/mwright228/my/src/tbrutal/auth"
 	"github.com/mwright228/my/src/tbrutal/pacer"
 	"github.com/mwright228/my/src/tbrutal/protocol"
+	ws "github.com/mwright228/my/src/tbrutal/websocket"
 )
 
 type Config struct {
 	ListenAddr string
 	UsersFile  string
 	RateMbps   int
+	// AllowPrivateTargetsForTests must remain false for production servers. It
+	// exists only so deterministic local integration tests can relay to a
+	// loopback echo server without weakening the production SSRF policy.
+	AllowPrivateTargetsForTests bool
 }
 
 type prefixConn struct {
@@ -116,6 +121,12 @@ func websocketAccept(key string) string {
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
+func (s *Server) newSession(conn net.Conn) *Session {
+	sess := NewSession(conn, s.authStore, s.pacer)
+	sess.allowPrivateTargets = s.cfg.AllowPrivateTargetsForTests
+	return sess
+}
+
 func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	upg := strings.TrimSpace(strings.ToLower(r.Header.Get("Upgrade")))
 	connHdr := strings.ToLower(r.Header.Get("Connection"))
@@ -128,7 +139,6 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	if !ok { http.Error(w, "Server does not support hijacking", http.StatusInternalServerError); return }
 	conn, buf, err := hj.Hijack()
 	if err != nil { return }
-
 	if tc, ok := conn.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)
 		_ = tc.SetKeepAlive(true)
@@ -150,7 +160,14 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	if _, err := buf.WriteString(resp); err != nil { _ = conn.Close(); return }
 	if err := buf.Flush(); err != nil { _ = conn.Close(); return }
 
-	go NewSession(conn, s.authStore, s.pacer).Handle()
+	// Preserve bytes already buffered by net/http while parsing the upgrade.
+	baseConn := &prefixConn{Conn: conn, reader: buf}
+	var sessionConn net.Conn = baseConn
+	if upg == "websocket" {
+		// RFC 6455: client frames are masked and server frames are unmasked.
+		sessionConn = ws.New(baseConn, true)
+	}
+	go s.newSession(sessionConn).Handle()
 }
 
 func (s *Server) Start() error {
@@ -164,7 +181,6 @@ func (s *Server) Serve(ln net.Listener) error {
 	s.listener = ln
 	s.chanLn = newChanListener(ln.Addr())
 	go func() { _ = s.httpServer.Serve(s.chanLn) }()
-
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -189,7 +205,7 @@ func (s *Server) dispatchConn(conn net.Conn) {
 			_ = tc.SetKeepAlive(true)
 			_ = tc.SetKeepAlivePeriod(30 * time.Second)
 		}
-		go NewSession(wrapped, s.authStore, s.pacer).Handle()
+		go s.newSession(wrapped).Handle()
 		return
 	}
 

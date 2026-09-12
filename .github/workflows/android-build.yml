@@ -1,4 +1,4 @@
-name: Build QuickNotes Android APK
+name: Build MUB-X Android APK
 
 on:
   push:
@@ -8,75 +8,137 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/android-build.yml'
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'src/tbrutal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/android-build.yml'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-apk:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@v7
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '17'
-
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.22'
-
+          go-version: '1.26.7'
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.10.2'
-
       - name: Setup Android NDK (r27b - 16KB page size aligned)
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r27b
           add-to-path: true
-
       - name: Compile Native Go Core (libmubxcore.so)
         run: |
           chmod +x android/build-native.sh
           ./android/build-native.sh
-
-      - name: Build Android Debug APK
+      - name: Run Android unit tests and lint
         working-directory: ./android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
-
-      - name: Prepare Release Artifacts
-        run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk QuickNotes.apk
-
-      - name: Upload APK Artifact
+          ./gradlew testReleaseUnitTest lintRelease --stacktrace
+      - name: Build installable debug APK
+        working-directory: ./android
+        run: ./gradlew clean assembleDebug --stacktrace
+      - name: Prepare installable debug artifact
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk MUB-X-debug.apk
+      - name: Upload installable debug artifact
         uses: actions/upload-artifact@v4
         with:
-          name: QuickNotes-Android15-Debug-APK
-          path: QuickNotes.apk
+          name: MUB-X-Android-Debug-Installable
+          path: MUB-X-debug.apk
+          retention-days: 14
+      - name: Build optimized Android release APK
+        working-directory: ./android
+        run: ./gradlew clean assembleRelease --stacktrace
+      - name: Prepare unsigned release artifact
+        run: cp android/app/build/outputs/apk/release/app-release-unsigned.apk MUB-X-release-unsigned.apk
+      - name: Upload unsigned release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MUB-X-Android-Release-Unsigned
+          path: MUB-X-release-unsigned.apk
           retention-days: 14
 
-      - name: Publish Direct Download Release
-        uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main'
+  signed-release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v7
+      - name: Set up Java 17
+        uses: actions/setup-java@v6
         with:
-          tag_name: quicknotes-latest
-          name: "QuickNotes v2.1 (Stealth Edition)"
-          body: |
-            ### QuickNotes • Notes & Cloud Sync Relay Suite
-            - **Authentic Camouflage**: Opens as a genuine, local note-taking app with search, markdown notes, and local storage.
-            - **Discreet Unlock**: Long-press "QuickNotes" title or tap "Cloud Sync & Backup" to reveal the proxy controls.
-            - **Minimalist One-Button UI**: Clean status card, large Start/Stop switch, and 1-tap clipboard import.
-            - **Every MUB-X Protocol Supported**: Native client dialers for VLESS (WS & TCP), Trojan, VMess, Shadowsocks, SSH HTTP Custom, ZiVPN UDP, and T-Brutal.
-            - **DNS-over-Tunnel**: Resolves hostnames through the encrypted proxy tunnel, solving "connected but no internet" on restricted mobile networks.
-          files: QuickNotes.apk
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.7'
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.10.2'
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27b
+          add-to-path: true
+      - name: Import protected signing keystore
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MUBX_KEYSTORE_B64: ${{ secrets.MUBX_ANDROID_KEYSTORE_B64 }}
+        run: |
+          test -n "$MUBX_KEYSTORE_B64"
+          mkdir -p "$RUNNER_TEMP/mubx"
+          printf '%s' "$MUBX_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/mubx/release.keystore"
+          chmod 600 "$RUNNER_TEMP/mubx/release.keystore"
+      - name: Validate protected signing inputs
+        env:
+          MUBX_KEYSTORE_PASSWORD: ${{ secrets.MUBX_ANDROID_KEYSTORE_PASSWORD }}
+          MUBX_KEY_ALIAS: ${{ secrets.MUBX_ANDROID_KEY_ALIAS }}
+          MUBX_KEY_PASSWORD: ${{ secrets.MUBX_ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$MUBX_KEYSTORE_PASSWORD"
+          test -n "$MUBX_KEY_ALIAS"
+          test -n "$MUBX_KEY_PASSWORD"
+      - name: Compile native core
+        run: |
+          chmod +x android/build-native.sh
+          ./android/build-native.sh
+      - name: Build signed optimized release
+        working-directory: ./android
+        env:
+          MUBX_KEYSTORE_PATH: ${{ runner.temp }}/mubx/release.keystore
+          MUBX_KEYSTORE_PASSWORD: ${{ secrets.MUBX_ANDROID_KEYSTORE_PASSWORD }}
+          MUBX_KEY_ALIAS: ${{ secrets.MUBX_ANDROID_KEY_ALIAS }}
+          MUBX_KEY_PASSWORD: ${{ secrets.MUBX_ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew clean testReleaseUnitTest lintRelease assembleRelease --stacktrace
+      - name: Verify APK is signed
+        run: |
+          test -f android/app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n1)/apksigner" verify --verbose android/app/build/outputs/apk/release/app-release.apk
+      - name: Upload signed production APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MUB-X-Android-${{ github.ref_name }}-Signed-Release
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 30

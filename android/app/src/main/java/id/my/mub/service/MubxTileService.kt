@@ -1,5 +1,7 @@
 package id.my.mub.service
 
+import android.annotation.SuppressLint
+import android.app.PendingIntent
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
@@ -36,6 +38,7 @@ class MubxTileService : TileService() {
         super.onStopListening()
     }
 
+    @SuppressLint("StartActivityAndCollapseDeprecated")
     override fun onClick() {
         super.onClick()
         val currentState = MubxVpnService.vpnState.value
@@ -58,7 +61,18 @@ class MubxTileService : TileService() {
                 val activityIntent = Intent(this, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
                 }
-                startActivityAndCollapse(activityIntent)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    val pendingIntent = PendingIntent.getActivity(
+                        this,
+                        0,
+                        activityIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    )
+                    startActivityAndCollapse(pendingIntent)
+                } else {
+                    @Suppress("DEPRECATION")
+                    startActivityAndCollapse(activityIntent)
+                }
             }
         }
     }

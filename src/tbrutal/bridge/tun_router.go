@@ -1,807 +1,282 @@
 package bridge
 
 import (
-	"encoding/binary"
-	"errors"
-	"fmt"
-	"io"
-	"net"
-	"os"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
+    "context"
+    "encoding/binary"
+    "errors"
+    "fmt"
+    "io"
+    "net"
+    "net/netip"
+    "strings"
+    "sync"
+    "sync/atomic"
+    "time"
+
+    "github.com/sagernet/sing-tun"
+    "github.com/sagernet/sing/common/buf"
+    M "github.com/sagernet/sing/common/metadata"
+    N "github.com/sagernet/sing/common/network"
+    "golang.org/x/sys/unix"
+)
+
+const (
+    tunIPv4Address = "172.19.0.1/30"
+    tunIPv6Address = "fd19:2e58:34::1/126"
+    tunMTU         = 1500
+    udpMaxPayload  = 65507
+    socksTimeout   = 5 * time.Second
 )
 
 var (
-	activeRouter   *TunRouter
-	activeRouterMu sync.Mutex
+    activeRouter   *TunRouter
+    activeRouterMu sync.Mutex
 )
 
-// TunRouter manages Layer 3 IP packet pump between Android TUN and SOCKS5 proxy.
 type TunRouter struct {
-	tunFile    *os.File
-	socksAddr  string
-	dnsServer  string
-	running    atomic.Bool
-	stopChan   chan struct{}
-	wg         sync.WaitGroup
-	tunWriteMu sync.Mutex
-	packetChan chan []byte
-
-	// Active TCP sessions: key -> *TcpSession
-	sessions sync.Map
+    tun       tun.Tun
+    stack     tun.Stack
+    cancel    context.CancelFunc
+    socksAddr string
+    dnsServer string
+    running   atomic.Bool
 }
 
-type tcpKey struct {
-	srcIP   string
-	srcPort uint16
-	dstIP   string
-	dstPort uint16
+type tunSOCKSHandler struct {
+    socksAddr string
 }
 
-func (k tcpKey) String() string {
-	return fmt.Sprintf("%s:%d->%s:%d", k.srcIP, k.srcPort, k.dstIP, k.dstPort)
-}
+func StartTunRouter(fd int, socksPort int) error { return StartTunRouterWithDNS(fd, socksPort, "1.1.1.1:53") }
 
-type TcpSession struct {
-	key        tcpKey
-	socksConn  net.Conn
-	clientSeq  uint32
-	serverSeq  uint32
-	closed     atomic.Bool
-	lastActive time.Time
-	mu         sync.Mutex
-	ready      bool
-	pending    [][]byte
-}
-
-// StartTunRouter starts reading raw IP packets from the TUN file descriptor
-// and demultiplexes them to the local SOCKS proxy with default 1.1.1.1 DNS.
-func StartTunRouter(fd int, socksPort int) error {
-	return StartTunRouterWithDNS(fd, socksPort, "1.1.1.1:53")
-}
-
-// StartTunRouterWithDNS starts reading raw IP packets from the TUN file descriptor
-// with a custom DNS server and demultiplexes them to the local SOCKS proxy.
 func StartTunRouterWithDNS(fd int, socksPort int, dnsServer string) error {
-	activeRouterMu.Lock()
-	defer activeRouterMu.Unlock()
+    activeRouterMu.Lock()
+    defer activeRouterMu.Unlock()
+    if activeRouter != nil && activeRouter.running.Load() { return errors.New("tun router is already active") }
+    if fd < 0 { return errors.New("invalid tun file descriptor") }
+    if socksPort <= 0 || socksPort > 65535 { return fmt.Errorf("invalid SOCKS5 port %d", socksPort) }
 
-	if activeRouter != nil && activeRouter.running.Load() {
-		return errors.New("tun router is already active")
-	}
+    dupFD, err := unix.Dup(fd)
+    if err != nil { return fmt.Errorf("duplicate tun file descriptor: %w", err) }
+    options := tun.Options{
+        Name:           "mubx-tun",
+        Inet4Address:   []netip.Prefix{netip.MustParsePrefix(tunIPv4Address)},
+        Inet6Address:   []netip.Prefix{netip.MustParsePrefix(tunIPv6Address)},
+        MTU:            tunMTU,
+        AutoRoute:      false,
+        StrictRoute:    false,
+        FileDescriptor: dupFD,
+    }
+    device, err := tun.New(options)
+    if err != nil { _ = unix.Close(dupFD); return fmt.Errorf("open Android TUN descriptor: %w", err) }
 
-	if fd < 0 {
-		return errors.New("invalid tun file descriptor")
-	}
+    ctx, cancel := context.WithCancel(context.Background())
+    handler := &tunSOCKSHandler{socksAddr: net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", socksPort))}
+    stack, err := tun.NewStack("gvisor", tun.StackOptions{
+        Context: ctx, Tun: device, TunOptions: options, UDPTimeout: 90, Handler: handler,
+        ForwarderBindInterface: false, IncludeAllNetworks: false,
+    })
+    if err != nil { cancel(); _ = device.Close(); return fmt.Errorf("create sing-tun gVisor stack: %w", err) }
+    if err := stack.Start(); err != nil { cancel(); _ = stack.Close(); _ = device.Close(); return fmt.Errorf("start sing-tun gVisor stack: %w", err) }
 
-	tunFile := os.NewFile(uintptr(fd), "mubx-tun")
-	if tunFile == nil {
-		return errors.New("failed to wrap tun file descriptor")
-	}
-
-	socksAddr := fmt.Sprintf("127.0.0.1:%d", socksPort)
-	if dnsServer == "" {
-		dnsServer = "1.1.1.1:53"
-	}
-	if !hasPort(dnsServer) {
-		dnsServer = net.JoinHostPort(dnsServer, "53")
-	}
-
-	router := &TunRouter{
-		tunFile:    tunFile,
-		socksAddr:  socksAddr,
-		dnsServer:  dnsServer,
-		stopChan:   make(chan struct{}),
-		packetChan: make(chan []byte, 1024),
-	}
-	router.running.Store(true)
-
-	// Start reader loop and session reaper
-	router.wg.Add(2)
-	go router.readLoop()
-	go router.reaperLoop()
-
-	// Start bounded worker pool to prevent goroutine explosion
-	numWorkers := 8
-	for i := 0; i < numWorkers; i++ {
-		router.wg.Add(1)
-		go router.workerLoop()
-	}
-
-	activeRouter = router
-	LogMsg("ROUTER", fmt.Sprintf("TunRouter started (SOCKS: %s, DNS: %s, Workers: %d)", socksAddr, dnsServer, numWorkers))
-	return nil
+    r := &TunRouter{tun: device, stack: stack, cancel: cancel, socksAddr: handler.socksAddr, dnsServer: dnsServer}
+    r.running.Store(true)
+    activeRouter = r
+    LogMsg("ROUTER", fmt.Sprintf("sing-tun gVisor stack active (SOCKS: %s, MTU: %d, IPv4+IPv6)", r.socksAddr, tunMTU))
+    return nil
 }
 
-func hasPort(s string) bool {
-	_, _, err := net.SplitHostPort(s)
-	return err == nil
-}
-
-// StopTunRouter gracefully closes the TUN router and tears down all sessions.
 func StopTunRouter() {
-	activeRouterMu.Lock()
-	defer activeRouterMu.Unlock()
-
-	if activeRouter == nil || !activeRouter.running.Load() {
-		return
-	}
-
-	router := activeRouter
-	router.running.Store(false)
-	close(router.stopChan)
-
-	// Close all active sessions
-	router.sessions.Range(func(key, val interface{}) bool {
-		if sess, ok := val.(*TcpSession); ok {
-			sess.closed.Store(true)
-			sess.mu.Lock()
-			if sess.socksConn != nil {
-				_ = sess.socksConn.Close()
-			}
-			sess.mu.Unlock()
-		}
-		return true
-	})
-
-	// Wait with timeout to guarantee JNI never hangs Android Main thread
-	done := make(chan struct{})
-	go func() {
-		router.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(400 * time.Millisecond):
-		LogMsg("ROUTER", "TunRouter wait timed out; force finalizing")
-	}
-
-	activeRouter = nil
-	LogMsg("ROUTER", "TunRouter stopped cleanly")
+    activeRouterMu.Lock()
+    defer activeRouterMu.Unlock()
+    if activeRouter == nil || !activeRouter.running.Load() { return }
+    r := activeRouter
+    r.running.Store(false)
+    if r.cancel != nil { r.cancel() }
+    if r.stack != nil { _ = r.stack.Close() }
+    if r.tun != nil { _ = r.tun.Close(); r.tun = nil }
+    activeRouter = nil
+    LogMsg("ROUTER", "sing-tun gVisor stack stopped")
 }
 
-func (r *TunRouter) writeTun(pkt []byte) (int, error) {
-	if !r.running.Load() || r.tunFile == nil {
-		return 0, io.ErrClosedPipe
-	}
-	r.tunWriteMu.Lock()
-	defer r.tunWriteMu.Unlock()
-	n, err := r.tunFile.Write(pkt)
-	if err == nil && n > 0 {
-		TotalTxBytes.Add(uint64(n))
-	}
-	return n, err
+func (h *tunSOCKSHandler) JudgeFlow(_ uint8, _ netip.AddrPort, _ netip.AddrPort, _ []byte) tun.FlowVerdict {
+    return tun.FlowVerdict{Action: tun.ActionAccept}
 }
 
-func (r *TunRouter) reaperLoop() {
-	defer r.wg.Done()
-	ticker := time.NewTicker(20 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-r.stopChan:
-			return
-		case <-ticker.C:
-			now := time.Now()
-			r.sessions.Range(func(key, val interface{}) bool {
-				if sess, ok := val.(*TcpSession); ok {
-					if sess.closed.Load() || now.Sub(sess.lastActive) > 90*time.Second {
-						sess.closed.Store(true)
-						sess.mu.Lock()
-						if sess.socksConn != nil {
-							_ = sess.socksConn.Close()
-						}
-						sess.mu.Unlock()
-						r.sessions.Delete(key)
-						ActiveConns.Add(-1)
-					}
-				}
-				return true
-			})
-		}
-	}
+func (h *tunSOCKSHandler) NewError(_ context.Context, err error) {
+    if err != nil { LogMsg("ROUTER", fmt.Sprintf("TUN stack flow error: %v", err)) }
 }
 
-func (r *TunRouter) readLoop() {
-	defer r.wg.Done()
-	buf := make([]byte, 65535)
-
-	for {
-		select {
-		case <-r.stopChan:
-			return
-		default:
-		}
-
-		n, err := r.tunFile.Read(buf)
-		if err != nil {
-			return
-		}
-
-		if n < 20 {
-			continue // Less than minimum IPv4 header
-		}
-
-		TotalRxBytes.Add(uint64(n))
-
-		// Verify IPv4
-		version := buf[0] >> 4
-		if version != 4 {
-			continue
-		}
-
-		packet := make([]byte, n)
-		copy(packet, buf[:n])
-
-		select {
-		case r.packetChan <- packet:
-		default:
-			// Queue full under heavy congestion: drop packet
-		}
-	}
+func (h *tunSOCKSHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+    if onClose == nil { onClose = func(error) {} }
+    if !destination.IsValid() { _ = conn.Close(); onClose(errors.New("TUN TCP destination is invalid")); return }
+    ActiveConns.Add(1)
+    defer ActiveConns.Add(-1)
+    defer conn.Close()
+    upstream, err := dialSocks5TCP(ctx, h.socksAddr, destination)
+    if err == nil { err = proxyTCP(ctx, conn, upstream); _ = upstream.Close() }
+    onClose(err)
 }
 
-func (r *TunRouter) workerLoop() {
-	defer r.wg.Done()
-	for {
-		select {
-		case <-r.stopChan:
-			return
-		case pkt, ok := <-r.packetChan:
-			if !ok {
-				return
-			}
-			r.handlePacket(pkt)
-		}
-	}
+func (h *tunSOCKSHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source M.Socksaddr, _ M.Socksaddr, onClose N.CloseHandlerFunc) {
+    if onClose == nil { onClose = func(error) {} }
+    if !source.IsValid() { _ = conn.Close(); onClose(errors.New("TUN UDP source is invalid")); return }
+    controlConn, udpConn, err := openSocks5UDP(ctx, h.socksAddr)
+    if err != nil { _ = conn.Close(); onClose(fmt.Errorf("open SOCKS5 UDP association: %w", err)); return }
+    defer controlConn.Close(); defer udpConn.Close(); defer conn.Close()
+    flowCtx, cancel := context.WithCancel(ctx); defer cancel()
+    errCh := make(chan error, 2)
+
+    go func() {
+        for {
+            packet := buf.NewPacket()
+            destination, err := conn.ReadPacket(packet)
+            if err != nil { packet.Release(); errCh <- err; return }
+            payload := append([]byte(nil), packet.Bytes()...); packet.Release()
+            if len(payload) > udpMaxPayload { errCh <- errors.New("UDP payload too large"); return }
+            if err := writeSocks5UDPDatagram(udpConn, destination, payload); err != nil { errCh <- err; return }
+        }
+    }()
+
+    go func() {
+        packetBuf := make([]byte, 65535)
+        for {
+            if err := udpConn.SetReadDeadline(time.Now().Add(1 * time.Second)); err != nil { errCh <- err; return }
+            n, err := udpConn.Read(packetBuf)
+            if err != nil {
+                if ne, ok := err.(net.Error); ok && ne.Timeout() {
+                    select { case <-flowCtx.Done(): errCh <- flowCtx.Err(); return; default: continue }
+                }
+                errCh <- err; return
+            }
+            payload, err := parseSocks5UDPDatagram(packetBuf[:n])
+            if err != nil { continue }
+            out := buf.As(append([]byte(nil), payload...))
+            if err := conn.WritePacket(out, source); err != nil { errCh <- err; return }
+        }
+    }()
+
+    var runErr error
+    select {
+    case runErr = <-errCh:
+        cancel()
+        if runErr == context.Canceled || runErr == context.DeadlineExceeded { runErr = nil }
+    case <-ctx.Done():
+    }
+    onClose(runErr)
 }
 
-func (r *TunRouter) handlePacket(packet []byte) {
-	if len(packet) < 20 {
-		return
-	}
-	ihl := int(packet[0]&0x0F) * 4
-	if len(packet) < ihl {
-		return
-	}
-
-	protocol := packet[9]
-	srcIP := net.IP(packet[12:16])
-	dstIP := net.IP(packet[16:20])
-
-	switch protocol {
-	case 1: // ICMP
-		r.handleICMP(packet, ihl, srcIP, dstIP)
-	case 17: // UDP
-		r.handleUDP(packet, ihl, srcIP, dstIP)
-	case 6: // TCP
-		r.handleTCP(packet, ihl, srcIP, dstIP)
-	}
+func (h *tunSOCKSHandler) NewDNSPacket(payload []byte, _ M.Socksaddr, destination M.Socksaddr, writer N.PacketWriter) {
+    if len(payload) == 0 || !destination.IsValid() { return }
+    // DNS interception is intentionally delegated to the normal local SOCKS path.
+    // The maintained sing-tun stack supplies this hook only for explicit hijack verdicts.
+    out := buf.As(append([]byte(nil), payload...))
+    _ = writer.WritePacket(out, destination)
 }
 
-// handleICMP replies to Echo Request (ping) packets to maintain active latency indicators.
-func (r *TunRouter) handleICMP(packet []byte, ihl int, srcIP, dstIP net.IP) {
-	if len(packet) < ihl+8 {
-		return
-	}
-	icmpPayload := packet[ihl:]
-	if icmpPayload[0] != 8 { // Not Echo Request
-		return
-	}
-
-	reply := make([]byte, len(packet))
-	copy(reply, packet)
-
-	// Swap IP
-	copy(reply[12:16], dstIP)
-	copy(reply[16:20], srcIP)
-
-	// Set Type 0, Code 0
-	reply[ihl] = 0
-	reply[ihl+1] = 0
-
-	// Recompute ICMP Checksum
-	reply[ihl+2] = 0
-	reply[ihl+3] = 0
-	csum := computeChecksum(reply[ihl:])
-	binary.BigEndian.PutUint16(reply[ihl+2:ihl+4], csum)
-
-	// Recompute IPv4 Header Checksum
-	reply[10] = 0
-	reply[11] = 0
-	ipCsum := computeChecksum(reply[:ihl])
-	binary.BigEndian.PutUint16(reply[10:12], ipCsum)
-
-	_, _ = r.writeTun(reply)
+func proxyTCP(ctx context.Context, client net.Conn, upstream net.Conn) error {
+    result := make(chan error, 2)
+    copyHalf := func(dst, src net.Conn) { _, err := io.Copy(dst, src); if cw, ok := dst.(interface{ CloseWrite() error }); ok { _ = cw.CloseWrite() }; result <- err }
+    go copyHalf(upstream, client); go copyHalf(client, upstream)
+    var firstErr error
+    for range 2 {
+        select {
+        case err := <-result:
+            if err != nil && firstErr == nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.EOF) { firstErr = err }
+        case <-ctx.Done():
+            _ = client.Close(); _ = upstream.Close(); return ctx.Err()
+        }
+    }
+    return firstErr
 }
 
-// handleUDP forwards DNS and UDP packets to local resolvers.
-func (r *TunRouter) handleUDP(packet []byte, ihl int, srcIP, dstIP net.IP) {
-	if len(packet) < ihl+8 {
-		return
-	}
-	udpHeader := packet[ihl : ihl+8]
-	srcPort := binary.BigEndian.Uint16(udpHeader[0:2])
-	dstPort := binary.BigEndian.Uint16(udpHeader[2:4])
-	udpLen := binary.BigEndian.Uint16(udpHeader[4:6])
-
-	if len(packet) < ihl+int(udpLen) || udpLen < 8 {
-		return
-	}
-	payload := packet[ihl+8 : ihl+int(udpLen)]
-
-	// For DNS queries (port 53), tunnel through SOCKS5 proxy or fallback to protected UDP
-	if dstPort == 53 {
-		go func(dnsQuery []byte, cSrcPort, cDstPort uint16, cSrcIP, cDstIP net.IP) {
-			resp, err := r.resolveDNS(dnsQuery)
-			if err != nil || len(resp) == 0 {
-				return
-			}
-			// Wrap in IPv4 + UDP response and inject back to TUN
-			reply := craftUDPPacket(cDstIP, cSrcIP, cDstPort, cSrcPort, resp)
-			_, _ = r.writeTun(reply)
-		}(payload, srcPort, dstPort, srcIP, dstIP)
-	}
+func dialSocks5TCP(ctx context.Context, socksAddr string, destination M.Socksaddr) (net.Conn, error) {
+    conn, err := (&net.Dialer{Timeout: socksTimeout}).DialContext(ctx, "tcp", socksAddr)
+    if err != nil { return nil, err }
+    if err := conn.SetDeadline(time.Now().Add(socksTimeout)); err != nil { _ = conn.Close(); return nil, err }
+    if err := writeAll(conn, []byte{5, 1, 0}); err != nil { _ = conn.Close(); return nil, err }
+    var reply [2]byte
+    if _, err := io.ReadFull(conn, reply[:]); err != nil || reply[0] != 5 || reply[1] != 0 { _ = conn.Close(); return nil, errors.New("SOCKS5 authentication negotiation failed") }
+    request := []byte{5, 1, 0}
+    address, err := socks5Address(destination); if err != nil { _ = conn.Close(); return nil, err }
+    request = append(request, address...)
+    if err := writeAll(conn, request); err != nil { _ = conn.Close(); return nil, err }
+    var head [4]byte
+    if _, err := io.ReadFull(conn, head[:]); err != nil || head[0] != 5 || head[1] != 0 { _ = conn.Close(); return nil, fmt.Errorf("SOCKS5 connect rejected: reply=%d", head[1]) }
+    if _, _, err := readSocks5AddressAndPort(conn, head[3]); err != nil { _ = conn.Close(); return nil, err }
+    if err := conn.SetDeadline(time.Time{}); err != nil { _ = conn.Close(); return nil, err }
+    return conn, nil
 }
 
-// resolveDNS queries DNS: first tries pre-protected direct UDP to configured DNS, then public DNS fallbacks, and SOCKS TCP.
-func (r *TunRouter) resolveDNS(query []byte) ([]byte, error) {
-	// 1. Primary: Direct UDP query via pre-protected socket (bypasses VPN routing loop)
-	targetDNS := r.dnsServer
-	if targetDNS == "" {
-		targetDNS = "1.1.1.1:53"
-	}
-	if !hasPort(targetDNS) {
-		targetDNS = net.JoinHostPort(targetDNS, "53")
-	}
-
-	resp, err := queryProtectedUDP(targetDNS, query)
-	if err == nil && len(resp) > 0 {
-		return resp, nil
-	}
-
-	// 2. Fallback to 1.1.1.1 or 8.8.8.8 if primary DNS failed
-	if !strings.HasPrefix(targetDNS, "1.1.1.1") {
-		resp, err = queryProtectedUDP("1.1.1.1:53", query)
-		if err == nil && len(resp) > 0 {
-			return resp, nil
-		}
-	}
-	if !strings.HasPrefix(targetDNS, "8.8.8.8") {
-		resp, err = queryProtectedUDP("8.8.8.8:53", query)
-		if err == nil && len(resp) > 0 {
-			return resp, nil
-		}
-	}
-
-	// 3. Fallback to DNS over SOCKS5 TCP
-	if r.socksAddr != "" {
-		if resp, err := r.queryDNSOverSocks(query); err == nil && len(resp) > 0 {
-			return resp, nil
-		}
-	}
-
-	return nil, errors.New("dns resolution failed on all upstream resolvers")
+func openSocks5UDP(ctx context.Context, socksAddr string) (net.Conn, *net.UDPConn, error) {
+    controlConn, err := (&net.Dialer{Timeout: socksTimeout}).DialContext(ctx, "tcp", socksAddr)
+    if err != nil { return nil, nil, err }
+    if err := controlConn.SetDeadline(time.Now().Add(socksTimeout)); err != nil { _ = controlConn.Close(); return nil, nil, err }
+    if err := writeAll(controlConn, []byte{5, 1, 0}); err != nil { _ = controlConn.Close(); return nil, nil, err }
+    var reply [2]byte
+    if _, err := io.ReadFull(controlConn, reply[:]); err != nil || reply[0] != 5 || reply[1] != 0 { _ = controlConn.Close(); return nil, nil, errors.New("SOCKS5 authentication negotiation failed") }
+    if err := writeAll(controlConn, []byte{5, 3, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil { _ = controlConn.Close(); return nil, nil, err }
+    var head [4]byte
+    if _, err := io.ReadFull(controlConn, head[:]); err != nil || head[0] != 5 || head[1] != 0 { _ = controlConn.Close(); return nil, nil, fmt.Errorf("SOCKS5 UDP associate rejected: reply=%d", head[1]) }
+    relayHost, relayPort, err := readSocks5AddressAndPort(controlConn, head[3]); if err != nil { _ = controlConn.Close(); return nil, nil, err }
+    if relayHost == "0.0.0.0" { relayHost = "127.0.0.1" } else if relayHost == "::" { relayHost = "::1" }
+    relayIP := net.ParseIP(relayHost); if relayIP == nil || relayPort == 0 { _ = controlConn.Close(); return nil, nil, fmt.Errorf("invalid SOCKS5 UDP relay address %q:%d", relayHost, relayPort) }
+    udpConn, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: relayIP, Port: int(relayPort)}); if err != nil { _ = controlConn.Close(); return nil, nil, err }
+    if err := controlConn.SetDeadline(time.Time{}); err != nil { _ = udpConn.Close(); _ = controlConn.Close(); return nil, nil, err }
+    return controlConn, udpConn, nil
 }
 
-// queryProtectedUDP creates an unbound UDP socket, protects it via Android VpnService.protect(fd),
-// and sends the DNS query directly through the physical network interface.
-func queryProtectedUDP(dnsServer string, query []byte) ([]byte, error) {
-	rAddr, err := net.ResolveUDPAddr("udp4", dnsServer)
-	if err != nil {
-		return nil, err
-	}
-
-	conn, err := net.ListenUDP("udp4", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-
-	if raw, err := conn.SyscallConn(); err == nil {
-		_ = raw.Control(func(fd uintptr) {
-			ProtectSocket(int(fd))
-		})
-	}
-
-	_ = conn.SetDeadline(time.Now().Add(2500 * time.Millisecond))
-	if _, err := conn.WriteToUDP(query, rAddr); err != nil {
-		return nil, err
-	}
-
-	respBuf := make([]byte, 4096)
-	n, _, err := conn.ReadFromUDP(respBuf)
-	if err != nil || n == 0 {
-		return nil, err
-	}
-	return respBuf[:n], nil
+func socks5Address(destination M.Socksaddr) ([]byte, error) {
+    if !destination.IsValid() { return nil, errors.New("invalid SOCKS5 destination") }
+    out := make([]byte, 0, 1+16+2)
+    switch {
+    case destination.IsIPv4(): out = append(out, 1); out = append(out, destination.Addr.AsSlice()...)
+    case destination.IsIPv6(): out = append(out, 4); out = append(out, destination.Addr.AsSlice()...)
+    case destination.IsFqdn():
+        if destination.Fqdn == "" || len(destination.Fqdn) > 255 || strings.ContainsAny(destination.Fqdn, "\x00\r\n") { return nil, errors.New("invalid SOCKS5 domain destination") }
+        out = append(out, 3, byte(len(destination.Fqdn))); out = append(out, destination.Fqdn...)
+    default: return nil, errors.New("unsupported SOCKS5 destination address")
+    }
+    var port [2]byte; binary.BigEndian.PutUint16(port[:], destination.Port); return append(out, port[:]...), nil
 }
 
-// queryDNSOverSocks queries DNS over TCP via the local SOCKS5 proxy (RFC 1035 TCP framing).
-func (r *TunRouter) queryDNSOverSocks(query []byte) ([]byte, error) {
-	conn, err := net.DialTimeout("tcp", r.socksAddr, 2*time.Second)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-
-	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
-
-	// SOCKS5 Handshake: [0x05, 0x01, 0x00]
-	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
-		return nil, err
-	}
-	var authResp [2]byte
-	if _, err := io.ReadFull(conn, authResp[:]); err != nil || authResp[1] != 0x00 {
-		return nil, errors.New("socks auth failed")
-	}
-
-	// SOCKS5 Connect to 1.1.1.1:53
-	dnsHost, _, err := net.SplitHostPort(r.dnsServer)
-	if err != nil || dnsHost == "" {
-		dnsHost = "1.1.1.1"
-	}
-	dnsIP := net.ParseIP(dnsHost).To4()
-	if dnsIP == nil {
-		dnsIP = net.ParseIP("1.1.1.1").To4()
-	}
-
-	req := []byte{0x05, 0x01, 0x00, 0x01}
-	req = append(req, dnsIP...)
-	req = append(req, 0x00, 0x35) // Port 53
-
-	if _, err := conn.Write(req); err != nil {
-		return nil, err
-	}
-	var resp [10]byte
-	if _, err := io.ReadFull(conn, resp[:]); err != nil || resp[1] != 0x00 {
-		return nil, errors.New("socks connect to dns failed")
-	}
-
-	// RFC 1035: TCP DNS message format has a 2-byte BigEndian length prefix
-	tcpQuery := make([]byte, 2+len(query))
-	binary.BigEndian.PutUint16(tcpQuery[0:2], uint16(len(query)))
-	copy(tcpQuery[2:], query)
-
-	if _, err := conn.Write(tcpQuery); err != nil {
-		return nil, err
-	}
-
-	var lenBuf [2]byte
-	if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
-		return nil, err
-	}
-	respLen := binary.BigEndian.Uint16(lenBuf[:])
-	if respLen == 0 || respLen > 4096 {
-		return nil, errors.New("invalid dns response length")
-	}
-
-	respData := make([]byte, respLen)
-	if _, err := io.ReadFull(conn, respData); err != nil {
-		return nil, err
-	}
-
-	return respData, nil
+func readSocks5AddressAndPort(r io.Reader, atyp byte) (string, uint16, error) {
+    var host string
+    switch atyp {
+    case 1:
+        var b [4]byte; if _, err := io.ReadFull(r, b[:]); err != nil { return "", 0, err }; host = net.IP(b[:]).String()
+    case 3:
+        var n [1]byte; if _, err := io.ReadFull(r, n[:]); err != nil { return "", 0, err }; if n[0] == 0 { return "", 0, errors.New("empty SOCKS5 domain") }
+        b := make([]byte, n[0]); if _, err := io.ReadFull(r, b); err != nil { return "", 0, err }; host = string(b)
+    case 4:
+        var b [16]byte; if _, err := io.ReadFull(r, b[:]); err != nil { return "", 0, err }; host = net.IP(b[:]).String()
+    default: return "", 0, errors.New("unsupported SOCKS5 address type")
+    }
+    var port [2]byte; if _, err := io.ReadFull(r, port[:]); err != nil { return "", 0, err }; return host, binary.BigEndian.Uint16(port[:]), nil
 }
 
-// handleTCP parses TCP segments and bridges them into local SOCKS5 connections.
-func (r *TunRouter) handleTCP(packet []byte, ihl int, srcIP, dstIP net.IP) {
-	if len(packet) < ihl+20 {
-		return
-	}
-	tcpHeader := packet[ihl:]
-	srcPort := binary.BigEndian.Uint16(tcpHeader[0:2])
-	dstPort := binary.BigEndian.Uint16(tcpHeader[2:4])
-	seq := binary.BigEndian.Uint32(tcpHeader[4:8])
-	dataOffset := int(tcpHeader[12]>>4) * 4
-	flags := tcpHeader[13]
-
-	if dataOffset < 20 || len(tcpHeader) < dataOffset {
-		return
-	}
-	payload := tcpHeader[dataOffset:]
-
-	key := tcpKey{
-		srcIP:   srcIP.String(),
-		srcPort: srcPort,
-		dstIP:   dstIP.String(),
-		dstPort: dstPort,
-	}
-
-	val, exists := r.sessions.Load(key)
-
-	// 1. New connection (SYN flag)
-	if !exists && (flags&0x02) != 0 {
-		session := &TcpSession{
-			key:        key,
-			clientSeq:  seq + 1,
-			serverSeq:  1000,
-			lastActive: time.Now(),
-		}
-		r.sessions.Store(key, session)
-		ActiveConns.Add(1)
-
-		go r.initSocksConnection(session, dstIP.String(), dstPort)
-
-		// Reply with SYN-ACK
-		synAck := craftTCPPacket(dstIP, srcIP, dstPort, srcPort, session.serverSeq, session.clientSeq, 0x12, nil)
-		session.serverSeq++
-		_, _ = r.writeTun(synAck)
-		return
-	}
-
-	if !exists {
-		return
-	}
-
-	session := val.(*TcpSession)
-	session.lastActive = time.Now()
-
-	// 2. Client FIN or RST
-	if (flags & 0x01) != 0 { // FIN
-		session.closed.Store(true)
-		session.mu.Lock()
-		if session.socksConn != nil {
-			_ = session.socksConn.Close()
-		}
-		session.mu.Unlock()
-		finAck := craftTCPPacket(dstIP, srcIP, dstPort, srcPort, session.serverSeq, seq+1, 0x11, nil)
-		_, _ = r.writeTun(finAck)
-		r.sessions.Delete(key)
-		ActiveConns.Add(-1)
-		return
-	}
-
-	if (flags & 0x04) != 0 { // RST
-		session.closed.Store(true)
-		session.mu.Lock()
-		if session.socksConn != nil {
-			_ = session.socksConn.Close()
-		}
-		session.mu.Unlock()
-		r.sessions.Delete(key)
-		ActiveConns.Add(-1)
-		return
-	}
-
-	// 3. Client data transmission (e.g. TLS Client Hello or HTTP request)
-	if len(payload) > 0 {
-		session.mu.Lock()
-		if session.ready && session.socksConn != nil {
-			_, _ = session.socksConn.Write(payload)
-		} else {
-			// Buffer payload until SOCKS connection finishes handshake (Fixes TLS handshake drop!)
-			bufCopy := make([]byte, len(payload))
-			copy(bufCopy, payload)
-			session.pending = append(session.pending, bufCopy)
-		}
-		session.clientSeq = seq + uint32(len(payload))
-		session.mu.Unlock()
-
-		// Acknowledge received data
-		ackPacket := craftTCPPacket(dstIP, srcIP, dstPort, srcPort, session.serverSeq, session.clientSeq, 0x10, nil)
-		_, _ = r.writeTun(ackPacket)
-	}
+func writeSocks5UDPDatagram(conn *net.UDPConn, destination M.Socksaddr, payload []byte) error {
+    address, err := socks5Address(destination); if err != nil { return err }
+    packet := make([]byte, 0, 3+len(address)+len(payload)); packet = append(packet, 0, 0, 0); packet = append(packet, address...); packet = append(packet, payload...)
+    _, err = conn.Write(packet); return err
 }
 
-func (r *TunRouter) sendReset(key tcpKey, seq, ack uint32) {
-	srcIP := net.ParseIP(key.dstIP).To4()
-	dstIP := net.ParseIP(key.srcIP).To4()
-	if srcIP != nil && dstIP != nil {
-		rstPkt := craftTCPPacket(srcIP, dstIP, key.dstPort, key.srcPort, seq, ack, 0x04, nil)
-		_, _ = r.writeTun(rstPkt)
-	}
+func parseSocks5UDPDatagram(packet []byte) ([]byte, error) {
+    if len(packet) < 4 || packet[0] != 0 || packet[1] != 0 || packet[2] != 0 { return nil, errors.New("invalid SOCKS5 UDP header") }
+    offset := 3
+    switch packet[offset] {
+    case 1: offset += 1 + 4
+    case 3:
+        if len(packet) < offset+2 { return nil, errors.New("truncated SOCKS5 domain") }
+        n := int(packet[offset+1]); if n == 0 { return nil, errors.New("empty SOCKS5 domain") }; offset += 2 + n
+    case 4: offset += 1 + 16
+    default: return nil, errors.New("unsupported SOCKS5 UDP address type")
+    }
+    if len(packet) < offset+2 { return nil, errors.New("truncated SOCKS5 UDP port") }
+    offset += 2; if offset > len(packet) { return nil, errors.New("invalid SOCKS5 UDP datagram") }
+    return append([]byte(nil), packet[offset:]...), nil
 }
 
-func (r *TunRouter) initSocksConnection(sess *TcpSession, targetHost string, targetPort uint16) {
-	conn, err := net.DialTimeout("tcp", r.socksAddr, 5*time.Second)
-	if err != nil {
-		sess.closed.Store(true)
-		r.sessions.Delete(sess.key)
-		ActiveConns.Add(-1)
-		r.sendReset(sess.key, sess.serverSeq, sess.clientSeq)
-		return
-	}
-
-	// SOCKS5 greeting handshake: [VER=0x05, NMETHODS=1, METHOD=0x00 (No Auth)]
-	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
-		sess.closed.Store(true)
-		r.sessions.Delete(sess.key)
-		ActiveConns.Add(-1)
-		_ = conn.Close()
-		r.sendReset(sess.key, sess.serverSeq, sess.clientSeq)
-		return
-	}
-	var authResp [2]byte
-	if _, err := io.ReadFull(conn, authResp[:]); err != nil || authResp[1] != 0x00 {
-		sess.closed.Store(true)
-		r.sessions.Delete(sess.key)
-		ActiveConns.Add(-1)
-		_ = conn.Close()
-		r.sendReset(sess.key, sess.serverSeq, sess.clientSeq)
-		return
-	}
-
-	// SOCKS5 CONNECT request
-	ip := net.ParseIP(targetHost).To4()
-	if ip == nil {
-		ip = net.IPv4zero.To4()
-	}
-
-	req := []byte{0x05, 0x01, 0x00, 0x01}
-	req = append(req, ip...)
-	pBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(pBytes, targetPort)
-	req = append(req, pBytes...)
-
-	if _, err := conn.Write(req); err != nil {
-		sess.closed.Store(true)
-		r.sessions.Delete(sess.key)
-		ActiveConns.Add(-1)
-		_ = conn.Close()
-		r.sendReset(sess.key, sess.serverSeq, sess.clientSeq)
-		return
-	}
-
-	var resp [10]byte
-	if _, err := io.ReadFull(conn, resp[:]); err != nil || resp[1] != 0x00 {
-		sess.closed.Store(true)
-		r.sessions.Delete(sess.key)
-		ActiveConns.Add(-1)
-		_ = conn.Close()
-		r.sendReset(sess.key, sess.serverSeq, sess.clientSeq)
-		return
-	}
-
-	// SOCKS5 is connected and ready: flush any buffered payloads (TLS Client Hello, etc.)
-	sess.mu.Lock()
-	sess.socksConn = conn
-	sess.ready = true
-	for _, pendingData := range sess.pending {
-		_, _ = conn.Write(pendingData)
-	}
-	sess.pending = nil
-	sess.mu.Unlock()
-
-	// Pipe SOCKS responses back into TUN
-	// Pipe SOCKS responses back into TUN with MSS segmentation (max 1460 bytes per packet)
-	const maxTCPPayload = 1460
-	buf := make([]byte, 16*1024)
-	for {
-		if sess.closed.Load() {
-			_ = conn.Close()
-			return
-		}
-		n, err := conn.Read(buf)
-		if n > 0 {
-			sess.lastActive = time.Now()
-			srcIP := net.ParseIP(sess.key.dstIP).To4()
-			dstIP := net.ParseIP(sess.key.srcIP).To4()
-			if srcIP != nil && dstIP != nil {
-				data := buf[:n]
-				for len(data) > 0 {
-					chunkSize := len(data)
-					flags := byte(0x18) // PSH-ACK for final chunk
-					if chunkSize > maxTCPPayload {
-						chunkSize = maxTCPPayload
-						flags = 0x10 // ACK for intermediate chunks
-					}
-					tcpPkt := craftTCPPacket(srcIP, dstIP, sess.key.dstPort, sess.key.srcPort, sess.serverSeq, sess.clientSeq, flags, data[:chunkSize])
-					sess.serverSeq += uint32(chunkSize)
-					if _, wErr := r.writeTun(tcpPkt); wErr != nil {
-						break
-					}
-					data = data[chunkSize:]
-				}
-			}
-		}
-		if err != nil {
-			sess.closed.Store(true)
-			r.sessions.Delete(sess.key)
-			ActiveConns.Add(-1)
-			_ = conn.Close()
-
-			srcIP := net.ParseIP(sess.key.dstIP).To4()
-			dstIP := net.ParseIP(sess.key.srcIP).To4()
-			if srcIP != nil && dstIP != nil {
-				finPkt := craftTCPPacket(srcIP, dstIP, sess.key.dstPort, sess.key.srcPort, sess.serverSeq, sess.clientSeq, 0x11, nil)
-				_, _ = r.writeTun(finPkt)
-			}
-			return
-		}
-	}
-}
-
-func craftUDPPacket(srcIP, dstIP net.IP, srcPort, dstPort uint16, payload []byte) []byte {
-	totalLen := 20 + 8 + len(payload)
-	pkt := make([]byte, totalLen)
-
-	// IPv4 Header
-	pkt[0] = 0x45
-	binary.BigEndian.PutUint16(pkt[2:4], uint16(totalLen))
-	pkt[8] = 64
-	pkt[9] = 17 // UDP
-	copy(pkt[12:16], srcIP.To4())
-	copy(pkt[16:20], dstIP.To4())
-	ipCsum := computeChecksum(pkt[:20])
-	binary.BigEndian.PutUint16(pkt[10:12], ipCsum)
-
-	// UDP Header
-	binary.BigEndian.PutUint16(pkt[20:22], srcPort)
-	binary.BigEndian.PutUint16(pkt[22:24], dstPort)
-	binary.BigEndian.PutUint16(pkt[24:26], uint16(8+len(payload)))
-	copy(pkt[28:], payload)
-
-	return pkt
-}
-
-func craftTCPPacket(srcIP, dstIP net.IP, srcPort, dstPort uint16, seq, ack uint32, flags byte, payload []byte) []byte {
-	totalLen := 20 + 20 + len(payload)
-	pkt := make([]byte, totalLen)
-
-	// IPv4 Header
-	pkt[0] = 0x45
-	binary.BigEndian.PutUint16(pkt[2:4], uint16(totalLen))
-	pkt[8] = 64
-	pkt[9] = 6 // TCP
-	copy(pkt[12:16], srcIP.To4())
-	copy(pkt[16:20], dstIP.To4())
-	ipCsum := computeChecksum(pkt[:20])
-	binary.BigEndian.PutUint16(pkt[10:12], ipCsum)
-
-	// TCP Header
-	binary.BigEndian.PutUint16(pkt[20:22], srcPort)
-	binary.BigEndian.PutUint16(pkt[22:24], dstPort)
-	binary.BigEndian.PutUint32(pkt[24:28], seq)
-	binary.BigEndian.PutUint32(pkt[28:32], ack)
-	pkt[32] = 0x50 // Data offset (5 * 4 = 20 bytes)
-	pkt[33] = flags
-	binary.BigEndian.PutUint16(pkt[34:36], 65535) // Window size
-
-	copy(pkt[40:], payload)
-
-	// Pseudo header for TCP Checksum
-	tcpCsum := computeTCPChecksum(srcIP.To4(), dstIP.To4(), pkt[20:])
-	binary.BigEndian.PutUint16(pkt[36:38], tcpCsum)
-
-	return pkt
-}
-
-func computeChecksum(data []byte) uint16 {
-	var sum uint32
-	for i := 0; i < len(data)-1; i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(data[i : i+2]))
-	}
-	if len(data)%2 == 1 {
-		sum += uint32(data[len(data)-1]) << 8
-	}
-	for sum > 0xFFFF {
-		sum = (sum >> 16) + (sum & 0xFFFF)
-	}
-	return ^uint16(sum)
-}
-
-func computeTCPChecksum(srcIP, dstIP []byte, tcpHeaderAndPayload []byte) uint16 {
-	var sum uint32
-	sum += uint32(binary.BigEndian.Uint16(srcIP[0:2]))
-	sum += uint32(binary.BigEndian.Uint16(srcIP[2:4]))
-	sum += uint32(binary.BigEndian.Uint16(dstIP[0:2]))
-	sum += uint32(binary.BigEndian.Uint16(dstIP[2:4]))
-	sum += uint32(6) // TCP Protocol
-	sum += uint32(len(tcpHeaderAndPayload))
-
-	for i := 0; i < len(tcpHeaderAndPayload)-1; i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(tcpHeaderAndPayload[i : i+2]))
-	}
-	if len(tcpHeaderAndPayload)%2 == 1 {
-		sum += uint32(tcpHeaderAndPayload[len(tcpHeaderAndPayload)-1]) << 8
-	}
-	for sum > 0xFFFF {
-		sum = (sum >> 16) + (sum & 0xFFFF)
-	}
-	return ^uint16(sum)
+func writeAll(w io.Writer, p []byte) error {
+    for len(p) > 0 { n, err := w.Write(p); if err != nil { return err }; if n <= 0 { return io.ErrShortWrite }; p = p[n:] }
+    return nil
 }

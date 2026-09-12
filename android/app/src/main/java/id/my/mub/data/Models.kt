@@ -7,13 +7,17 @@ import java.util.Locale
 enum class ProtocolType(val displayName: String, val badge: String) {
     VLESS_WS("VLESS (WebSocket)", "CDN / TLS"),
     VLESS_TCP("VLESS (Direct TCP)", "Direct TLS"),
-    SHADOWSOCKS_2022("Shadowsocks", "AEAD Cipher"),
+    VLESS_REALITY("VLESS (Reality)", "Reality / uTLS"),
+    VMESS_WS("VMess (WebSocket)", "VMess / WS"),
+    TROJAN_WS("Trojan (WebSocket)", "Trojan / WS"),
+    SHADOWSOCKS("Shadowsocks", "AEAD Cipher"),
+    SHADOWSOCKS_2022("Shadowsocks 2022", "AEAD / BLAKE3"),
     ZIVPN_UDP("ZiVPN (UDP Custom)", "UDP Obfuscation"),
     SSH_PAYLOAD("SSH / HTTP Injector", "Payload Injection"),
     T_BRUTAL("T-Brutal", "Congestion Pacing"),
     HYSTERIA_2("Hysteria 2", "QUIC Protocol"),
-    SHADOWTLS_V3("ShadowTLS", "TLS Camouflage"),
-    AMNEZIA_WG("AmneziaWG", "WireGuard Obfs")
+    TUIC("TUIC", "QUIC Protocol"),
+    SHADOWTLS_V3("ShadowTLS", "TLS Camouflage")
 }
 
 data class VpnProfile(
@@ -36,12 +40,16 @@ data class VpnProfile(
     val udpForwarding: Boolean = true,
     val sshUser: String = "",
     val sshPassword: String = "",
+    val sshHostKeySHA256: String = "",
     val proxyHost: String = "",
     val proxyPort: Int = 0,
     val wsPath: String = "/vless-ws",
     val wsHost: String = "",
     val ssCipher: String = "2022-blake3-aes-128-gcm",
     val vlessFlow: String = "",
+    val tuicPassword: String = "",
+    val realityPublicKey: String = "",
+    val realityShortId: String = "",
     val killSwitchEnabled: Boolean = false
 )
 
@@ -69,13 +77,10 @@ data class BugHostProbeResult(
     val certSANs: List<String> = emptyList(),
     val errorMessage: String? = null
 ) {
-    val isWhitelisted: Boolean
-        get() = statusCode in 200..399 && errorMessage == null
+    val isWhitelisted: Boolean get() = statusCode in 200..399 && errorMessage == null
 }
 
-enum class LogLevel {
-    INFO, SUCCESS, WARN, ERROR, NET
-}
+enum class LogLevel { INFO, SUCCESS, WARN, ERROR, NET }
 
 data class LogEntry(
     val timestamp: Long = System.currentTimeMillis(),
@@ -83,12 +88,7 @@ data class LogEntry(
     val message: String,
     val level: LogLevel = LogLevel.INFO
 ) {
-    val formattedTime: String
-        get() = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(timestamp))
+    val formattedTime: String get() = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(timestamp))
 }
 
-data class RealTelemetry(
-    val rxBytes: Long,
-    val txBytes: Long,
-    val activeConns: Int
-)
+data class RealTelemetry(val rxBytes: Long, val txBytes: Long, val activeConns: Int)

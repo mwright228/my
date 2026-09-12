@@ -4,14 +4,36 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+env:
+  GOFLAGS: "-ldflags=-checklinkname=0"
+
 jobs:
   ci-pipeline:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.7"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Export JNI include paths
+        run: |
+          echo "CGO_CFLAGS=-I$JAVA_HOME/include -I$JAVA_HOME/include/linux" >> "$GITHUB_ENV"
+          echo "CGO_CPPFLAGS=-I$JAVA_HOME/include -I$JAVA_HOME/include/linux" >> "$GITHUB_ENV"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -44,10 +66,25 @@ jobs:
         run: |
           ruff check --select E,F --ignore E501 bin/mubx-chameleon tests/
 
-      - name: Run unit tests with pytest
+      - name: Populate Go module cache and sums
+        run: go mod download all
+
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Run Go vet
+        run: go vet ./...
+
+      - name: Run Go race tests
+        run: go test -race ./src/tbrutal/...
+
+      - name: Run Go vulnerability scan
         run: |
-          pytest -v tests/
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          govulncheck ./...
+
+      - name: Run unit tests with pytest
+        run: pytest -v tests/
 
       - name: Run comprehensive repository checks
-        run: |
-          bash .github/ci-check.sh
+        run: bash .github/ci-check.sh
