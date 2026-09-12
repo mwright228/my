@@ -96,7 +96,7 @@ func StartTunRouterWithDNS(fd int, socksPort int, dnsServer string) error {
 		Context:                ctx,
 		Tun:                    device,
 		TunOptions:             options,
-		UDPTimeout:             90 * time.Second,
+		UDPTimeout:             90,
 		Handler:                handler,
 		Logger:                 logger.NOP(),
 		ForwarderBindInterface: false,
@@ -318,7 +318,7 @@ func dialSocks5TCP(ctx context.Context, socksAddr string, destination M.Socksadd
 		_ = conn.Close()
 		return nil, fmt.Errorf("SOCKS5 connect rejected: reply=%d", head[1])
 	}
-	if _, err := readSocks5AddressAndPort(conn, head[3]); err != nil {
+	if _, _, err := readSocks5AddressAndPort(conn, head[3]); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
