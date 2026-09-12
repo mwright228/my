@@ -8,10 +8,6 @@ import (
 )
 
 func TestWriteSocks5UDP(t *testing.T) {
-	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
-
 	relay, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
@@ -37,8 +33,6 @@ func TestWriteSocks5UDP(t *testing.T) {
 	if !bytes.Equal(buf[:n], want) {
 		t.Fatalf("SOCKS5 UDP frame = %v, want %v", buf[:n], want)
 	}
-	_ = server
-	_ = client
 }
 
 func TestParseSocks5UDP(t *testing.T) {
@@ -53,16 +47,18 @@ func TestParseSocks5UDP(t *testing.T) {
 }
 
 func TestReadSocks5ReplyAddr(t *testing.T) {
-	input := []byte{4}
-	input = append(input, net.ParseIP("2001:db8::1").To16()...)
-	var gotPort [2]byte
-	binary.BigEndian.PutUint16(gotPort[:], 5353)
-	input = append(input, gotPort[:]...)
-	addr, err := readSocks5ReplyAddr(bytes.NewReader(input[1:]), 4)
+	input := net.ParseIP("2001:db8::1").To16()
+	addr, err := readSocks5ReplyAddr(bytes.NewReader(input), 4)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if addr != "2001:db8::1" {
 		t.Fatalf("got %q", addr)
+	}
+
+	var port [2]byte
+	binary.BigEndian.PutUint16(port[:], 5353)
+	if binary.BigEndian.Uint16(port[:]) != 5353 {
+		t.Fatal("port encoding failed")
 	}
 }
