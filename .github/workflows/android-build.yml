@@ -53,6 +53,17 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew testReleaseUnitTest lintRelease --stacktrace
+      - name: Build installable debug APK
+        working-directory: ./android
+        run: ./gradlew clean assembleDebug --stacktrace
+      - name: Prepare installable debug artifact
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk MUB-X-debug.apk
+      - name: Upload installable debug artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MUB-X-Android-Debug-Installable
+          path: MUB-X-debug.apk
+          retention-days: 14
       - name: Build optimized Android release APK
         working-directory: ./android
         run: ./gradlew clean assembleRelease --stacktrace
