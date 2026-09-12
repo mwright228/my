@@ -19,12 +19,12 @@ type tunUDPKey struct {
 }
 
 type tunUDPFlow struct {
-	key       tunUDPKey
-	control   net.Conn
-	udpConn   *net.UDPConn
+	key        tunUDPKey
+	control    net.Conn
+	udpConn    *net.UDPConn
 	lastActive atomic.Int64
-	closed    atomic.Bool
-	closeOnce sync.Once
+	closed     atomic.Bool
+	closeOnce  sync.Once
 }
 
 var tunUDPFlows sync.Map // map[*TunRouter]*sync.Map
@@ -78,8 +78,6 @@ func (r *TunRouter) newUDPFlow(key tunUDPKey) (*tunUDPFlow, error) {
 		_ = control.Close()
 		return nil, errors.New("SOCKS5 authentication negotiation failed")
 	}
-	// UDP ASSOCIATE with an unspecified address. The SOCKS server binds the
-	// actual relay endpoint and ties it to this TCP control connection.
 	req := []byte{5, 3, 0, 1, 0, 0, 0, 0, 0, 0}
 	if _, err = control.Write(req); err != nil {
 		_ = control.Close()
@@ -106,7 +104,6 @@ func (r *TunRouter) newUDPFlow(key tunUDPKey) (*tunUDPFlow, error) {
 		return nil, errors.New("SOCKS5 returned invalid UDP relay port")
 	}
 	_ = control.SetDeadline(time.Time{})
-
 	if relayHost == "0.0.0.0" || relayHost == "::" {
 		relayHost = "127.0.0.1"
 	}
@@ -164,7 +161,6 @@ func writeSocks5UDP(conn *net.UDPConn, dstIP net.IP, dstPort uint16, payload []b
 		return errors.New("UDP payload too large")
 	}
 	datagram := make([]byte, 10+len(payload))
-	// RSV(2)=0, FRAG=0, ATYP=IPv4.
 	datagram[3] = 1
 	copy(datagram[4:8], ip)
 	binary.BigEndian.PutUint16(datagram[8:10], dstPort)
@@ -196,12 +192,11 @@ func (r *TunRouter) readUDPFlow(flows *sync.Map, key tunUDPKey, flow *tunUDPFlow
 		if err != nil || len(payload) == 0 {
 			continue
 		}
-		dstIP := net.ParseIP(key.srcIP).To4()
-		dstTarget := net.ParseIP(key.dstIP).To4()
-		if dstIP == nil || dstTarget == nil {
+		tunDst := net.ParseIP(key.srcIP).To4()
+		if tunDst == nil || r.getTunFile() == nil {
 			continue
 		}
-		pkt := craftUDPPacket(srcIP, dstIP, srcPort, key.srcPort, payload)
+		pkt := craftUDPPacket(srcIP, tunDst, srcPort, key.srcPort, payload)
 		_, _ = r.writeTun(pkt)
 	}
 }
