@@ -30,7 +30,7 @@ type tunUDPFlow struct {
 var tunUDPFlows sync.Map // map[*TunRouter]*sync.Map
 
 func (r *TunRouter) handleGenericUDP(srcIP, dstIP net.IP, srcPort, dstPort uint16, payload []byte) {
-	if !r.running.Load() || len(payload) == 0 || len(payload) > 65507 {
+	if !r.running.Load() || len(payload) > 65507 {
 		return
 	}
 	key := tunUDPKey{srcIP: srcIP.String(), srcPort: srcPort, dstIP: dstIP.String(), dstPort: dstPort}
@@ -189,7 +189,7 @@ func (r *TunRouter) readUDPFlow(flows *sync.Map, key tunUDPKey, flow *tunUDPFlow
 		}
 		flow.lastActive.Store(time.Now().UnixNano())
 		srcIP, srcPort, payload, err := parseSocks5UDP(buf[:n])
-		if err != nil || len(payload) == 0 {
+		if err != nil {
 			continue
 		}
 		tunDst := net.ParseIP(key.srcIP).To4()
