@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -9,10 +10,10 @@ import (
 )
 
 const (
-	finBit    = 0x80
-	rsvMask   = 0x70
+	finBit     = 0x80
+	rsvMask    = 0x70
 	opcodeMask = 0x0f
-	maskBit   = 0x80
+	maskBit    = 0x80
 
 	opcodeContinuation = 0x0
 	opcodeText         = 0x1
@@ -26,14 +27,14 @@ const (
 )
 
 var (
-	ErrProtocol = errors.New("invalid WebSocket frame")
+	ErrProtocol      = errors.New("invalid WebSocket frame")
 	ErrMessageTooBig = errors.New("WebSocket message exceeds maximum size")
 )
 
 // Conn adapts a net.Conn to an RFC 6455 binary message stream. The client side
 // masks every frame it writes; the server side requires masking from its peer.
-// Each Write is emitted as one FIN=1 binary message. Read transparently
-// reassembles fragmented binary messages and handles control frames.
+// Each Write is one FIN=1 binary message. Read reassembles fragmented binary
+// messages and handles WebSocket control frames.
 type Conn struct {
 	net.Conn
 	serverSide bool
@@ -80,21 +81,25 @@ func (c *Conn) Read(p []byte) (int, error) {
 func (c *Conn) Close() error {
 	c.writeMu.Lock()
 	if !c.closed {
-		c.closed = true
 		_ = c.writeFrame(opcodeClose, nil)
+		c.closed = true
 	}
 	c.writeMu.Unlock()
 	return c.Conn.Close()
 }
 
 func (c *Conn) writeFrame(opcode byte, payload []byte) error {
-	if len(payload) > maxMessageSize && opcode < opcodeClose {
+	if len(payload) > maxControlPayload && opcode >= 0x8 {
+		return ErrProtocol
+	}
+	if len(payload) > maxMessageSize {
 		return ErrMessageTooBig
 	}
+
 	first := byte(finBit | (opcode & opcodeMask))
-	mask := !c.serverSide
+	masked := !c.serverSide
 	second := byte(0)
-	if mask {
+	if masked {
 		second |= maskBit
 	}
 
@@ -118,9 +123,8 @@ func (c *Conn) writeFrame(opcode byte, payload []byte) error {
 	}
 
 	var maskKey [4]byte
-	if mask {
-		// RFC 6455 requires a fresh unpredictable masking key for each client frame.
-		if _, err := io.ReadFull(randReader{}, maskKey[:]); err != nil {
+	if masked {
+		if _, err := rand.Read(maskKey[:]); err != nil {
 			return err
 		}
 		copy(header[headerLen:headerLen+4], maskKey[:])
@@ -132,24 +136,16 @@ func (c *Conn) writeFrame(opcode byte, payload []byte) error {
 	if len(payload) == 0 {
 		return nil
 	}
-	if mask {
-		masked := make([]byte, len(payload))
+	if masked {
+		maskedPayload := make([]byte, len(payload))
 		for i, b := range payload {
-			masked[i] = b ^ maskKey[i&3]
+			maskedPayload[i] = b ^ maskKey[i&3]
 		}
-		_, err := c.Conn.Write(masked)
+		_, err := c.Conn.Write(maskedPayload)
 		return err
 	}
 	_, err := c.Conn.Write(payload)
 	return err
-}
-
-// randReader is kept as a tiny io.Reader adapter so this package has no global
-// mutable masking-key state. crypto/rand is used in its implementation below.
-type randReader struct{}
-
-func (randReader) Read(p []byte) (int, error) {
-	return cryptoRandRead(p)
 }
 
 func (c *Conn) readMessage() ([]byte, error) {
@@ -222,8 +218,7 @@ func (c *Conn) readFrame() (byte, bool, []byte, error) {
 	fin := hdr[0]&finBit != 0
 	opcode := hdr[0] & opcodeMask
 	masked := hdr[1]&maskBit != 0
-	wantMasked := c.serverSide
-	if masked != wantMasked {
+	if masked != c.serverSide {
 		return 0, false, nil, ErrProtocol
 	}
 
@@ -240,10 +235,10 @@ func (c *Conn) readFrame() (byte, bool, []byte, error) {
 		if _, err := io.ReadFull(c.Conn, ext[:]); err != nil {
 			return 0, false, nil, err
 		}
-		length = int64(binary.BigEndian.Uint64(ext[:]))
-		if length < 0 {
+		if ext[0]&0x80 != 0 {
 			return 0, false, nil, ErrProtocol
 		}
+		length = int64(binary.BigEndian.Uint64(ext[:]))
 	}
 
 	isControl := opcode >= 0x8
@@ -253,9 +248,9 @@ func (c *Conn) readFrame() (byte, bool, []byte, error) {
 	if length > maxMessageSize {
 		return 0, false, nil, ErrMessageTooBig
 	}
-	if opcode == opcodeContinuation || opcode == opcodeBinary || opcode == opcodeText {
-		// handled below
-	} else if opcode != opcodeClose && opcode != opcodePing && opcode != opcodePong {
+	switch opcode {
+	case opcodeContinuation, opcodeBinary, opcodeText, opcodeClose, opcodePing, opcodePong:
+	default:
 		return 0, false, nil, ErrProtocol
 	}
 
@@ -275,25 +270,4 @@ func (c *Conn) readFrame() (byte, bool, []byte, error) {
 		}
 	}
 	return opcode, fin, payload, nil
-}
-
-// cryptoRandRead is declared as a variable so tests can replace it without
-// changing the public API.
-var cryptoRandRead = func(p []byte) (int, error) {
-	return cryptorand.Read(p)
-}
-
-var cryptorand = struct {
-	Read func([]byte) (int, error)
-}{Read: func(p []byte) (int, error) { return readCryptoRand(p) }}
-
-func readCryptoRand(p []byte) (int, error) {
-	return io.ReadFull(cryptorandReader{}, p)
-}
-
-type cryptorandReader struct{}
-
-func (cryptorandReader) Read(p []byte) (int, error) {
-	// This method is replaced in init below with crypto/rand.Reader.
-	return 0, errors.New("crypto/rand reader unavailable")
 }
