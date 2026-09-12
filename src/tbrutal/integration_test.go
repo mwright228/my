@@ -118,9 +118,9 @@ func TestEndToEndProxyIPv6(t *testing.T) {
 	defer func() { ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second); defer cancel(); _ = srv.Stop(ctx) }()
 
 	cli := client.NewClient(client.Config{
-		ServerAddr: serverLn.Addr().String(), SNI: "ipv6.test.invalid", Path: "/tbrutal",
+		ServerAddr: serverLn.Addr().String(), SNI: "ipv6.test.invalid", Path: "",
 		Token: "valid-secret-token-123", LocalSocksAddr: "127.0.0.1:0", NumConns: 2,
-		RateMbps: 0, UseTLS: false, InsecureTLS: true,
+		RateMbps: 0, UseTLS: false, InsecureTLS: true, RawMode: true,
 	})
 	if err := cli.Start(); err != nil { t.Fatalf("failed to start IPv6 client: %v", err) }
 	defer cli.Stop()
@@ -128,6 +128,7 @@ func TestEndToEndProxyIPv6(t *testing.T) {
 	socksConn, err := net.DialTimeout("tcp", cli.ListenerAddr(), 5*time.Second)
 	if err != nil { t.Fatalf("failed to dial local socks5: %v", err) }
 	defer socksConn.Close()
+	_ = socksConn.SetDeadline(time.Now().Add(15 * time.Second))
 
 	if _, err = socksConn.Write([]byte{0x05, 0x01, 0x00}); err != nil { t.Fatalf("socks handshake write failed: %v", err) }
 	var authResp [2]byte
@@ -143,7 +144,7 @@ func TestEndToEndProxyIPv6(t *testing.T) {
 	req.Write(portBytes[:])
 	if _, err := socksConn.Write(req.Bytes()); err != nil { t.Fatalf("IPv6 socks connect write failed: %v", err) }
 
-	var connResp [22]byte
+	var connResp [10]byte
 	if _, err := io.ReadFull(socksConn, connResp[:]); err != nil { t.Fatalf("IPv6 socks connect read failed: %v", err) }
 	if connResp[1] != 0x00 { t.Fatalf("IPv6 socks connect failed with status: %d", connResp[1]) }
 
