@@ -116,13 +116,38 @@ func isBlockedIP(ip net.IP) bool {
 	}
 	if addr.Is4() {
 		a := addr.As4()
-		if a[0] == 0 || a[0] >= 240 { return true }
-		if a[0] == 100 && a[1] >= 64 && a[1] <= 127 { return true }
-		if a[0] == 192 && a[1] == 0 && a[2] == 0 { return true }
-		if a[0] == 192 && a[1] == 0 && a[2] == 2 { return true }
-		if a[0] == 198 && (a[1] == 18 || a[1] == 19) { return true }
-		if a[0] == 198 && a[1] == 51 && a[2] == 100 { return true }
-		if a[0] == 203 && a[1] == 0 && a[2] == 113 { return true }
+		if a[0] == 0 || a[0] >= 240 {
+			return true
+		}
+		if a[0] == 100 && a[1] >= 64 && a[1] <= 127 {
+			return true
+		}
+		if a[0] == 192 && a[1] == 0 && a[2] == 0 {
+			return true
+		}
+		if a[0] == 192 && a[1] == 0 && a[2] == 2 {
+			return true
+		}
+		if a[0] == 198 && (a[1] == 18 || a[1] == 19) {
+			return true
+		}
+		if a[0] == 198 && a[1] == 51 && a[2] == 100 {
+			return true
+		}
+		if a[0] == 203 && a[1] == 0 && a[2] == 113 {
+			return true
+		}
+		return false
+	}
+	for _, prefix := range []string{
+		"100::/64",
+		"2001:2::/48",
+		"2001:10::/28",
+		"2001:db8::/32",
+	} {
+		if netip.MustParsePrefix(prefix).Contains(addr) {
+			return true
+		}
 	}
 	return false
 }
