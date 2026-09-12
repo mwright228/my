@@ -161,11 +161,11 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	if err := buf.Flush(); err != nil { _ = conn.Close(); return }
 
 	// Preserve bytes already buffered by net/http while parsing the upgrade.
-	sessionConn := &prefixConn{Conn: conn, reader: buf}
+	baseConn := &prefixConn{Conn: conn, reader: buf}
+	var sessionConn net.Conn = baseConn
 	if upg == "websocket" {
-		// Browser/standard RFC 6455 clients must mask their frames. The wrapper
-		// also emits unmasked binary frames from this server.
-		sessionConn = &prefixConn{Conn: ws.New(sessionConn, true), reader: ws.New(sessionConn, true)}
+		// RFC 6455: client frames are masked and server frames are unmasked.
+		sessionConn = ws.New(baseConn, true)
 	}
 	go s.newSession(sessionConn).Handle()
 }
