@@ -19,6 +19,7 @@ import (
 
 	"github.com/mwright228/my/src/tbrutal/pacer"
 	"github.com/mwright228/my/src/tbrutal/protocol"
+	ws "github.com/mwright228/my/src/tbrutal/websocket"
 )
 
 type StreamEntry struct { id uint32; clientConn net.Conn; respChan chan byte; pConn *PooledConn; closed atomic.Bool }
@@ -58,11 +59,12 @@ func (p *Pool) dialSingle(index int)(*PooledConn,error){
 	wsKey:=base64.StdEncoding.EncodeToString(wsKeyBytes)
 	req:=fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nUser-Agent: Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36\r\n\r\n",p.path,p.hostHeader,wsKey)
 	if _,err:=transportConn.Write([]byte(req));err!=nil{_=transportConn.Close();return nil,fmt.Errorf("send upgrade request failed: %w",err)}
-	reader:=bufio.NewReader(transportConn);statusLine,err:=reader.ReadString('\n');if err!=nil{_=transportConn.Close();return nil,fmt.Errorf("read upgrade response failed: %w",err)};if !strings.Contains(statusLine,"101"){_=transportConn.Close();return nil,fmt.Errorf("upgrade failed, expected 101 but got: %s",strings.TrimSpace(statusLine))}
+	reader:=bufio.NewReader(transportConn);statusLine,err:=reader.ReadString('\n');if err!=nil{_=transportConn.Close();return nil,fmt.Errorf("read upgrade response failed: %w",err)};if !strings.HasPrefix(statusLine,"HTTP/1.1 101 "){_=transportConn.Close();return nil,fmt.Errorf("upgrade failed, expected HTTP/1.1 101 but got: %s",strings.TrimSpace(statusLine))}
 	headers:=make(map[string]string);for{line,err:=reader.ReadString('\n');if err!=nil{_=transportConn.Close();return nil,fmt.Errorf("read upgrade headers failed: %w",err)};line=strings.TrimSpace(line);if line==""{break};if k,v,ok:=strings.Cut(line,":");ok{headers[strings.ToLower(strings.TrimSpace(k))]=strings.TrimSpace(v)}}
 	acceptSum:=sha1.Sum([]byte(wsKey+"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"));wantAccept:=base64.StdEncoding.EncodeToString(acceptSum[:]);if !strings.EqualFold(headers["sec-websocket-accept"],wantAccept){_=transportConn.Close();return nil,errors.New("invalid Sec-WebSocket-Accept from T-Brutal upgrade endpoint")}
-	// net/http may buffer the first protocol frame while reading the upgrade request. Retain that reader for the binary stream.
-	return &PooledConn{pool:p,index:index,rawConn:&bufferedConn{Conn:transportConn,reader:reader},closeChan:make(chan struct{})},nil
+	// net/http may buffer the first WebSocket frame while reading the upgrade request. Retain that reader for the transport wrapper.
+	upgraded:=ws.New(&bufferedConn{Conn:transportConn,reader:reader}, false)
+	return &PooledConn{pool:p,index:index,rawConn:upgraded,closeChan:make(chan struct{})},nil
 }
 
 func (p *Pool) heartbeat(pc *PooledConn){ticker:=time.NewTicker(12*time.Second);defer ticker.Stop();for{select{case <-ticker.C:if pc.closed.Load()||p.closed.Load(){return};pingFrame,_:=protocol.NewFrame(protocol.CmdPing,0,nil);if err:=pc.sendFrame(pingFrame);err!=nil{pc.closed.Store(true);_=pc.rawConn.Close();return};case <-pc.closeChan:return;case <-p.stopChan:return}}}
