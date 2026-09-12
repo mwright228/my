@@ -89,11 +89,10 @@ func TestServerPongsToPingAndReadsPayload(t *testing.T) {
 			return
 		}
 		pong <- nil
-	}()
 
-	dataWriter := make(chan error, 1)
-	go func() {
-		dataWriter <- writeMaskedFrame(clientRaw, opcodeBinary, []byte("data"))
+		// net.Pipe permits only synchronous writes. Keep the ping/pong exchange
+		// serialized with the data frame so frame bytes cannot interleave.
+		pong <- writeMaskedFrame(clientRaw, opcodeBinary, []byte("data"))
 	}()
 
 	got := make([]byte, 4)
@@ -106,7 +105,7 @@ func TestServerPongsToPingAndReadsPayload(t *testing.T) {
 	if err := <-pong; err != nil {
 		t.Fatal(err)
 	}
-	if err := <-dataWriter; err != nil {
+	if err := <-pong; err != nil {
 		t.Fatal(err)
 	}
 }
