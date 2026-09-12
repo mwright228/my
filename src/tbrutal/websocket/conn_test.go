@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -39,17 +40,22 @@ func TestServerRejectsUnmaskedClientFrame(t *testing.T) {
 	defer clientRaw.Close()
 	defer serverRaw.Close()
 
-	done := make(chan error, 1)
+	writeDone := make(chan error, 1)
 	go func() {
 		_, err := clientRaw.Write([]byte{finBit | opcodeBinary, 1, 'x'})
-		done <- err
+		writeDone <- err
 	}()
 
 	buf := make([]byte, 1)
-	if _, err := server.Read(buf); err != ErrProtocol {
+	if _, err := server.Read(buf); !errors.Is(err, ErrProtocol) {
 		t.Fatalf("expected ErrProtocol, got %v", err)
 	}
-	_ = <-done
+	// net.Pipe has synchronous writes. Closing the peer releases the writer that
+	// supplied the intentionally invalid frame so the test cannot hang.
+	_ = serverRaw.Close()
+	if err := <-writeDone; err == nil {
+		t.Fatal("expected rejected writer to observe a closed pipe")
+	}
 }
 
 func TestServerPongsToPingAndReadsPayload(t *testing.T) {
