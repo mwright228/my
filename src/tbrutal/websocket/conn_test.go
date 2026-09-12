@@ -2,7 +2,6 @@ package websocket
 
 import (
 	"bytes"
-	"encoding/binary"
 	"io"
 	"net"
 	"testing"
@@ -12,8 +11,8 @@ func TestClientMasksAndServerUnmasks(t *testing.T) {
 	clientRaw, serverRaw := net.Pipe()
 	client := New(clientRaw, false)
 	server := New(serverRaw, true)
-	defer client.Close()
-	defer server.Close()
+	defer clientRaw.Close()
+	defer serverRaw.Close()
 
 	payload := []byte("TB\x01\x03payload")
 	done := make(chan error, 1)
@@ -38,7 +37,7 @@ func TestServerRejectsUnmaskedClientFrame(t *testing.T) {
 	clientRaw, serverRaw := net.Pipe()
 	server := New(serverRaw, true)
 	defer clientRaw.Close()
-	defer server.Close()
+	defer serverRaw.Close()
 
 	done := make(chan error, 1)
 	go func() {
@@ -55,14 +54,40 @@ func TestServerRejectsUnmaskedClientFrame(t *testing.T) {
 
 func TestServerPongsToPingAndReadsPayload(t *testing.T) {
 	clientRaw, serverRaw := net.Pipe()
-	client := New(clientRaw, false)
 	server := New(serverRaw, true)
-	defer client.Close()
-	defer server.Close()
+	defer clientRaw.Close()
+	defer serverRaw.Close()
 
+	pong := make(chan error, 1)
 	go func() {
-		_ = writeMaskedFrame(clientRaw, opcodePing, []byte("hello"))
-		_ = writeMaskedFrame(clientRaw, opcodeBinary, []byte("data"))
+		if err := writeMaskedFrame(clientRaw, opcodePing, []byte("hello")); err != nil {
+			pong <- err
+			return
+		}
+		header := make([]byte, 2)
+		if _, err := io.ReadFull(clientRaw, header); err != nil {
+			pong <- err
+			return
+		}
+		if header[0] != finBit|opcodePong || header[1] != 5 {
+			pong <- io.ErrUnexpectedEOF
+			return
+		}
+		payload := make([]byte, 5)
+		if _, err := io.ReadFull(clientRaw, payload); err != nil {
+			pong <- err
+			return
+		}
+		if string(payload) != "hello" {
+			pong <- io.ErrUnexpectedEOF
+			return
+		}
+		pong <- nil
+	}()
+
+	dataWriter := make(chan error, 1)
+	go func() {
+		dataWriter <- writeMaskedFrame(clientRaw, opcodeBinary, []byte("data"))
 	}()
 
 	got := make([]byte, 4)
@@ -72,29 +97,19 @@ func TestServerPongsToPingAndReadsPayload(t *testing.T) {
 	if string(got) != "data" {
 		t.Fatalf("got %q, want data", got)
 	}
-
-	pongHeader := make([]byte, 2)
-	if _, err := io.ReadFull(clientRaw, pongHeader); err != nil {
+	if err := <-pong; err != nil {
 		t.Fatal(err)
 	}
-	if pongHeader[0] != finBit|opcodePong || pongHeader[1] != 5 {
-		t.Fatalf("unexpected pong header %#v", pongHeader)
-	}
-	pongPayload := make([]byte, 5)
-	if _, err := io.ReadFull(clientRaw, pongPayload); err != nil {
+	if err := <-dataWriter; err != nil {
 		t.Fatal(err)
-	}
-	if string(pongPayload) != "hello" {
-		t.Fatalf("got pong %q, want hello", pongPayload)
 	}
 }
 
 func TestReadFragmentedBinaryMessage(t *testing.T) {
 	clientRaw, serverRaw := net.Pipe()
-	client := New(clientRaw, false)
 	server := New(serverRaw, true)
-	defer client.Close()
-	defer server.Close()
+	defer clientRaw.Close()
+	defer serverRaw.Close()
 
 	go func() {
 		_ = writeMaskedFragment(clientRaw, opcodeBinary, false, []byte("hel"))
@@ -107,6 +122,25 @@ func TestReadFragmentedBinaryMessage(t *testing.T) {
 	}
 	if string(buf) != "hello" {
 		t.Fatalf("got %q, want hello", buf)
+	}
+}
+
+func TestExtendedLengthRoundTrip(t *testing.T) {
+	clientRaw, serverRaw := net.Pipe()
+	client := New(clientRaw, false)
+	server := New(serverRaw, true)
+	defer clientRaw.Close()
+	defer serverRaw.Close()
+
+	payload := bytes.Repeat([]byte{'x'}, 130)
+	go func() { _, _ = client.Write(payload) }()
+
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(server, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatal("extended payload mismatch")
 	}
 }
 
@@ -135,26 +169,4 @@ func writeMaskedFragment(w io.Writer, opcode byte, fin bool, payload []byte) err
 	}
 	_, err := w.Write(masked)
 	return err
-}
-
-func TestExtendedLengthRoundTrip(t *testing.T) {
-	clientRaw, serverRaw := net.Pipe()
-	client := New(clientRaw, false)
-	server := New(serverRaw, true)
-	defer client.Close()
-	defer server.Close()
-
-	payload := bytes.Repeat([]byte{'x'}, 130)
-	go func() { _, _ = client.Write(payload) }()
-
-	got := make([]byte, len(payload))
-	if _, err := io.ReadFull(server, got); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, payload) {
-		t.Fatal("extended payload mismatch")
-	}
-
-	var scratch [10]byte
-	binary.BigEndian.PutUint64(scratch[2:], uint64(130))
 }
