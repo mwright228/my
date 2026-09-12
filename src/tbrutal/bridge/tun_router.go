@@ -21,17 +21,17 @@ var (
 )
 
 type TunRouter struct {
-	tunFile    *os.File
-	tunMu      sync.RWMutex
-	socksAddr  string
-	dnsServer  string
-	running    atomic.Bool
-	stopChan   chan struct{}
-	wg         sync.WaitGroup
-	tunWriteMu sync.Mutex
-	packetChan chan []byte
-	dnsSem     chan struct{}
-	sessions   sync.Map
+	tunFile      *os.File
+	tunMu        sync.RWMutex
+	socksAddr    string
+	dnsServer    string
+	running      atomic.Bool
+	stopChan     chan struct{}
+	wg           sync.WaitGroup
+	tunWriteMu   sync.Mutex
+	workerChans  []chan []byte
+	dnsSem       chan struct{}
+	sessions     sync.Map
 }
 
 type tcpKey struct { srcIP string; srcPort uint16; dstIP string; dstPort uint16 }
@@ -61,12 +61,15 @@ func StartTunRouterWithDNS(fd int, socksPort int, dnsServer string) error {
 	if tunFile == nil { _ = unix.Close(dupFD); return errors.New("failed to wrap duplicated tun file descriptor") }
 	if dnsServer == "" { dnsServer = "1.1.1.1:53" }
 	if !hasPort(dnsServer) { dnsServer = net.JoinHostPort(dnsServer, "53") }
-	r := &TunRouter{tunFile: tunFile, socksAddr: fmt.Sprintf("127.0.0.1:%d", socksPort), dnsServer: dnsServer, stopChan: make(chan struct{}), packetChan: make(chan []byte, 1024), dnsSem: make(chan struct{}, 32)}
+	const numWorkers = 8
+	workerChans := make([]chan []byte, numWorkers)
+	for i := range workerChans { workerChans[i] = make(chan []byte, 256) }
+	r := &TunRouter{tunFile: tunFile, socksAddr: fmt.Sprintf("127.0.0.1:%d", socksPort), dnsServer: dnsServer, stopChan: make(chan struct{}), workerChans: workerChans, dnsSem: make(chan struct{}, 32)}
 	r.running.Store(true)
 	r.wg.Add(2); go r.readLoop(); go r.reaperLoop()
-	for i := 0; i < 8; i++ { r.wg.Add(1); go r.workerLoop() }
+	for i := 0; i < numWorkers; i++ { r.wg.Add(1); go r.workerLoop(workerChans[i]) }
 	activeRouter = r
-	LogMsg("ROUTER", fmt.Sprintf("TunRouter started (SOCKS: %s, DNS: %s, Workers: 8)", r.socksAddr, dnsServer))
+	LogMsg("ROUTER", fmt.Sprintf("TunRouter started (SOCKS: %s, DNS: %s, Workers: %d, flow-sharded)", r.socksAddr, dnsServer, numWorkers))
 	return nil
 }
 
@@ -116,11 +119,31 @@ func (r *TunRouter) readLoop() {
 		f := r.getTunFile(); if f == nil { return }
 		n, err := f.Read(buf); if err != nil { return }
 		if n < 20 || buf[0]>>4 != 4 { continue }; TotalRxBytes.Add(uint64(n)); pkt := make([]byte, n); copy(pkt, buf[:n])
-		select { case r.packetChan <- pkt: default: }
+		idx := flowWorkerIndex(pkt, len(r.workerChans))
+		select { case r.workerChans[idx] <- pkt: default: }
 	}
 }
 
-func (r *TunRouter) workerLoop() { defer r.wg.Done(); for { select { case <-r.stopChan: return; case pkt, ok := <-r.packetChan: if !ok { return }; r.handlePacket(pkt) } } }
+// flowWorkerIndex hashes the packet's IPv4 flow tuple to a stable worker. TCP and
+// UDP packets include both endpoint ports; other IP protocols use the 3-tuple.
+// All packets from a flow therefore stay on one worker and are handled in the
+// same order the TUN reader observed them. Malformed packets fall back to worker 0.
+func flowWorkerIndex(packet []byte, numWorkers int) int {
+	if numWorkers <= 1 { return 0 }
+	if len(packet) < 20 || packet[0]>>4 != 4 { return 0 }
+	ihl := int(packet[0]&0x0F) * 4
+	if ihl < 20 || len(packet) < ihl { return 0 }
+	protocol := packet[9]
+	var h uint32
+	for _, b := range packet[12:20] { h = h*31 + uint32(b) }
+	h = h*31 + uint32(protocol)
+	if (protocol == 6 || protocol == 17) && len(packet) >= ihl+4 {
+		for _, b := range packet[ihl:ihl+4] { h = h*31 + uint32(b) }
+	}
+	return int(h % uint32(numWorkers))
+}
+
+func (r *TunRouter) workerLoop(ch chan []byte) { defer r.wg.Done(); for { select { case <-r.stopChan: return; case pkt, ok := <-ch: if !ok { return }; r.handlePacket(pkt) } } }
 
 func (r *TunRouter) handlePacket(packet []byte) {
 	if len(packet) < 20 || packet[0]>>4 != 4 { return }; ihl := int(packet[0]&0x0F)*4; if ihl < 20 || len(packet) < ihl { return }
