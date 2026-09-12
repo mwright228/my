@@ -17,6 +17,7 @@ import (
 	"github.com/mwright228/my/src/tbrutal/auth"
 	"github.com/mwright228/my/src/tbrutal/pacer"
 	"github.com/mwright228/my/src/tbrutal/protocol"
+	ws "github.com/mwright228/my/src/tbrutal/websocket"
 )
 
 type Config struct {
@@ -161,6 +162,11 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 
 	// Preserve bytes already buffered by net/http while parsing the upgrade.
 	sessionConn := &prefixConn{Conn: conn, reader: buf}
+	if upg == "websocket" {
+		// Browser/standard RFC 6455 clients must mask their frames. The wrapper
+		// also emits unmasked binary frames from this server.
+		sessionConn = &prefixConn{Conn: ws.New(sessionConn, true), reader: ws.New(sessionConn, true)}
+	}
 	go s.newSession(sessionConn).Handle()
 }
 
