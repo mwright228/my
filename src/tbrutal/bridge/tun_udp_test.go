@@ -2,12 +2,14 @@ package bridge
 
 import (
 	"bytes"
-	"encoding/binary"
 	"net"
+	"net/netip"
 	"testing"
+
+	M "github.com/sagernet/sing/common/metadata"
 )
 
-func TestWriteSocks5UDP(t *testing.T) {
+func TestWriteSocks5UDPDatagramIPv4(t *testing.T) {
 	relay, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
@@ -15,14 +17,14 @@ func TestWriteSocks5UDP(t *testing.T) {
 	defer relay.Close()
 
 	payload := []byte("hello")
-	go func() {
-		conn, err := net.DialUDP("udp4", nil, relay.LocalAddr().(*net.UDPAddr))
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		_ = writeSocks5UDP(conn, net.IPv4(8, 8, 8, 8), 53, payload)
-	}()
+	conn, err := net.DialUDP("udp4", nil, relay.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := writeSocks5UDPDatagram(conn, M.Socksaddr{Addr: netip.MustParseAddr("8.8.8.8"), Port: 53}, payload); err != nil {
+		t.Fatal(err)
+	}
 
 	buf := make([]byte, 64)
 	n, _, err := relay.ReadFromUDP(buf)
@@ -35,30 +37,16 @@ func TestWriteSocks5UDP(t *testing.T) {
 	}
 }
 
-func TestParseSocks5UDP(t *testing.T) {
-	packet := append([]byte{0, 0, 0, 1, 1, 1, 1, 1, 0x01, 0xbb}, []byte("reply")...)
-	ip, port, payload, err := parseSocks5UDP(packet)
+func TestParseSocks5UDPIPv6(t *testing.T) {
+	payload := []byte("reply")
+	packet := append([]byte{0, 0, 0, 4}, netip.MustParseAddr("2001:db8::1").AsSlice()...)
+	packet = append(packet, 0x01, 0xbb)
+	packet = append(packet, payload...)
+	got, err := parseSocks5UDPDatagram(packet)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ip.Equal(net.IPv4(1, 1, 1, 1)) || port != 443 || !bytes.Equal(payload, []byte("reply")) {
-		t.Fatalf("got %s:%d %q", ip, port, payload)
-	}
-}
-
-func TestReadSocks5ReplyAddr(t *testing.T) {
-	input := net.ParseIP("2001:db8::1").To16()
-	addr, err := readSocks5ReplyAddr(bytes.NewReader(input), 4)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if addr != "2001:db8::1" {
-		t.Fatalf("got %q", addr)
-	}
-
-	var port [2]byte
-	binary.BigEndian.PutUint16(port[:], 5353)
-	if binary.BigEndian.Uint16(port[:]) != 5353 {
-		t.Fatal("port encoding failed")
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("payload = %q, want %q", got, payload)
 	}
 }
