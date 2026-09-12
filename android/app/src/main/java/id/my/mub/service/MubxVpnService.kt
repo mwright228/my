@@ -119,9 +119,11 @@ class MubxVpnService : VpnService() {
                 val builder = Builder().apply {
                     setSession("MUB-X VPN")
                     addAddress("172.19.0.1", 30)
+                    addAddress("fd19:2e58:34::1", 126)
                     addDnsServer(dns1)
                     addDnsServer(dns2)
                     addRoute("0.0.0.0", 0)
+                    addRoute("::", 0)
                     setMtu(1500)
                     setBlocking(true)
                     // Android's true block-without-VPN/always-on lockdown is a
@@ -137,7 +139,7 @@ class MubxVpnService : VpnService() {
                 ensureActive()
                 if (disconnectRequested.get()) throw CancellationException("disconnect requested")
                 _vpnState.value = VpnState.Connected(0.0, 0.0, 0L, profile.poolConcurrency, 0L, 0L, 0L)
-                LogRepository.log("VPN", "TUN interface active and router confirmed running", LogLevel.SUCCESS)
+                LogRepository.log("VPN", "Dual-stack TUN interface active and router confirmed running", LogLevel.SUCCESS)
                 startTelemetryMonitor()
             } catch (e: CancellationException) {
                 cleanupResources()
