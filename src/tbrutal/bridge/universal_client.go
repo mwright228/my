@@ -154,6 +154,11 @@ func isBlockedIP(ip net.IP) bool {
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
 }
 
+func hasPort(s string) bool {
+	_, _, err := net.SplitHostPort(s)
+	return err == nil
+}
+
 func (uc *UniversalClient) protectedControl() func(network, address string, c syscall.RawConn) error {
 	return func(network, address string, c syscall.RawConn) error {
 		var protectErr error
