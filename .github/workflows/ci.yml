@@ -1,3 +1,4 @@
+# Temporary dependency-candidate hook; remove after the generated files are reviewed.
 name: ci
 
 on:
