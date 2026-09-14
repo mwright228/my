@@ -5,7 +5,7 @@ set -Eeuo pipefail
 ROOT="$(cat /etc/mubx/install-root 2>/dev/null || true)"
 [ -n "$ROOT" ] && [ -d "$ROOT/.git" ] || { echo "[!] MUB-X install root not found ($ROOT)." >&2; exit 1; }
 REPO_URL="${MUBX_REPO_URL:-https://github.com/mwright228/my.git}"
-SERVICES=(haproxy nginx xray dropbear wstunnel hysteria zivpn singbox mubx-chameleon mubx-tbrutal openvpn-server@tcp openvpn-server@udp wg-quick@wg0 badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 badvpn@7500 badvpn@7600 badvpn@7700)
+SERVICES=(haproxy nginx xray dropbear wstunnel hysteria zivpn singbox mubx-chameleon mubx-tbrutal openvpn-server@tcp openvpn-server@udp wg-quick@wg0 badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 badvpn@7500 badvpn@7600 badvpn@7700 mubx-cron.timer mubx-adaptive.timer mubx-probe.timer mubx-quota.timer)
 source "$ROOT/lib/common.sh"
 source "$ROOT/lib/mubx-transaction.sh"
 
@@ -31,14 +31,12 @@ for svc in "${SERVICES[@]}"; do
 done
 
 mubx_tx_begin update
-
 snapshot_repo_targets(){
   local f base
   for f in "$ROOT"/bin/*; do [ -f "$f" ] || continue; base="$(basename "$f")"; mubx_tx_snapshot "/usr/local/bin/$base"; done
   for f in "$ROOT"/lib/*.sh; do [ -f "$f" ] || continue; base="$(basename "$f")"; mubx_tx_snapshot "/usr/local/lib/mubx/$base"; done
   for f in "$ROOT"/systemd/*.service "$ROOT"/systemd/*.timer; do [ -f "$f" ] || continue; base="$(basename "$f")"; mubx_tx_snapshot "/etc/systemd/system/$base"; done
 }
-
 snapshot_repo_targets
 mubx_tx_snapshot /etc/mubx/users.json
 mubx_tx_snapshot_tree /var/www/mubx-sub
@@ -122,7 +120,6 @@ nginx -t >/dev/null
 haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null
 [ ! -s /etc/sing-box/config.json ] || ! command -v sing-box >/dev/null 2>&1 || sing-box check -c /etc/sing-box/config.json >/dev/null
 
-# Install the new updater only after the complete deployment is healthy.
 install_file "$ROOT/bin/mubx-update" /usr/local/bin/mubx-update 0755
 failed=0
 printf '\n[*] MUB-X update committed at %s\n' "$(git -C "$ROOT" log -1 --format='%h (%cs)')"
