@@ -28,6 +28,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -50,11 +52,11 @@ class MubxVpnService : VpnService() {
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var telemetryJob: Job? = null
     private var connectJob: Job? = null
-    private val cleanupInProgress = AtomicBoolean(false)
     private val disconnectRequested = AtomicBoolean(false)
-    // Monotonically increasing generation prevents stale connect/cancel cleanup
-    // from tearing down a tunnel that a newer CONNECT request already created.
     private val lifecycleGeneration = AtomicLong(0L)
+    // Serializes native start/stop and TUN ownership. Generation checks alone
+    // cannot prevent a new CONNECT from overtaking an in-flight DISCONNECT.
+    private val lifecycleMutex = Mutex()
 
     override fun onCreate() {
         super.onCreate()
@@ -106,47 +108,50 @@ class MubxVpnService : VpnService() {
             _vpnState.value = VpnState.Connecting
             try {
                 ensureActive()
-                check(lifecycleGeneration.get() == generation) { "stale VPN connection generation" }
-                val profile = currentProfile
-                val targetHost = profile.serverHost.ifBlank { profile.serverIp }
-                if (targetHost.isBlank()) throw IllegalArgumentException("Server host/IP is required")
-                val resolvedIp = withContext(Dispatchers.IO) {
-                    try { java.net.InetAddress.getAllByName(targetHost).firstOrNull()?.hostAddress ?: targetHost }
-                    catch (e: Exception) { LogRepository.log("VPN", "Host pre-resolution note: ${e.message}", LogLevel.WARN); targetHost }
+                lifecycleMutex.withLock {
+                    ensureActive()
+                    check(lifecycleGeneration.get() == generation) { "stale VPN connection generation" }
+                    val profile = currentProfile
+                    val targetHost = profile.serverHost.ifBlank { profile.serverIp }
+                    if (targetHost.isBlank()) throw IllegalArgumentException("Server host/IP is required")
+                    val resolvedIp = withContext(Dispatchers.IO) {
+                        try { java.net.InetAddress.getAllByName(targetHost).firstOrNull()?.hostAddress ?: targetHost }
+                        catch (e: Exception) { LogRepository.log("VPN", "Host pre-resolution note: ${e.message}", LogLevel.WARN); targetHost }
+                    }
+                    ensureActive()
+                    if (disconnectRequested.get() || lifecycleGeneration.get() != generation) throw CancellationException("stale VPN connection generation")
+                    val effectiveProfile = profile.copy(serverIp = resolvedIp, bugHostSNI = profile.bugHostSNI.ifBlank { profile.serverHost })
+                    val socksPort = NativeCoreBridge.startTunnel(effectiveProfile).getOrThrow()
+                    ensureActive()
+                    if (disconnectRequested.get() || lifecycleGeneration.get() != generation) throw CancellationException("stale VPN connection generation")
+                    val dns1 = profile.dnsServer.ifBlank { "1.1.1.1" }
+                    val dns2 = profile.dnsSecondary.ifBlank { "8.8.8.8" }
+                    val builder = Builder().apply {
+                        setSession("MUB-X VPN")
+                        addAddress("172.19.0.1", 30)
+                        addAddress("fd19:2e58:34::1", 126)
+                        addDnsServer(dns1)
+                        addDnsServer(dns2)
+                        addRoute("0.0.0.0", 0)
+                        addRoute("::", 0)
+                        setMtu(1500)
+                        setBlocking(true)
+                    }
+                    val established = builder.establish() ?: throw IllegalStateException("Failed to establish VpnService TUN interface")
+                    vpnInterface.set(established)
+                    val tunFd = established.fd
+                    if (tunFd < 0) throw IllegalStateException("Invalid TUN file descriptor")
+                    ensureActive()
+                    if (disconnectRequested.get() || lifecycleGeneration.get() != generation) throw CancellationException("stale VPN connection generation")
+                    if (!NativeCoreBridge.startTunRouter(tunFd, socksPort, "$dns1:53")) throw IllegalStateException("TUN router failed to start")
+                    ensureActive()
+                    if (disconnectRequested.get() || lifecycleGeneration.get() != generation) throw CancellationException("stale VPN connection generation")
+                    _vpnState.value = VpnState.Connected(0.0, 0.0, 0L, profile.poolConcurrency, 0L, 0L, 0L)
+                    LogRepository.log("VPN", "Dual-stack TUN interface active and router confirmed running", LogLevel.SUCCESS)
+                    startTelemetryMonitor()
                 }
-                ensureActive()
-                if (disconnectRequested.get() || lifecycleGeneration.get() != generation) throw CancellationException("stale VPN connection generation")
-                val effectiveProfile = profile.copy(serverIp = resolvedIp, bugHostSNI = profile.bugHostSNI.ifBlank { profile.serverHost })
-                val socksPort = NativeCoreBridge.startTunnel(effectiveProfile).getOrThrow()
-                ensureActive()
-                if (disconnectRequested.get() || lifecycleGeneration.get() != generation) throw CancellationException("stale VPN connection generation")
-                val dns1 = profile.dnsServer.ifBlank { "1.1.1.1" }
-                val dns2 = profile.dnsSecondary.ifBlank { "8.8.8.8" }
-                val builder = Builder().apply {
-                    setSession("MUB-X VPN")
-                    addAddress("172.19.0.1", 30)
-                    addAddress("fd19:2e58:34::1", 126)
-                    addDnsServer(dns1)
-                    addDnsServer(dns2)
-                    addRoute("0.0.0.0", 0)
-                    addRoute("::", 0)
-                    setMtu(1500)
-                    setBlocking(true)
-                }
-                val established = builder.establish() ?: throw IllegalStateException("Failed to establish VpnService TUN interface")
-                vpnInterface.set(established)
-                val tunFd = established.fd
-                if (tunFd < 0) throw IllegalStateException("Invalid TUN file descriptor")
-                ensureActive()
-                if (disconnectRequested.get() || lifecycleGeneration.get() != generation) throw CancellationException("stale VPN connection generation")
-                if (!NativeCoreBridge.startTunRouter(tunFd, socksPort, "$dns1:53")) throw IllegalStateException("TUN router failed to start")
-                ensureActive()
-                if (disconnectRequested.get() || lifecycleGeneration.get() != generation) throw CancellationException("stale VPN connection generation")
-                _vpnState.value = VpnState.Connected(0.0, 0.0, 0L, profile.poolConcurrency, 0L, 0L, 0L)
-                LogRepository.log("VPN", "Dual-stack TUN interface active and router confirmed running", LogLevel.SUCCESS)
-                startTelemetryMonitor()
             } catch (e: CancellationException) {
-                cleanupResources(generation)
+                cleanupResources()
                 if (!disconnectRequested.get() && lifecycleGeneration.get() == generation) _vpnState.value = VpnState.Disconnected
             } catch (e: Exception) {
                 LogRepository.log("VPN", "Tunnel connection failed: ${e.message}", LogLevel.ERROR)
@@ -184,30 +189,35 @@ class MubxVpnService : VpnService() {
         serviceScope.launch(Dispatchers.IO) {
             _vpnState.value = VpnState.Disconnecting
             telemetryJob?.cancel(); telemetryJob = null
-            cleanupResources(generation)
+            lifecycleMutex.withLock { cleanupResourcesLocked() }
             if (lifecycleGeneration.get() == generation) _vpnState.value = VpnState.Disconnected
             LogRepository.log("VPN", "Tunnel disconnected cleanly", LogLevel.INFO)
             withContext(Dispatchers.Main) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
         }
     }
 
-    private suspend fun cleanupResources(expectedGeneration: Long? = null) {
-        // A stale cancelled connect must never stop a newer tunnel. A disconnect
-        // captures the generation it invalidated and is allowed to clean that generation.
-        if (expectedGeneration != null && lifecycleGeneration.get() != expectedGeneration) return
-        if (!cleanupInProgress.compareAndSet(false, true)) return
+    private suspend fun cleanupResources() {
+        lifecycleMutex.withLock { cleanupResourcesLocked() }
+    }
+
+    private fun cleanupResourcesLocked() {
         try {
-            if (expectedGeneration != null && lifecycleGeneration.get() != expectedGeneration) return
-            NativeCoreBridge.stopTunRouter(); NativeCoreBridge.stopTunnel(); vpnInterface.getAndSet(null)?.let { runCatching { it.close() } }
-        } catch (e: Throwable) { LogRepository.log("VPN", "Cleanup error: ${e.message}", LogLevel.WARN) }
-        finally { cleanupInProgress.set(false) }
+            NativeCoreBridge.stopTunRouter()
+            NativeCoreBridge.stopTunnel()
+            vpnInterface.getAndSet(null)?.let { runCatching { it.close() } }
+        } catch (e: Throwable) {
+            LogRepository.log("VPN", "Cleanup error: ${e.message}", LogLevel.WARN)
+        }
     }
 
     override fun onDestroy() {
         telemetryJob?.cancel(); telemetryJob = null; connectJob?.cancel(); connectJob = null; disconnectRequested.set(true)
         lifecycleGeneration.incrementAndGet()
         if (instance == this) instance = null
-        Thread { NativeCoreBridge.forceStop(); vpnInterface.getAndSet(null)?.let { runCatching { it.close() } } }.start()
+        Thread {
+            runCatching { NativeCoreBridge.forceStop() }
+            vpnInterface.getAndSet(null)?.let { runCatching { it.close() } }
+        }.start()
         _vpnState.value = VpnState.Disconnected
         serviceScope.coroutineContext[Job]?.cancel()
         super.onDestroy()
