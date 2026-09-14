@@ -1,98 +1,37 @@
 #!/usr/bin/env bash
 # MUB-X adaptive transport health probe.
-#
-# Records which installed transport the operator should recommend, based on
-# what this host can actually verify:
-#   * TCP transports -> real connect latency to the public endpoint.
-#   * UDP transports -> local listener health. A generic client cannot
-#     complete WireGuard / QUIC / ZivPN handshakes, so remote UDP
-#     reachability is intentionally not guessed here.
-#
-# The old implementation measured every transport with a TCP connect, which
-# can never succeed against UDP-only services, so WireGuard, Hysteria,
-# OpenVPN-UDP always scored zero and the recommendation was
-# meaningless.
 set -Eeuo pipefail
 
 DOMAIN=
-if [ -r /usr/local/lib/mubx/common.sh ]; then
-  source /usr/local/lib/mubx/common.sh
-  load_mubx_env 2>/dev/null || true
-fi
-
+if [ -r /usr/local/lib/mubx/common.sh ]; then source /usr/local/lib/mubx/common.sh; load_mubx_env 2>/dev/null || true; fi
 STATE_FILE=/var/lib/mubx/adaptive-recommendation
 install -d -m 0755 "$(dirname "$STATE_FILE")"
 
-listener_up() { # $1 tcp|udp  $2 port
-  local proto="$1" port="$2"
-  ss -H -l"${proto:0:1}"n "sport = :$port" 2>/dev/null | grep -q .
-}
-
-tcp_latency_ms() { # $1 host  $2 port ; echoes latency in ms, or nothing
-  local host="$1" port="$2" start now
-  start="$(date +%s%N)"
-  if timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/$2" && exec 3>&-' _ "$host" "$port" 2>/dev/null; then
-    now="$(date +%s%N)"
-    echo "$(( (now - start) / 1000000 ))"
-  fi
-}
+listener_up(){ local proto="$1" port="$2"; ss -H -l"${proto:0:1}"n "sport = :$port" 2>/dev/null | grep -q .; }
+tcp_latency_ms(){ local host="$1" port="$2" start now; start="$(date +%s%N)"; if timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/$2" && exec 3>&-' _ "$host" "$port" 2>/dev/null; then now="$(date +%s%N)"; echo "$(( (now - start) / 1000000 ))"; fi; }
 
 HOST="${DOMAIN:-127.0.0.1}"
-
-# Preference order: breaks ties between transports with equal scores and
-# ranks UDP transports, whose latency cannot be measured generically.
 ORDER=(xray-websocket tuic wireguard hysteria openvpn-udp)
+declare -A score=() detail=()
+if lat="$(tcp_latency_ms "$HOST" 443)"; then if [ -n "$lat" ]; then score[xray-websocket]=$((100000 - lat)); detail[xray-websocket]="${lat}ms TCP connect"; fi; fi
+if listener_up udp 8444; then score[tuic]=52000; detail[tuic]="listener up (TUIC v5 QUIC 8444)"; fi
+if listener_up udp 51820; then score[wireguard]=50000; detail[wireguard]="listener up (UDP 51820)"; fi
+if listener_up udp 4433; then score[hysteria]=50000; detail[hysteria]="listener up (UDP 4433)"; fi
+if listener_up udp 2200; then score[openvpn-udp]=50000; detail[openvpn-udp]="listener up (UDP 2200)"; fi
 
-declare -A score=()
-declare -A detail=()
-
-# --- TCP transports: measured through the public name/address ---
-# Every HTTP/WS transport and the raw Shadowsocks-443 channel share the
-# public 443 endpoint (HAProxy TLS/non-TLS demux), so the connect latency
-# is measured once and applied to xray-websocket.
-if lat="$(tcp_latency_ms "$HOST" 443)"; then
-  if [ -n "$lat" ]; then
-    score[xray-websocket]=$((100000 - lat))
-    detail[xray-websocket]="${lat}ms TCP connect"
-  fi
-fi
-
-# --- UDP transports: local listener health only ---
-if listener_up udp 8444; then
-  score[tuic]=52000
-  detail[tuic]="listener up (TUIC v5 QUIC 8444)"
-fi
-if listener_up udp 51820; then
-  score[wireguard]=50000
-  detail[wireguard]="listener up (UDP 51820)"
-fi
-if listener_up udp 4433; then
-  score[hysteria]=50000
-  detail[hysteria]="listener up (UDP 4433)"
-fi
-if listener_up udp 2200; then
-  score[openvpn-udp]=50000
-  detail[openvpn-udp]="listener up (UDP 2200)"
-fi
-
-best="none"
-best_score=-1
-for name in "${ORDER[@]}"; do
-  s="${score[$name]:-0}"
-  if [ "$s" -gt "$best_score" ]; then
-    best="$name"
-    best_score="$s"
-  fi
-done
+best=none; best_score=-1
+for name in "${ORDER[@]}"; do s="${score[$name]:-0}"; if [ "$s" -gt "$best_score" ]; then best="$name"; best_score="$s"; fi; done
 
 stamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+tmp="$(mktemp "${STATE_FILE}.XXXXXX")"
+trap 'rm -f -- "$tmp"' EXIT
 {
   printf '%s %s\n' "$stamp" "$best"
-  if [ "$best" != "none" ]; then
-    printf '  %s (%s)\n' "$best" "${detail[$best]:-}"
-  else
-    printf '  no transport is currently healthy\n'
-  fi
-} > "$STATE_FILE"
-
+  if [ "$best" != none ]; then printf '  %s (%s)\n' "$best" "${detail[$best]:-}"; else printf '  no transport is currently healthy\n'; fi
+} > "$tmp"
+chmod 0644 "$tmp"
+sync -f "$tmp"
+mv -f -- "$tmp" "$STATE_FILE"
+sync -d "$(dirname "$STATE_FILE")"
+trap - EXIT
 printf 'Recommended transport: %s\n' "$best"
