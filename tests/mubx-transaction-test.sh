@@ -9,13 +9,14 @@ trap 'rm -rf -- "$TMP"' EXIT
 export MUBX_TX_ROOT="$TMP/transactions"
 export MUBX_TX_LOCK="$TMP/operation.lock"
 
-# Existing file must be restored byte-for-byte after rollback.
 mkdir -p "$TMP/etc"
 printf 'old\n' > "$TMP/etc/existing"
 mubx_tx_begin test
 mubx_tx_snapshot "$TMP/etc/existing"
-printf 'new\n' > "$TMP/etc/candidate"
-mubx_tx_atomic_install "$TMP/etc/candidate" "$TMP/etc/existing" 0600
+printf 'intermediate\n' > "$TMP/etc/existing"
+# A second snapshot must not replace the transaction's original state.
+mubx_tx_snapshot "$TMP/etc/existing"
+printf 'new\n' > "$TMP/etc/existing"
 mubx_tx_rollback_files
 [[ "$(cat "$TMP/etc/existing")" == old ]]
 mubx_tx_abort
@@ -53,5 +54,11 @@ if (
     exit 1
 fi
 mubx_tx_abort
+
+# The lock must also be released after abort so a later operation can start.
+mubx_tx_begin lock-c
+mubx_tx_abort
+mubx_tx_begin lock-d
+mubx_tx_commit
 
 echo 'mubx transaction tests: PASS'
