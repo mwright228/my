@@ -51,7 +51,7 @@ jobs:
           done
           shellcheck -S warning -e SC1091,SC2034,SC2120,SC2154,SC2155,SC2318 "${scripts[@]}"
       - name: Lint Python code with ruff
-        run: ruff check --select E,F --ignore E501 bin/mubx-chameleon tests/
+        run: ruff check --select E,F --ignore E501 bin/mubx-chameleon bin/mubx-bughost-eval tests/
       - name: Populate Go module cache and sums
         run: go mod download all
       - name: Run Go tests
