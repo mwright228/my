@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# BASH_ENV hook used only by mubx-users-legacy.
-# Bash reads BASH_ENV for non-interactive scripts before executing the script.
+# BASH_ENV hook used by mubx-users-legacy. Bash reads BASH_ENV for
+# non-interactive scripts before executing the script.
+
+_MUBX_TX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! declare -F mubx_tx_atomic_install >/dev/null 2>&1; then
+  if [ -r "$_MUBX_TX_ROOT/mubx-transaction.sh" ]; then source "$_MUBX_TX_ROOT/mubx-transaction.sh"; elif [ -r /usr/local/lib/mubx/mubx-transaction.sh ]; then source /usr/local/lib/mubx/mubx-transaction.sh; fi
+fi
 
 if [ "${MUBX_USERS_TX_ACTIVE:-0}" != "1" ]; then
-  _MUBX_TX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [ -r "$_MUBX_TX_ROOT/mubx-transaction.sh" ]; then
-    source "$_MUBX_TX_ROOT/mubx-transaction.sh"
-  elif [ -r /usr/local/lib/mubx/mubx-transaction.sh ]; then
-    source /usr/local/lib/mubx/mubx-transaction.sh
-  fi
   if declare -F mubx_tx_begin >/dev/null 2>&1; then
     export MUBX_USERS_TX_ACTIVE=1
     mubx_tx_begin users || exit $?
@@ -51,10 +50,7 @@ mubx_users_atomic_install() {
 install() {
   local argc="$#" dst=""
   [ "$argc" -gt 0 ] && dst="${!argc}"
-  if [ -n "$dst" ] && [ "$dst" = "${MUBX_USERS_FILE:-/etc/mubx/users.json}" ]; then
-    mubx_users_atomic_install "$@"
-    return $?
-  fi
+  if [ -n "$dst" ] && [ "$dst" = "${MUBX_USERS_FILE:-/etc/mubx/users.json}" ]; then mubx_users_atomic_install "$@"; return $?; fi
   command install "$@"
 }
 
@@ -62,17 +58,12 @@ cp() {
   local argc="$#" dst="" src="" mode="0600"
   local -a args=("$@")
   [ "$argc" -ge 2 ] || { command cp "$@"; return $?; }
-  dst="${args[$((argc - 1))]}"
-  src="${args[$((argc - 2))]}"
+  dst="${args[$((argc - 1))]}"; src="${args[$((argc - 2))]}"
   case "$dst" in
     /usr/local/etc/xray/config.json|/etc/nginx/nginx.conf|/etc/sing-box/config.json)
       [ -f "$src" ] || { echo "[!] Atomic config source missing: $src" >&2; return 1; }
       [ -e "$dst" ] && mode="$(stat -c '%a' -- "$dst" 2>/dev/null || printf '0600')"
-      if declare -F mubx_tx_atomic_install >/dev/null 2>&1; then
-        mubx_tx_atomic_install "$src" "$dst" "$mode"
-      else
-        command cp "$@"
-      fi
+      if declare -F mubx_tx_atomic_install >/dev/null 2>&1; then mubx_tx_atomic_install "$src" "$dst" "$mode"; else command cp "$@"; fi
       ;;
     *) command cp "$@" ;;
   esac
