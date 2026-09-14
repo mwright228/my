@@ -26,6 +26,11 @@ mubx_tx_begin() {
 mubx_tx_snapshot() {
     local path="$1" backup kind
     [ -n "$MUBX_TX_DIR" ] || return 2
+    # Snapshot each path only once: the transaction must restore its state at begin,
+    # not whichever intermediate state happened to be recorded later.
+    if grep -Fqx -- "$path" < <(cut -f2 "$MUBX_TX_MANIFEST" 2>/dev/null); then
+        return 0
+    fi
     if [ -L "$path" ]; then
         kind=symlink
         printf 'symlink\t%s\t%s\n' "$path" "$(readlink -- "$path")" >> "$MUBX_TX_MANIFEST"
@@ -77,20 +82,30 @@ mubx_tx_rollback_files() {
             dir)
                 install -d -m 0755 "$path"
                 ;;
+            *)
+                echo "[!] Invalid transaction manifest entry; refusing rollback." >&2
+                return 1
+                ;;
         esac
     done < "$MUBX_TX_MANIFEST"
 }
 
-mubx_tx_abort() {
-    mubx_tx_rollback_files
-    rm -rf -- "${MUBX_TX_DIR:-}"
+mubx_tx_release() {
+    if [ -n "$MUBX_TX_DIR" ]; then
+        rm -rf -- "$MUBX_TX_DIR"
+    fi
     MUBX_TX_DIR=""
     MUBX_TX_MANIFEST=""
+    flock -u 9 2>/dev/null || true
+    exec 9>&- 2>/dev/null || true
+}
+
+mubx_tx_abort() {
+    mubx_tx_rollback_files
+    mubx_tx_release
 }
 
 mubx_tx_commit() {
     sync
-    rm -rf -- "${MUBX_TX_DIR:-}"
-    MUBX_TX_DIR=""
-    MUBX_TX_MANIFEST=""
+    mubx_tx_release
 }
