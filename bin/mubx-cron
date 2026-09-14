@@ -134,8 +134,11 @@ if declare -F mubx_sub_generate >/dev/null 2>&1 && [ -f "$user_store" ]; then
   load_mubx_env 2>/dev/null || true
   while IFS= read -r sub_user; do
     [ -n "$sub_user" ] || continue
-    mubx_sub_generate "$sub_user" >/dev/null 2>&1 || true
-  done < <(jq -r '.[].name' "$user_store" 2>/dev/null || true)
+    if ! mubx_sub_generate "$sub_user" >/dev/null 2>&1; then
+      echo "subscription generation failed for user '$sub_user'" >&2
+      exit 1
+    fi
+  done < <(jq -r '.[].name' "$user_store" 2>/dev/null || { echo "invalid user store JSON" >&2; exit 1; })
 fi
 
 mubx_users_bin="/usr/local/bin/mubx-users"
@@ -150,7 +153,10 @@ if [ -x "$mubx_users_bin" ] && [ -f "$user_store" ]; then
     if [ -n "$q_exp" ] && [ "$q_exp" != "never" ] && [ "$q_user" != "admin" ]; then
       exp_ts="$(date -d "$q_exp 23:59:59" +%s 2>/dev/null || date -jf '%Y-%m-%d %H:%M:%S' "$q_exp 23:59:59" +%s 2>/dev/null || date -d "$q_exp" +%s 2>/dev/null || echo 0)"
       if [ "$exp_ts" -gt 0 ] && [ "$now_ts" -ge "$exp_ts" ]; then
-        "$mubx_users_bin" freeze "$q_user" >/dev/null 2>&1 || true
+        if ! "$mubx_users_bin" freeze "$q_user" >/dev/null 2>&1; then
+          echo "failed to freeze expired user '$q_user'" >&2
+          exit 1
+        fi
         continue
       fi
     fi
@@ -164,10 +170,13 @@ if [ -x "$mubx_users_bin" ] && [ -f "$user_store" ]; then
       total_bytes=$(( u_bytes + d_bytes ))
       limit_bytes=$(( q_gb * 1073741824 ))
       if [ "$total_bytes" -ge "$limit_bytes" ]; then
-        "$mubx_users_bin" freeze "$q_user" >/dev/null 2>&1 || true
+        if ! "$mubx_users_bin" freeze "$q_user" >/dev/null 2>&1; then
+          echo "failed to freeze quota-exceeded user '$q_user'" >&2
+          exit 1
+        fi
       fi
     fi
-  done < <(jq -r '.[] | select((.status // "active") != "frozen") | [.name, ((.quota_gb // 0)|tostring), (.expiry // "")] | @tsv' "$user_store" 2>/dev/null || true)
+  done < <(jq -r '.[] | select((.status // "active") != "frozen") | [.name, ((.quota_gb // 0)|tostring), (.expiry // "")] | @tsv' "$user_store" 2>/dev/null || { echo "invalid user store JSON" >&2; exit 1; })
 fi
 
 for svc in "${SERVICES[@]}"; do
