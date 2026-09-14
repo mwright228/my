@@ -1,117 +1,128 @@
 #!/usr/bin/env bash
-# MUB-X self-update: refresh an existing installation from its git origin.
 set -Eeuo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "[!] Run mubx-update as root." >&2; exit 1; }
-
-REPO_URL="${MUBX_REPO_URL:-https://github.com/mwright228/my.git}"
-canonical_repo_url() {
-  printf '%s\n' "$1" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#^[^/@]*@##' -e 's#\.git$##' -e 's#/$##'
-}
 ROOT="$(cat /etc/mubx/install-root 2>/dev/null || true)"
-[ -n "$ROOT" ] && [ -d "$ROOT/.git" ] || { echo "[!] MUB-X install root not found ($ROOT); run install.sh first." >&2; exit 1; }
-origin_url="$(git -C "$ROOT" remote get-url origin 2>/dev/null || true)"
-if [ "$(canonical_repo_url "$origin_url")" != "$(canonical_repo_url "$REPO_URL")" ]; then
-  echo "[*] Updating remote origin to $REPO_URL"
-  git -C "$ROOT" remote set-url origin "$REPO_URL"
+[ -n "$ROOT" ] && [ -d "$ROOT/.git" ] || { echo "[!] MUB-X install root not found ($ROOT)." >&2; exit 1; }
+REPO_URL="${MUBX_REPO_URL:-https://github.com/mwright228/my.git}"
+SERVICES=(haproxy nginx xray dropbear wstunnel hysteria zivpn singbox mubx-chameleon mubx-tbrutal openvpn-server@tcp openvpn-server@udp wg-quick@wg0 badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 badvpn@7500 badvpn@7600 badvpn@7700)
+source "$ROOT/lib/common.sh"
+source "$ROOT/lib/mubx-transaction.sh"
+
+usage(){ echo "Usage: mubx-update [--force|-f]"; }
+FORCE=0
+for arg in "$@"; do case "$arg" in --force|-f) FORCE=1;; -h|--help) usage; exit 0;; *) echo "[!] Unknown option: $arg" >&2; usage >&2; exit 2;; esac; done
+
+canonical_repo_url(){ printf '%s\n' "$1" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#^[^/@]*@##' -e 's#\.git$##' -e 's#/$##'; }
+origin="$(git -C "$ROOT" remote get-url origin 2>/dev/null || true)"
+[ "$(canonical_repo_url "$origin")" = "$(canonical_repo_url "$REPO_URL")" ] || { echo "[!] Refusing update: origin does not match $REPO_URL." >&2; exit 1; }
+
+if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
+  [ "$FORCE" -eq 1 ] || { echo "[!] Local changes detected; commit them or rerun with --force." >&2; exit 1; }
+  git -C "$ROOT" stash push -u -m "mubx-update-backup-$(date -u +%Y%m%dT%H%M%SZ)"
 fi
 
-SERVICES=(haproxy nginx xray dropbear wstunnel hysteria zivpn singbox mubx-chameleon mubx-tbrutal openvpn-server@tcp openvpn-server@udp wg-quick@wg0 badvpn@7100 badvpn@7200 badvpn@7300 badvpn@7400 badvpn@7500 badvpn@7600 badvpn@7700)
-cd "$ROOT"
-source ./lib/common.sh
-BK="/etc/mubx/update-backups/$(date -u '+%Y%m%dT%H%M%SZ')"
-install -d -m 0700 "$BK"
-declare -A was_active=()
-for svc in "${SERVICES[@]}"; do systemctl is-active --quiet "$svc" 2>/dev/null && was_active["$svc"]=1 || was_active["$svc"]=0; done
-saved_list="$BK/manifest"
-backup_path() { local path="$1"; [ -e "$path" ] || [ -L "$path" ] || return 0; install -d -m 0755 "$BK$(dirname "$path")"; cp -aP "$path" "$BK$path"; printf '%s\n' "$path" >> "$saved_list"; }
-restore_activity() { local svc; for svc in "${SERVICES[@]}"; do systemctl cat "$svc.service" >/dev/null 2>&1 || continue; if [ "${was_active[$svc]}" -eq 1 ]; then systemctl start "$svc" || true; else systemctl stop "$svc" 2>/dev/null || true; fi; done; }
-stage_bin() { local src="$1" dst="/usr/local/bin/$(basename "$src")" tmp; tmp="$(mktemp "${dst}.XXXXXX")"; install -m 0755 "$src" "$tmp"; mv -f -- "$tmp" "$dst"; }
-update_success=0
 OLD_HEAD="$(git -C "$ROOT" rev-parse HEAD)"
 OLD_BRANCH="$(git -C "$ROOT" symbolic-ref --short -q HEAD || true)"
-STASH_CREATED=0
-on_exit() { local status=$?; if [ "$update_success" -eq 0 ]; then echo "[!] Update failed; restoring the previous files and service state." >&2; if [ -f "$saved_list" ]; then while IFS= read -r path; do [ -n "$path" ] || continue; [ -e "$BK$path" ] || [ -L "$BK$path" ] || continue; install -d -m 0755 "$(dirname "$path")" 2>/dev/null || true; rm -f -- "$path"; cp -aP "$BK$path" "$path" 2>/dev/null || true; done < "$saved_list"; fi; git -C "$ROOT" reset --hard "$OLD_HEAD" 2>/dev/null || true; if [ -n "$OLD_BRANCH" ]; then git -C "$ROOT" checkout -B "$OLD_BRANCH" "$OLD_HEAD" 2>/dev/null || true; else git -C "$ROOT" checkout --detach "$OLD_HEAD" 2>/dev/null || true; fi; systemctl daemon-reload || true; restore_activity; fi; exit "$status"; }
-trap on_exit EXIT
-FORCE_UPDATE=0
-for arg in "$@"; do case "$arg" in --force|-f) FORCE_UPDATE=1 ;; -h|--help) echo "Usage: mubx-update [--force|-f]"; exit 0 ;; esac; done
-export GIT_TERMINAL_PROMPT=0
-printf '%s[*]%s Fetching latest updates from %s\n' "$C_MINT" "$C_RESET" "$REPO_URL"
-if [ -e "$ROOT/.git/index.lock" ]; then
-  if pgrep -af "git .*${ROOT}/\.git" >/dev/null 2>&1; then
-    echo "[!] Git index is locked by another process; refusing to update." >&2
-    exit 1
-  fi
-  echo "[*] Removing stale git index lock."
-  rm -f -- "$ROOT/.git/index.lock"
-fi
-if ! git -C "$ROOT" diff --quiet 2>/dev/null || ! git -C "$ROOT" diff --cached --quiet 2>/dev/null || [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
-  if [ "$FORCE_UPDATE" -eq 1 ]; then
-    printf '%s[!]%s Local modifications detected; creating stash before reset.\n' "$C_CORAL" "$C_RESET"
-    git -C "$ROOT" stash push -u -m "mubx-update-backup-$(date +%s)"
-    STASH_CREATED=1
+was_active=(); was_enabled=()
+for svc in "${SERVICES[@]}"; do
+  systemctl is-active --quiet "$svc" 2>/dev/null && was_active["$svc"]=1 || was_active["$svc"]=0
+  systemctl is-enabled --quiet "$svc" 2>/dev/null && was_enabled["$svc"]=1 || was_enabled["$svc"]=0
+done
+
+mubx_tx_begin update
+
+snapshot_repo_targets(){
+  local f base
+  for f in "$ROOT"/bin/*; do [ -f "$f" ] || continue; base="$(basename "$f")"; mubx_tx_snapshot "/usr/local/bin/$base"; done
+  for f in "$ROOT"/lib/*.sh; do [ -f "$f" ] || continue; base="$(basename "$f")"; mubx_tx_snapshot "/usr/local/lib/mubx/$base"; done
+  for f in "$ROOT"/systemd/*.service "$ROOT"/systemd/*.timer; do [ -f "$f" ] || continue; base="$(basename "$f")"; mubx_tx_snapshot "/etc/systemd/system/$base"; done
+}
+
+snapshot_repo_targets
+mubx_tx_snapshot /etc/mubx/users.json
+mubx_tx_snapshot_tree /var/www/mubx-sub
+mubx_tx_snapshot_tree /etc/mubx/ss2022-keys
+mubx_tx_snapshot_tree /etc/mubx/sub-tokens
+for path in /usr/local/etc/xray/config.json /etc/haproxy/haproxy.cfg /etc/nginx/nginx.conf /etc/sing-box/config.json /etc/hysteria/config.yaml /etc/mubx/domain /usr/local/etc/xray/domain /usr/local/bin/reality-fronts /usr/local/lib/mubx/reality-build.sh /etc/systemd/system/dnstt.service /usr/local/bin/dnstt-server /usr/local/bin/dnstt-client /etc/dnstt/dnstt.priv /etc/dnstt/dnstt.pub /etc/squid/squid.conf; do mubx_tx_snapshot "$path"; done
+
+TMP="$(mktemp -d)"
+cleanup(){ rm -rf -- "$TMP"; }
+trap cleanup EXIT
+failed=1
+rollback(){
+  local status=$?
+  if [ "$failed" -ne 0 ]; then
+    echo "[!] Update failed; rolling back files, Git checkout, and service state." >&2
+    for svc in "${SERVICES[@]}"; do systemctl stop "$svc" >/dev/null 2>&1 || true; done
+    mubx_tx_abort || true
+    git -C "$ROOT" reset --hard "$OLD_HEAD" >/dev/null 2>&1 || true
+    if [ -n "$OLD_BRANCH" ]; then git -C "$ROOT" checkout -B "$OLD_BRANCH" "$OLD_HEAD" >/dev/null 2>&1 || true; fi
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    for svc in "${SERVICES[@]}"; do
+      if [ "${was_active[$svc]}" -eq 1 ]; then systemctl start "$svc" >/dev/null 2>&1 || true; fi
+      if [ "${was_enabled[$svc]}" -eq 1 ]; then systemctl enable "$svc" >/dev/null 2>&1 || true; else systemctl disable "$svc" >/dev/null 2>&1 || true; fi
+    done
   else
-    printf '%s[!]%s Uncommitted local changes detected in %s.\n' "$C_CORAL" "$C_RESET" "$ROOT" >&2
-    echo "    Re-run with --force to overwrite them." >&2
-    exit 1
+    mubx_tx_commit || status=1
   fi
-fi
+  exit "$status"
+}
+trap rollback EXIT
+
+printf '[*] Fetching latest updates from %s\n' "$REPO_URL"
 timeout 25 git -C "$ROOT" fetch origin main
 git -C "$ROOT" checkout -B main origin/main
 git -C "$ROOT" reset --hard origin/main
-mapfile -t old_backups < <(find /etc/mubx/update-backups -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk 'NR > 3 {sub(/^[^ ]+ /,""); print}')
-for dir in "${old_backups[@]}"; do [ -n "$dir" ] && rm -rf -- "$dir"; done
-for f in "$ROOT"/bin/*; do [ -f "$f" ] || continue; backup_path "/usr/local/bin/$(basename "$f")"; done
-for f in "$ROOT"/lib/*.sh; do [ -f "$f" ] || continue; backup_path "/usr/local/lib/mubx/$(basename "$f")"; done
-for f in "$ROOT"/systemd/*.service "$ROOT"/systemd/*.timer; do [ -f "$f" ] || continue; backup_path "/etc/systemd/system/$(basename "$f")"; done
-for f in /usr/local/etc/xray/config.json /etc/haproxy/haproxy.cfg /etc/nginx/nginx.conf /etc/sing-box/config.json; do backup_path "$f"; done
-for f in /usr/local/bin/reality-fronts /usr/local/lib/mubx/reality-build.sh; do backup_path "$f"; done
+snapshot_repo_targets
+
 load_mubx_env
-for f in "$ROOT"/lib/*.sh; do [ -f "$f" ] || continue; install -D -m 0644 "$f" "/usr/local/lib/mubx/$(basename "$f")"; done
-for f in "$ROOT"/systemd/*.service "$ROOT"/systemd/*.timer; do [ -f "$f" ] || continue; install -m 0644 "$f" "/etc/systemd/system/$(basename "$f")"; done
-[ -n "${SSH_WS_PATH:-}" ] && [ -f /etc/systemd/system/wstunnel.service ] && sed -i "s|__SSH_WS_PATH__|$SSH_WS_PATH|g" /etc/systemd/system/wstunnel.service
-if [ -e /etc/systemd/system/dnstt.service ]; then backup_path /etc/systemd/system/dnstt.service; backup_path /usr/local/bin/dnstt-server; backup_path /usr/local/bin/dnstt-client; backup_path /etc/dnstt/dnstt.priv; backup_path /etc/dnstt/dnstt.pub; systemctl disable --now dnstt 2>/dev/null || true; rm -f /etc/systemd/system/dnstt.service /usr/local/bin/dnstt-server /usr/local/bin/dnstt-client; rm -rf /etc/dnstt; fi
-rm -f /usr/local/bin/reality-fronts /usr/local/lib/mubx/reality-build.sh
-if [ -e /etc/squid/squid.conf ] || systemctl is-active --quiet squid 2>/dev/null || systemctl is-enabled --quiet squid 2>/dev/null; then backup_path /etc/squid/squid.conf; systemctl disable --now squid 2>/dev/null || true; rm -f /etc/squid/squid.conf 2>/dev/null || true; fi
-install -d -m 0755 /etc/mubx
-if [ ! -f /etc/mubx/domain ]; then if [ -f /usr/local/etc/xray/domain ]; then cp -aP /usr/local/etc/xray/domain /etc/mubx/domain; elif [ -n "${DOMAIN:-}" ]; then printf '%s\n' "$DOMAIN" > /etc/mubx/domain; fi; fi
+install_file(){ local src="$1" dst="$2" mode="$3"; mubx_tx_atomic_install "$src" "$dst" "$mode"; }
+for f in "$ROOT"/lib/*.sh; do [ -f "$f" ] || continue; install_file "$f" "/usr/local/lib/mubx/$(basename "$f")" 0644; done
+for f in "$ROOT"/systemd/*.service "$ROOT"/systemd/*.timer; do [ -f "$f" ] || continue; install_file "$f" "/etc/systemd/system/$(basename "$f")" 0644; done
+for f in "$ROOT"/bin/*; do [ -f "$f" ] || continue; [ "$(basename "$f")" = mubx-update ] && continue; install_file "$f" "/usr/local/bin/$(basename "$f")" 0755; done
+
+if [ -n "${SSH_WS_PATH:-}" ] && [ -f /etc/systemd/system/wstunnel.service ]; then
+  sed "s|__SSH_WS_PATH__|$SSH_WS_PATH|g" /etc/systemd/system/wstunnel.service > "$TMP/wstunnel.service"
+  install_file "$TMP/wstunnel.service" /etc/systemd/system/wstunnel.service 0644
+fi
+
 systemctl daemon-reload
-for f in "$ROOT"/bin/*; do [ -f "$f" ] || continue; [ "$(basename "$f")" = "mubx-update" ] && continue; stage_bin "$f"; done
-source ./lib/render.sh
+source "$ROOT/lib/render.sh"
 [ ! -r "$ROOT/lib/subscribe.sh" ] || source "$ROOT/lib/subscribe.sh"
 mubx_users_seed
-tmp="$(mktemp -d)"
-trap 'rm -rf -- "$tmp"; on_exit' EXIT
-mubx_xray_render configs/xray.json "$tmp/xray.json"
-mubx_haproxy_render configs/haproxy.cfg "$tmp/haproxy.cfg"
-mubx_nginx_render configs/nginx.conf "$tmp/nginx.conf"
-if [ -f configs/singbox.json ]; then mubx_singbox_render configs/singbox.json "$tmp/singbox.json"; fi
-if [ -f configs/hysteria.yaml ]; then mubx_hysteria_render configs/hysteria.yaml "$tmp/hysteria.yaml"; fi
-if command -v xray >/dev/null 2>&1; then xray run -test -config "$tmp/xray.json" >/dev/null; fi
-if command -v nginx >/dev/null 2>&1; then nginx -t -c "$tmp/nginx.conf" >/dev/null; fi
-if command -v haproxy >/dev/null 2>&1; then haproxy -c -f "$tmp/haproxy.cfg" >/dev/null; fi
-if [ -s "$tmp/singbox.json" ] && command -v sing-box >/dev/null 2>&1; then sing-box check -c "$tmp/singbox.json" >/dev/null; fi
-install -m 0600 "$tmp/xray.json" /usr/local/etc/xray/config.json
-install -m 0644 "$tmp/haproxy.cfg" /etc/haproxy/haproxy.cfg
-install -m 0644 "$tmp/nginx.conf" /etc/nginx/nginx.conf
-if [ -s "$tmp/singbox.json" ]; then install -d -m 0755 /etc/sing-box; install -m 0600 "$tmp/singbox.json" /etc/sing-box/config.json; fi
-if [ -s "$tmp/hysteria.yaml" ] && [ -d /etc/hysteria ]; then install -m 0600 "$tmp/hysteria.yaml" /etc/hysteria/config.yaml; fi
-rm -rf -- "$tmp"
-if [ ! -s /etc/mubx/myip ]; then myip="$(curl -4 -fsS --max-time 2 https://ifconfig.me 2>/dev/null || curl -4 -fsS --max-time 2 https://api.ipify.org 2>/dev/null || true)"; [ -n "$myip" ] && printf '%s\n' "$myip" > /etc/mubx/myip; fi
-if [ -r "$ROOT/lib/subscribe.sh" ] && [ -f /etc/mubx/users.json ]; then source "$ROOT/lib/subscribe.sh"; load_mubx_env 2>/dev/null || true; while IFS= read -r sub_user; do [ -n "$sub_user" ] || continue; mubx_sub_generate "$sub_user" >/dev/null; done < <(jq -r '.[].name' /etc/mubx/users.json); fi
-if [ -d "$ROOT/systemd" ]; then install -m 0644 "$ROOT"/systemd/*.service /etc/systemd/system/; install -m 0644 "$ROOT"/systemd/*.timer /etc/systemd/system/ 2>/dev/null || true; systemctl daemon-reload; fi
-for svc in mubx-chameleon singbox hysteria mubx-tbrutal; do if systemctl cat "$svc.service" >/dev/null 2>&1 && [ "${was_active[$svc]:-0}" -eq 1 ]; then systemctl enable "$svc.service" >/dev/null 2>&1 || true; fi; done
-mubx_group_open "SERVICES RELOAD"
+mubx_xray_render "$ROOT/configs/xray.json" "$TMP/xray.json"
+mubx_haproxy_render "$ROOT/configs/haproxy.cfg" "$TMP/haproxy.cfg"
+mubx_nginx_render "$ROOT/configs/nginx.conf" "$TMP/nginx.conf"
+[ ! -f "$ROOT/configs/singbox.json" ] || mubx_singbox_render "$ROOT/configs/singbox.json" "$TMP/singbox.json"
+[ ! -f "$ROOT/configs/hysteria.yaml" ] || mubx_hysteria_render "$ROOT/configs/hysteria.yaml" "$TMP/hysteria.yaml"
+command -v xray >/dev/null 2>&1 && xray run -test -config "$TMP/xray.json" >/dev/null
+command -v nginx >/dev/null 2>&1 && nginx -t -c "$TMP/nginx.conf" >/dev/null
+command -v haproxy >/dev/null 2>&1 && haproxy -c -f "$TMP/haproxy.cfg" >/dev/null
+[ ! -s "$TMP/singbox.json" ] || ! command -v sing-box >/dev/null 2>&1 || sing-box check -c "$TMP/singbox.json" >/dev/null
+install_file "$TMP/xray.json" /usr/local/etc/xray/config.json 0600
+install_file "$TMP/haproxy.cfg" /etc/haproxy/haproxy.cfg 0644
+install_file "$TMP/nginx.conf" /etc/nginx/nginx.conf 0644
+if [ -s "$TMP/singbox.json" ]; then install -d -m 0755 /etc/sing-box; install_file "$TMP/singbox.json" /etc/sing-box/config.json 0600; fi
+if [ -s "$TMP/hysteria.yaml" ] && [ -d /etc/hysteria ]; then install_file "$TMP/hysteria.yaml" /etc/hysteria/config.yaml 0600; fi
+
+if [ -r "$ROOT/lib/subscribe.sh" ] && [ -f /etc/mubx/users.json ]; then
+  while IFS= read -r sub_user; do [ -n "$sub_user" ] || continue; mubx_sub_generate "$sub_user" >/dev/null; done < <(jq -r '.[].name' /etc/mubx/users.json)
+fi
+
+for svc in "${SERVICES[@]}"; do
+  [ "${was_active[$svc]}" -eq 1 ] || continue
+  systemctl cat "$svc.service" >/dev/null 2>&1 || continue
+  timeout 10 systemctl restart "$svc" >/dev/null
+  systemctl is-active --quiet "$svc"
+done
+
+xray run -test -config /usr/local/etc/xray/config.json >/dev/null
+nginx -t >/dev/null
+haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null
+[ ! -s /etc/sing-box/config.json ] || ! command -v sing-box >/dev/null 2>&1 || sing-box check -c /etc/sing-box/config.json >/dev/null
+
+# Install the new updater only after the complete deployment is healthy.
+install_file "$ROOT/bin/mubx-update" /usr/local/bin/mubx-update 0755
 failed=0
-for svc in "${SERVICES[@]}"; do systemctl cat "$svc.service" >/dev/null 2>&1 || continue; [ "${was_active[$svc]}" -eq 1 ] || continue; if ! timeout 6 systemctl restart "$svc" >/dev/null 2>&1 || ! systemctl is-active --quiet "$svc"; then mubx_card "  $svc" "$(mubx_pill DOWN "FAILED")"; failed=$((failed + 1)); else mubx_card "  $svc" "$(mubx_pill UP "ONLINE")"; fi; done
-mubx_group_close
-if [ "$failed" -gt 0 ]; then echo "[!] $failed previously-active service(s) failed to restart; update rolled back." >&2; exit 1; fi
-if [ -x /usr/local/bin/mubx-tune ]; then /usr/local/bin/mubx-tune >/dev/null 2>&1 || true; elif [ -x "$ROOT/bin/mubx-tune" ]; then "$ROOT/bin/mubx-tune" >/dev/null 2>&1 || true; fi
-u443_bin="$(command -v mubx-udp443 2>/dev/null || echo "$ROOT/bin/mubx-udp443")"
-if [ -x "$u443_bin" ]; then active_target="$(sed -n 's/^TARGET=//p' /etc/mubx/udp443.conf 2>/dev/null || echo hy2)"; [ -n "$active_target" ] || active_target=hy2; if [ "$active_target" = hy2 ] || [ "$active_target" = tuic ]; then "$u443_bin" "$active_target" >/dev/null 2>&1 || true; fi; fi
-stage_bin "$ROOT/bin/mubx-update"
-update_success=1
-trap - EXIT
-printf '\n'
-log "MUB-X engine successfully updated to $(git -C "$ROOT" log -1 --format='%h (%cs)')"
-printf '\n'
+printf '\n[*] MUB-X update committed at %s\n' "$(git -C "$ROOT" log -1 --format='%h (%cs)')"
