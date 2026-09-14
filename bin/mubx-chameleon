@@ -148,9 +148,16 @@ CHAMELEON_RESPONSES_PATH = RESPONSE_PROFILES_FILE
 # Auto-adapt: written by mubx-probe, read every 30 s by the watcher task.
 # When set, this profile is used for all connections that do NOT send an
 # explicit X-MUBX-Profile header, overriding the hard-coded "default".
-CARRIER_PROFILE_FILE = os.environ.get(
-    "CHAMELEON_CARRIER_PROFILE", "/run/mubx/carrier-profile"
-)
+#
+# NOTE: resolved via a function (not a module-level constant) so that
+# CHAMELEON_CARRIER_PROFILE overrides taken after import (e.g. by tests,
+# or by anything that sets the env var post-fork) are actually honored.
+# A frozen module-level constant here previously caused load_carrier_profile()/
+# write_carrier_profile() to always operate on the real default path
+# regardless of the env var, which also meant tests exercised production
+# state (/run/mubx/carrier-profile) instead of an isolated temp file.
+def _carrier_profile_file() -> str:
+    return os.environ.get("CHAMELEON_CARRIER_PROFILE", "/run/mubx/carrier-profile")
 
 DEFAULT_PROFILES: Dict[str, dict] = {
     "default": {"status": "HTTP/1.1 200 Connection established", "headers": {}},
@@ -431,14 +438,15 @@ def load_carrier_profile() -> Optional[str]:
     Returns the profile name string, or None if the file is absent/stale/invalid.
     Stale = older than 24 h (probe runs every 6 h; if we haven't heard in 24 h
     something is wrong and we fall back to the safe default)."""
-    if not os.path.isfile(CARRIER_PROFILE_FILE):
+    profile_file = _carrier_profile_file()
+    if not os.path.isfile(profile_file):
         return None
     try:
-        mtime = os.path.getmtime(CARRIER_PROFILE_FILE)
+        mtime = os.path.getmtime(profile_file)
         if time.time() - mtime > 86400:   # 24-hour staleness guard
             log.info("Carrier profile file is stale (>24h); ignoring")
             return None
-        with open(CARRIER_PROFILE_FILE, "r", encoding="utf-8") as f:
+        with open(profile_file, "r", encoding="utf-8") as f:
             data = json.load(f)
         name = str(data.get("profile", "")).strip().lower()
         if name and name in load_response_profiles():
@@ -460,10 +468,11 @@ def get_carrier_profile() -> Optional[str]:
 
 
 def write_carrier_profile(profile: str, reason: str, bug_host: str = "field-telemetry") -> None:
-    """Atomically writes carrier profile to CARRIER_PROFILE_FILE."""
+    """Atomically writes carrier profile to the carrier profile file."""
+    profile_file = _carrier_profile_file()
     try:
-        os.makedirs(os.path.dirname(CARRIER_PROFILE_FILE), exist_ok=True)
-        tmp = f"{CARRIER_PROFILE_FILE}.tmp.{os.getpid()}"
+        os.makedirs(os.path.dirname(profile_file), exist_ok=True)
+        tmp = f"{profile_file}.tmp.{os.getpid()}"
         data = {
             "profile": profile,
             "reason": reason,
@@ -472,7 +481,7 @@ def write_carrier_profile(profile: str, reason: str, bug_host: str = "field-tele
         }
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f)
-        os.replace(tmp, CARRIER_PROFILE_FILE)
+        os.replace(tmp, profile_file)
     except Exception as e:
         log.debug("Failed writing carrier profile: %s", e)
 

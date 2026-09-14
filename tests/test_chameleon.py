@@ -38,6 +38,22 @@ load_carrier_profile = chameleon["load_carrier_profile"]
 _sanitize_header_field = chameleon["_sanitize_header_field"]
 get_carrier_profile = chameleon.get("get_carrier_profile")
 set_carrier_profile = chameleon.get("set_carrier_profile")
+
+# Several code paths under test (process_carrier_hint, the /report endpoint,
+# in-band CONNECT carrier hints) call write_carrier_profile(), which persists
+# to CHAMELEON_CARRIER_PROFILE - defaulting to the real production path
+# /run/mubx/carrier-profile if unset. Redirect it for this entire test module
+# so no test run ever reads or clobbers real system/service state, and so
+# tests are hermetic across repeated runs regardless of which test triggers
+# a write first.
+_TEST_PROFILE_DIR = tempfile.TemporaryDirectory()
+os.environ["CHAMELEON_CARRIER_PROFILE"] = os.path.join(
+    _TEST_PROFILE_DIR.name, "carrier-profile"
+)
+
+
+def tearDownModule():
+    _TEST_PROFILE_DIR.cleanup()
 extract_carrier_hint = chameleon.get("extract_carrier_hint")
 process_carrier_hint = chameleon.get("process_carrier_hint")
 record_abrupt_disconnect = chameleon.get("record_abrupt_disconnect")
