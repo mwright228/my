@@ -19,6 +19,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -54,33 +55,19 @@ class MubxVpnService : VpnService() {
     private var connectJob: Job? = null
     private val disconnectRequested = AtomicBoolean(false)
     private val lifecycleGeneration = AtomicLong(0L)
-    // Serializes native start/stop and TUN ownership. Generation checks alone
-    // cannot prevent a new CONNECT from overtaking an in-flight DISCONNECT.
     private val lifecycleMutex = Mutex()
 
-    override fun onCreate() {
-        super.onCreate()
-        instance = this
-        LogRepository.log("VPN", "MubxVpnService instantiated", LogLevel.INFO)
-    }
+    override fun onCreate() { super.onCreate(); instance = this; LogRepository.log("VPN", "MubxVpnService instantiated", LogLevel.INFO) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_CONNECT -> {
                 try { startForegroundNotification() } catch (e: Exception) {
                     LogRepository.log("VPN", "startForeground failed: ${e.message}", LogLevel.WARN)
-                    try {
-                        val fallback = NotificationCompat.Builder(this, MubxApplication.VPN_CHANNEL_ID)
-                            .setContentTitle("VPN Active").setSmallIcon(android.R.drawable.stat_notify_sync)
-                            .setPriority(NotificationCompat.PRIORITY_LOW).build()
-                        startForeground(NOTIFICATION_ID, fallback)
-                    } catch (e2: Exception) {
-                        LogRepository.log("VPN", "startForeground failed completely: ${e2.message}", LogLevel.ERROR)
-                        stopSelf(); return START_NOT_STICKY
-                    }
+                    try { startForeground(NOTIFICATION_ID, NotificationCompat.Builder(this, MubxApplication.VPN_CHANNEL_ID).setContentTitle("VPN Active").setSmallIcon(android.R.drawable.stat_notify_sync).setPriority(NotificationCompat.PRIORITY_LOW).build()) }
+                    catch (e2: Exception) { LogRepository.log("VPN", "startForeground failed completely: ${e2.message}", LogLevel.ERROR); stopSelf(); return START_NOT_STICKY }
                 }
-                disconnectRequested.set(false)
-                connect()
+                disconnectRequested.set(false); connect()
             }
             ACTION_DISCONNECT -> disconnect()
         }
@@ -91,14 +78,8 @@ class MubxVpnService : VpnService() {
         val pendingIntent = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val disconnectIntent = PendingIntent.getService(this, 1, Intent(this, MubxVpnService::class.java).apply { action = ACTION_DISCONNECT }, PendingIntent.FLAG_IMMUTABLE)
         val hostDisplay = currentProfile.serverHost.ifBlank { currentProfile.serverIp }
-        val notification: Notification = NotificationCompat.Builder(this, MubxApplication.VPN_CHANNEL_ID)
-            .setContentTitle(getString(R.string.vpn_service_title))
-            .setContentText(if (hostDisplay.isNotBlank()) "VPN active • $hostDisplay" else "VPN active")
-            .setSmallIcon(android.R.drawable.stat_notify_sync).setContentIntent(pendingIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.disconnect), disconnectIntent)
-            .setOngoing(true).setPriority(NotificationCompat.PRIORITY_LOW).build()
-        if (Build.VERSION.SDK_INT >= 34) startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        else startForeground(NOTIFICATION_ID, notification)
+        val notification: Notification = NotificationCompat.Builder(this, MubxApplication.VPN_CHANNEL_ID).setContentTitle(getString(R.string.vpn_service_title)).setContentText(if (hostDisplay.isNotBlank()) "VPN active • $hostDisplay" else "VPN active").setSmallIcon(android.R.drawable.stat_notify_sync).setContentIntent(pendingIntent).addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.disconnect), disconnectIntent).setOngoing(true).setPriority(NotificationCompat.PRIORITY_LOW).build()
+        if (Build.VERSION.SDK_INT >= 34) startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE) else startForeground(NOTIFICATION_ID, notification)
     }
 
     private fun connect() {
@@ -109,34 +90,19 @@ class MubxVpnService : VpnService() {
             try {
                 ensureActive()
                 lifecycleMutex.withLock {
-                    ensureActive()
-                    check(lifecycleGeneration.get() == generation) { "stale VPN connection generation" }
+                    ensureActive(); check(lifecycleGeneration.get() == generation) { "stale VPN connection generation" }
                     val profile = currentProfile
                     val targetHost = profile.serverHost.ifBlank { profile.serverIp }
                     if (targetHost.isBlank()) throw IllegalArgumentException("Server host/IP is required")
-                    val resolvedIp = withContext(Dispatchers.IO) {
-                        try { java.net.InetAddress.getAllByName(targetHost).firstOrNull()?.hostAddress ?: targetHost }
-                        catch (e: Exception) { LogRepository.log("VPN", "Host pre-resolution note: ${e.message}", LogLevel.WARN); targetHost }
-                    }
+                    val resolvedIp = withContext(Dispatchers.IO) { try { java.net.InetAddress.getAllByName(targetHost).firstOrNull()?.hostAddress ?: targetHost } catch (e: Exception) { LogRepository.log("VPN", "Host pre-resolution note: ${e.message}", LogLevel.WARN); targetHost } }
                     ensureActive()
                     if (disconnectRequested.get() || lifecycleGeneration.get() != generation) throw CancellationException("stale VPN connection generation")
                     val effectiveProfile = profile.copy(serverIp = resolvedIp, bugHostSNI = profile.bugHostSNI.ifBlank { profile.serverHost })
                     val socksPort = NativeCoreBridge.startTunnel(effectiveProfile).getOrThrow()
                     ensureActive()
                     if (disconnectRequested.get() || lifecycleGeneration.get() != generation) throw CancellationException("stale VPN connection generation")
-                    val dns1 = profile.dnsServer.ifBlank { "1.1.1.1" }
-                    val dns2 = profile.dnsSecondary.ifBlank { "8.8.8.8" }
-                    val builder = Builder().apply {
-                        setSession("MUB-X VPN")
-                        addAddress("172.19.0.1", 30)
-                        addAddress("fd19:2e58:34::1", 126)
-                        addDnsServer(dns1)
-                        addDnsServer(dns2)
-                        addRoute("0.0.0.0", 0)
-                        addRoute("::", 0)
-                        setMtu(1500)
-                        setBlocking(true)
-                    }
+                    val dns1 = profile.dnsServer.ifBlank { "1.1.1.1" }; val dns2 = profile.dnsSecondary.ifBlank { "8.8.8.8" }
+                    val builder = Builder().apply { setSession("MUB-X VPN"); addAddress("172.19.0.1", 30); addAddress("fd19:2e58:34::1", 126); addDnsServer(dns1); addDnsServer(dns2); addRoute("0.0.0.0", 0); addRoute("::", 0); setMtu(1500); setBlocking(true) }
                     val established = builder.establish() ?: throw IllegalStateException("Failed to establish VpnService TUN interface")
                     vpnInterface.set(established)
                     val tunFd = established.fd
@@ -154,9 +120,7 @@ class MubxVpnService : VpnService() {
                 cleanupResources()
                 if (!disconnectRequested.get() && lifecycleGeneration.get() == generation) _vpnState.value = VpnState.Disconnected
             } catch (e: Exception) {
-                LogRepository.log("VPN", "Tunnel connection failed: ${e.message}", LogLevel.ERROR)
-                _vpnState.value = VpnState.Error(e.message ?: "Tunnel connection failed")
-                disconnect()
+                LogRepository.log("VPN", "Tunnel connection failed: ${e.message}", LogLevel.ERROR); _vpnState.value = VpnState.Error(e.message ?: "Tunnel connection failed"); disconnect()
             }
         }
     }
@@ -172,12 +136,7 @@ class MubxVpnService : VpnService() {
                 val rxDelta = (telem.rxBytes - lastRx).coerceAtLeast(0L); val txDelta = (telem.txBytes - lastTx).coerceAtLeast(0L)
                 lastRx = telem.rxBytes; lastTx = telem.txBytes
                 val state = _vpnState.value
-                if (state is VpnState.Connected) _vpnState.value = state.copy(
-                    rxSpeedMbps = (rxDelta * 8.0) / 1_000_000.0,
-                    txSpeedMbps = (txDelta * 8.0) / 1_000_000.0,
-                    activeLanes = if (telem.activeConns > 0) telem.activeConns else currentProfile.poolConcurrency,
-                    totalRxBytes = telem.rxBytes, totalTxBytes = telem.txBytes, connectedDurationSecs = durationSecs
-                )
+                if (state is VpnState.Connected) _vpnState.value = state.copy(rxSpeedMbps = (rxDelta * 8.0) / 1_000_000.0, txSpeedMbps = (txDelta * 8.0) / 1_000_000.0, activeLanes = if (telem.activeConns > 0) telem.activeConns else currentProfile.poolConcurrency, totalRxBytes = telem.rxBytes, totalTxBytes = telem.txBytes, connectedDurationSecs = durationSecs)
             }
         }
     }
@@ -187,39 +146,25 @@ class MubxVpnService : VpnService() {
         val generation = lifecycleGeneration.incrementAndGet()
         connectJob?.cancel(); connectJob = null
         serviceScope.launch(Dispatchers.IO) {
-            _vpnState.value = VpnState.Disconnecting
-            telemetryJob?.cancel(); telemetryJob = null
-            lifecycleMutex.withLock { cleanupResourcesLocked() }
+            _vpnState.value = VpnState.Disconnecting; telemetryJob?.cancel(); telemetryJob = null
+            withContext(NonCancellable) { lifecycleMutex.withLock { cleanupResourcesLocked() } }
             if (lifecycleGeneration.get() == generation) _vpnState.value = VpnState.Disconnected
             LogRepository.log("VPN", "Tunnel disconnected cleanly", LogLevel.INFO)
             withContext(Dispatchers.Main) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
         }
     }
 
-    private suspend fun cleanupResources() {
-        lifecycleMutex.withLock { cleanupResourcesLocked() }
-    }
+    private suspend fun cleanupResources() { withContext(NonCancellable) { lifecycleMutex.withLock { cleanupResourcesLocked() } } }
 
     private fun cleanupResourcesLocked() {
-        try {
-            NativeCoreBridge.stopTunRouter()
-            NativeCoreBridge.stopTunnel()
-            vpnInterface.getAndSet(null)?.let { runCatching { it.close() } }
-        } catch (e: Throwable) {
-            LogRepository.log("VPN", "Cleanup error: ${e.message}", LogLevel.WARN)
-        }
+        try { NativeCoreBridge.stopTunRouter(); NativeCoreBridge.stopTunnel(); vpnInterface.getAndSet(null)?.let { runCatching { it.close() } } }
+        catch (e: Throwable) { LogRepository.log("VPN", "Cleanup error: ${e.message}", LogLevel.WARN) }
     }
 
     override fun onDestroy() {
-        telemetryJob?.cancel(); telemetryJob = null; connectJob?.cancel(); connectJob = null; disconnectRequested.set(true)
-        lifecycleGeneration.incrementAndGet()
+        telemetryJob?.cancel(); telemetryJob = null; connectJob?.cancel(); connectJob = null; disconnectRequested.set(true); lifecycleGeneration.incrementAndGet()
         if (instance == this) instance = null
-        Thread {
-            runCatching { NativeCoreBridge.forceStop() }
-            vpnInterface.getAndSet(null)?.let { runCatching { it.close() } }
-        }.start()
-        _vpnState.value = VpnState.Disconnected
-        serviceScope.coroutineContext[Job]?.cancel()
-        super.onDestroy()
+        Thread { runCatching { NativeCoreBridge.forceStop() }; vpnInterface.getAndSet(null)?.let { runCatching { it.close() } } }.start()
+        _vpnState.value = VpnState.Disconnected; serviceScope.coroutineContext[Job]?.cancel(); super.onDestroy()
     }
 }
