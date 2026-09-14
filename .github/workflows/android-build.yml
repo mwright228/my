@@ -150,7 +150,7 @@ jobs:
           MUBX_KEYSTORE_PATH: ${{ runner.temp }}/mubx/release.keystore
           MUBX_KEYSTORE_PASSWORD: ${{ secrets.MUBX_ANDROID_KEYSTORE_PASSWORD }}
           MUBX_KEY_ALIAS: ${{ secrets.MUBX_ANDROID_KEY_ALIAS }}
-          MUBX_KEY_PASSWORD: ${{ secrets.MUBX_KEY_PASSWORD }}
+          MUBX_KEY_PASSWORD: ${{ secrets.MUBX_ANDROID_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
           ./gradlew clean testReleaseUnitTest lintRelease assembleRelease --stacktrace
