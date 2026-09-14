@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Fail-closed SSRF guard for the Chameleon service.
 
-The main Chameleon implementation is intentionally left intact; this small
-launcher replaces its external-target validator before main() starts. This
-keeps the security policy independently testable and avoids a risky rewrite
-of the large protocol engine.
+The guard validates external DNS answers and pins the validated addresses for
+that connection.  This closes the TOCTOU gap where the policy check could
+resolve a safe address and asyncio.open_connection() could resolve the same
+hostname again to a private address.
 """
 import asyncio
 import importlib.util
 import ipaddress
 import socket
 from pathlib import Path
+from typing import Dict, List
 
 SCRIPT = Path(__file__).with_name("mubx-chameleon")
 spec = importlib.util.spec_from_file_location("mubx_chameleon_impl", SCRIPT)
@@ -19,32 +20,85 @@ if spec is None or spec.loader is None:
 ch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ch)
 
+_ORIGINAL_OPEN_CONNECTION = asyncio.open_connection
+_VALIDATED: Dict[str, List[str]] = {}
+
+
+async def _resolve_global(host: str) -> List[str]:
+    loop = asyncio.get_running_loop()
+    infos = await asyncio.wait_for(
+        loop.getaddrinfo(
+            host,
+            None,
+            family=socket.AF_UNSPEC,
+            type=socket.SOCK_STREAM,
+        ),
+        timeout=2.0,
+    )
+    ips: List[str] = []
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not ip.is_global:
+            raise OSError(f"SSRF target rejected: {ip}")
+        if str(ip) not in ips:
+            ips.append(str(ip))
+    if not ips:
+        raise OSError("SSRF target has no DNS answers")
+    return ips
+
 
 async def is_safe_external_target(host: str) -> bool:
     """Allow only globally routable destinations; DNS failures fail closed."""
     try:
-        loop = asyncio.get_running_loop()
-        infos = await asyncio.wait_for(
-            loop.getaddrinfo(
-                host,
-                None,
-                family=socket.AF_UNSPEC,
-                type=socket.SOCK_STREAM,
-            ),
-            timeout=2.0,
-        )
-        if not infos:
-            return False
-        for info in infos:
-            ip = ipaddress.ip_address(info[4][0])
+        # Literal IPs do not need DNS pinning.
+        try:
+            ip = ipaddress.ip_address(host)
             if not ip.is_global:
                 return False
+            _VALIDATED[host] = [str(ip)]
+            return True
+        except ValueError:
+            pass
+
+        ips = await _resolve_global(host)
+        _VALIDATED[host.lower().rstrip(".")] = ips
         return True
     except Exception:
+        _VALIDATED.pop(host.lower().rstrip("."), None)
         return False
 
 
+async def guarded_open_connection(host=None, port=None, *args, **kwargs):
+    """Connect only to the addresses accepted by the preceding SSRF check."""
+    if host is None:
+        return await _ORIGINAL_OPEN_CONNECTION(host, port, *args, **kwargs)
+
+    try:
+        ipaddress.ip_address(host)
+        return await _ORIGINAL_OPEN_CONNECTION(host, port, *args, **kwargs)
+    except ValueError:
+        pass
+
+    key = str(host).lower().rstrip(".")
+    ips = _VALIDATED.pop(key, None)
+    if not ips:
+        # External hostname was not approved immediately before connection.
+        # Do not perform an unvalidated DNS lookup.
+        raise OSError("SSRF guard: hostname was not validated")
+
+    last_error = None
+    for ip in ips:
+        try:
+            return await _ORIGINAL_OPEN_CONNECTION(ip, port, *args, **kwargs)
+        except OSError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise OSError("SSRF guard: no validated address connected")
+
+
 ch.is_safe_external_target = is_safe_external_target
+asyncio.open_connection = guarded_open_connection
 
 if __name__ == "__main__":
     asyncio.run(ch.main())
