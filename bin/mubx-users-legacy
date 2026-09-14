@@ -1,0 +1,706 @@
+#!/usr/bin/env bash
+# Manage per-user Xray identities on this server.
+#
+# Every user in the store gets their own UUID on every transport inbound
+# (VLESS-WS, VLESS-HTTPUpgrade, XHTTP, VMess, Trojan and VLESS TCP TLS on
+# 8443) plus a Shadowsocks WS inbound/password of their own. Removing a user
+# revokes just that identity; the rest keep working. Xray's stats API is
+# enabled when the store exists, so per-user traffic can be read back for
+# the UUID transports. The raw Shadowsocks TCP channel on public 443 carries
+# the shared 'admin' identity (raw SS has no per-user multiplexing).
+#
+# The store lives in /etc/mubx/users.json (override with MUBX_USERS_FILE).
+# The first entry ("admin") carries the legacy UUID from install, so older
+# shared client links keep working after an upgrade.
+#
+# Usage:
+#   mubx-users                 interactive menu
+#   mubx-users list
+#   mubx-users add <name> [days]
+#   mubx-users remove <name>
+#   mubx-users usage [name]    per-user traffic from the Xray stats API
+set -Eeuo pipefail
+
+[ "$(id -u)" -eq 0 ] || [ "${MUBX_ALLOW_NON_ROOT:-0}" -eq 1 ] || { echo "[!] Run mubx-users as root." >&2; exit 1; }
+
+if [ -r /usr/local/lib/mubx/common.sh ]; then
+  source /usr/local/lib/mubx/common.sh
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+fi
+
+if [ -r /usr/local/lib/mubx/render.sh ]; then
+  source /usr/local/lib/mubx/render.sh
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/render.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/render.sh"
+fi
+
+if [ -r /usr/local/lib/mubx/subscribe.sh ]; then
+  source /usr/local/lib/mubx/subscribe.sh
+elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/subscribe.sh" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../lib/subscribe.sh"
+fi
+load_mubx_env 2>/dev/null || true
+
+STORE="${MUBX_USERS_FILE:-/etc/mubx/users.json}"
+TPL_DIR="$(cat /etc/mubx/install-root 2>/dev/null || true)"
+[ -d "$TPL_DIR/configs" ] || TPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+[ -d "$TPL_DIR/configs" ] || {
+  echo "[!] MUB-X templates not found under $TPL_DIR; re-run install.sh first." >&2
+  exit 1
+}
+XRAY_CFG=/usr/local/etc/xray/config.json
+NGINX_CFG=/etc/nginx/nginx.conf
+
+store_require() {
+  if [ ! -f "$STORE" ]; then
+    echo "[!] No user store at $STORE; re-run install.sh to seed it." >&2
+    exit 1
+  fi
+}
+
+# Regenerate the Xray, Nginx, and sing-box configs from the current store and reload
+# all services. Every user owns a Shadowsocks WS route (/ss-<user>) in nginx and
+# multi-user TUIC credentials in sing-box, so a store change must keep all in sync.
+# Candidates are validated before live files are swapped; any restart failure
+# rolls all touched configs back atomically.
+reload_xray() {
+  [ "${MUBX_ALLOW_NON_ROOT:-0}" -eq 1 ] && return 0
+  local tmpdir xray_new nginx_new singbox_new singbox_cfg="/etc/sing-box/config.json" has_singbox=0
+  tmpdir="$(mktemp -d)"
+  xray_new="$tmpdir/xray.json"
+  nginx_new="$tmpdir/nginx.conf"
+  singbox_new="$tmpdir/singbox.json"
+
+  if ! mubx_xray_render "$TPL_DIR/configs/xray.json" "$xray_new"; then
+    echo "[!] Failed to render the Xray config." >&2
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  if ! xray run -test -config "$xray_new"; then
+    echo "[!] New Xray config failed validation; nothing was changed." >&2
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  if ! mubx_nginx_render "$TPL_DIR/configs/nginx.conf" "$nginx_new"; then
+    echo "[!] Failed to render the Nginx config." >&2
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  if ! nginx -t -c "$nginx_new" >/dev/null 2>&1; then
+    echo "[!] New Nginx config failed validation; nothing was changed." >&2
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  if [ -f "$singbox_cfg" ] && [ -f "$TPL_DIR/configs/singbox.json" ]; then
+    has_singbox=1
+    if ! mubx_singbox_render "$TPL_DIR/configs/singbox.json" "$singbox_new"; then
+      echo "[!] Failed to render the sing-box config." >&2
+      rm -rf "$tmpdir"
+      return 1
+    fi
+    if command -v sing-box >/dev/null 2>&1; then
+      if ! sing-box check -c "$singbox_new" >/dev/null 2>&1; then
+        echo "[!] New sing-box config failed validation; nothing was changed." >&2
+        rm -rf "$tmpdir"
+        return 1
+      fi
+    fi
+  fi
+
+  cp -a "$XRAY_CFG" "$tmpdir/xray.old"
+  cp -a "$NGINX_CFG" "$tmpdir/nginx.old"
+  cp -a "$xray_new" "$XRAY_CFG"
+  chmod 0600 "$XRAY_CFG"
+  cp -a "$nginx_new" "$NGINX_CFG"
+  if [ "$has_singbox" -eq 1 ]; then
+    cp -a "$singbox_cfg" "$tmpdir/singbox.old"
+    cp -a "$singbox_new" "$singbox_cfg"
+    chmod 0600 "$singbox_cfg"
+  fi
+
+  if ! systemctl restart xray || ! systemctl is-active --quiet xray ||
+     ! systemctl reload nginx; then
+    echo "[!] Service reload failed; rolling back configs." >&2
+    cp -a "$tmpdir/xray.old" "$XRAY_CFG"
+    chmod 0600 "$XRAY_CFG"
+    cp -a "$tmpdir/nginx.old" "$NGINX_CFG"
+    if [ "$has_singbox" -eq 1 ] && [ -f "$tmpdir/singbox.old" ]; then
+      cp -a "$tmpdir/singbox.old" "$singbox_cfg"
+      chmod 0600 "$singbox_cfg"
+      systemctl restart singbox 2>/dev/null || true
+    fi
+    systemctl restart xray || true
+    systemctl reload nginx || true
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  if [ "$has_singbox" -eq 1 ] && systemctl is-active --quiet singbox 2>/dev/null; then
+    systemctl restart singbox 2>/dev/null || true
+  fi
+  rm -rf "$tmpdir"
+}
+
+name_ok() { [[ "$1" =~ ^[a-z_][a-z0-9_-]{2,31}$ ]]; }
+user_exists() { [ "$(jq -r --arg n "$1" '[.[] | select(.name == $n)] | length' "$STORE" 2>/dev/null || printf 0)" -gt 0 ]; }
+
+store_write_backup() { # $1 backup path
+  cp -a "$STORE" "$1"
+}
+
+resolve_name() { # $1 input (number or username) -> prints username
+  local input="$1"
+  if [[ "$input" =~ ^[0-9]+$ ]] && [ "$input" -ge 1 ] && [ -f "$STORE" ]; then
+    local count
+    count="$(jq 'length' "$STORE" 2>/dev/null || echo 0)"
+    if [ "$input" -le "$count" ]; then
+      jq -r --argjson idx "$((input - 1))" '.[$idx].name // empty' "$STORE" 2>/dev/null && return 0
+    fi
+  fi
+  printf '%s' "$input"
+}
+
+cmd_list() {
+  store_require
+  if [ "$(mubx_users_count "$STORE")" -eq 0 ]; then
+    mubx_put "$(printf '  %sNo users configured yet in store.%s' "$C_SLATE" "$C_RESET")"
+    return
+  fi
+  printf '  %s%-5s %-12s %-38s %-9s %-14s %-16s %-10s %s%s\n' "$C_PURPLE" "#" "USERNAME" "UUID" "STATUS" "PROTOCOLS" "EXPIRY" "QUOTA" "CREATED" "$C_RESET"
+  mubx_rule
+  local i=0
+  while IFS=$'\t' read -r n u st p e q a; do
+    [ -n "$n" ] || continue
+    i=$((i + 1))
+    local exp_str="${e:-never}"
+    local exp_col="$C_MINT"
+    if [ "$exp_str" != "never" ] && [ -n "$exp_str" ]; then
+      local exp_ts
+      exp_ts="$(date -d "$exp_str 23:59:59" +%s 2>/dev/null || date -jf '%Y-%m-%d %H:%M:%S' "$exp_str 23:59:59" +%s 2>/dev/null || date -d "$exp_str" +%s 2>/dev/null || echo 0)"
+      if [ "$exp_ts" -gt 0 ]; then
+        local now_ts; now_ts="$(date +%s)"
+        if [ "$exp_ts" -lt "$now_ts" ]; then
+          exp_col="$C_CORAL"
+          exp_str="EXPIRED"
+        else
+          local d_left=$(( (exp_ts - now_ts) / 86400 ))
+          if [ "$d_left" -eq 0 ]; then
+            exp_col="$C_AMBER"
+            exp_str="Today"
+          else
+            exp_col="$C_MINT"
+            exp_str="${exp_str} (${d_left}d)"
+          fi
+        fi
+      fi
+    fi
+    local st_pill
+    if [ "$st" = "frozen" ]; then
+      st_pill="$(printf '%sFROZEN%s' "$C_CORAL" "$C_RESET")"
+    else
+      st_pill="$(printf '%sACTIVE%s' "$C_MINT" "$C_RESET")"
+    fi
+    local q_str="Unlimited"
+    [ "$q" -gt 0 ] 2>/dev/null && q_str="${q} GB"
+    local p_summary="ALL"
+    if declare -F mubx_proto_summary >/dev/null 2>&1; then
+      p_summary="$(mubx_proto_summary "$p")"
+    fi
+    printf '  %s%-5s%s %s%-12s%s %s%-38s%s %-18s %s%-14s%s %s%-16s%s %s%-10s%s %s%s%s\n' \
+      "$C_ELECTRIC" "[$i]" "$C_RESET" \
+      "$C_BRIGHT" "$n" "$C_RESET" \
+      "$C_ELECTRIC" "$u" "$C_RESET" \
+      "$st_pill" \
+      "$C_AMBER" "$p_summary" "$C_RESET" \
+      "$exp_col" "$exp_str" "$C_RESET" \
+      "$C_SLATE" "$q_str" "$C_RESET" \
+      "$C_SLATE" "$a" "$C_RESET"
+  done < <(jq -r '.[] | [.name, .uuid, (.status // "active"), ((.protocols // ["all"])|tojson), (.expiry // ""), ((.quota_gb // 0)|tostring), (.added // "")] | @tsv' "$STORE")
+}
+
+cmd_add() { # $1 name  $2 days (optional)  $3 quota_gb (optional)  $4 protocols (optional)
+  local name="$1" days="${2:-}" quota_gb="${3:-0}" protos_raw="${4:-}" backup new uuid expiry added protos_json
+  store_require
+  name_ok "$name" || { warn "Bad username (3-32 chars, lowercase, [a-z0-9_-])"; return 1; }
+  user_exists "$name" && { warn "User '$name' already exists."; return 1; }
+  uuid="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')"
+  added="$(date -u '+%Y-%m-%d')"
+  expiry=""
+  if [ -n "$days" ]; then
+    [[ "$days" =~ ^[1-9][0-9]*$ ]] || { warn "Days must be a positive integer"; return 1; }
+    expiry="$(date -d "+${days} days" '+%Y-%m-%d' 2>/dev/null || date -v "+${days}d" '+%Y-%m-%d' 2>/dev/null || echo '')"
+  fi
+  [[ "$quota_gb" =~ ^[0-9]+$ ]] || quota_gb=0
+  
+  if [ -n "$protos_raw" ]; then
+    if [[ "$protos_raw" =~ ^\[.*\]$ ]]; then
+      protos_json="$protos_raw"
+    else
+      protos_json="$(mubx_proto_normalize "$protos_raw")"
+    fi
+  else
+    protos_json='["all"]'
+  fi
+
+  backup="$(mktemp)"
+  new="$(mktemp)"
+  store_write_backup "$backup"
+  jq --arg n "$name" --arg u "$uuid" --arg a "$added" --arg e "$expiry" --argjson q "$quota_gb" --argjson p "$protos_json" \
+    '. += [{name: $n, uuid: $u, added: $a, expiry: $e, quota_gb: $q, status: "active", protocols: $p}]' "$STORE" > "$new"
+  install -m 0600 "$new" "$STORE"
+  rm -f "$new"
+  if ! reload_xray; then
+    install -m 0600 "$backup" "$STORE"
+    rm -f "$backup"
+    return 1
+  fi
+  rm -f "$backup"
+  local p_sum; p_sum="$(mubx_proto_summary "$protos_json")"
+  log "User $name provisioned (UUID: $uuid | Protocols: $p_sum | Expires: ${expiry:-never} | Quota: ${quota_gb:-unlimited} GB)"
+  # Publish/refresh subscription files
+  if declare -F mubx_sub_generate >/dev/null 2>&1; then
+    mubx_sub_generate "$name" >/dev/null 2>&1 || true
+  elif [ -r /usr/local/lib/mubx/subscribe.sh ]; then
+    source /usr/local/lib/mubx/subscribe.sh
+    mubx_sub_generate "$name" >/dev/null 2>&1 || true
+  fi
+}
+
+cmd_proto() { # $1 name  $2 protocols (optional)
+  local name="$1" protos_raw="${2:-}" backup new protos_json
+  store_require
+  user_exists "$name" || { warn "User '$name' not found."; return 1; }
+  
+  if [ -z "$protos_raw" ]; then
+    protos_json="$(mubx_proto_picker)"
+  elif [[ "$protos_raw" =~ ^\[.*\]$ ]]; then
+    protos_json="$protos_raw"
+  else
+    protos_json="$(mubx_proto_normalize "$protos_raw")"
+  fi
+
+  backup="$(mktemp)"
+  new="$(mktemp)"
+  store_write_backup "$backup"
+  jq --arg n "$name" --argjson p "$protos_json" \
+    'map(if .name == $n then .protocols = $p else . end)' "$STORE" > "$new"
+  install -m 0600 "$new" "$STORE"
+  rm -f "$new"
+  if ! reload_xray; then
+    install -m 0600 "$backup" "$STORE"
+    rm -f "$backup"
+    return 1
+  fi
+  rm -f "$backup"
+  local p_sum; p_sum="$(mubx_proto_summary "$protos_json")"
+  log "Protocols for $name updated to: $p_sum"
+  if declare -F mubx_sub_generate >/dev/null 2>&1; then
+    mubx_sub_generate "$name" >/dev/null 2>&1 || true
+  elif [ -r /usr/local/lib/mubx/subscribe.sh ]; then
+    source /usr/local/lib/mubx/subscribe.sh
+    mubx_sub_generate "$name" >/dev/null 2>&1 || true
+  fi
+}
+
+cmd_freeze() { # $1 name
+  local name="$1" backup new
+  store_require
+  user_exists "$name" || { warn "User '$name' not found."; return 1; }
+  [ "$name" != "admin" ] || { warn "Cannot freeze admin account."; return 1; }
+  backup="$(mktemp)"
+  new="$(mktemp)"
+  store_write_backup "$backup"
+  jq --arg n "$name" 'map(if .name == $n then .status = "frozen" else . end)' "$STORE" > "$new"
+  install -m 0600 "$new" "$STORE"
+  rm -f "$new"
+  if ! reload_xray; then
+    install -m 0600 "$backup" "$STORE"
+    rm -f "$backup"
+    return 1
+  fi
+  rm -f "$backup"
+  log "User $name FROZEN (traffic disconnected; UUID disabled)."
+}
+
+cmd_unfreeze() { # $1 name
+  local name="$1" backup new
+  store_require
+  user_exists "$name" || { warn "User '$name' not found."; return 1; }
+  backup="$(mktemp)"
+  new="$(mktemp)"
+  store_write_backup "$backup"
+  jq --arg n "$name" 'map(if .name == $n then .status = "active" else . end)' "$STORE" > "$new"
+  install -m 0600 "$new" "$STORE"
+  rm -f "$new"
+  if ! reload_xray; then
+    install -m 0600 "$backup" "$STORE"
+    rm -f "$backup"
+    return 1
+  fi
+  rm -f "$backup"
+  log "User $name UNFROZEN (traffic restored)."
+  if declare -F mubx_sub_generate >/dev/null 2>&1; then
+    mubx_sub_generate "$name" >/dev/null 2>&1 || true
+  elif [ -r /usr/local/lib/mubx/subscribe.sh ]; then
+    source /usr/local/lib/mubx/subscribe.sh
+    mubx_sub_generate "$name" >/dev/null 2>&1 || true
+  fi
+}
+
+cmd_quota() { # $1 name  $2 quota_gb
+  local name="$1" quota_gb="${2:-0}" backup new
+  store_require
+  user_exists "$name" || { warn "User '$name' not found."; return 1; }
+  [[ "$quota_gb" =~ ^[0-9]+$ ]] || { warn "Quota must be a non-negative integer in GB (0 = unlimited)."; return 1; }
+
+  backup="$(mktemp)"
+  new="$(mktemp)"
+  store_write_backup "$backup"
+  jq --arg n "$name" --argjson q "$quota_gb" \
+    'map(if .name == $n then .quota_gb = $q else . end)' "$STORE" > "$new"
+  install -m 0600 "$new" "$STORE"
+  rm -f "$new" "$backup"
+
+  local q_msg="${quota_gb} GB"
+  [ "$quota_gb" -eq 0 ] && q_msg="Unlimited"
+  log "Data quota for $name updated to: $q_msg"
+
+  local status
+  status="$(jq -r --arg n "$name" '.[] | select(.name == $n) | (.status // "active")' "$STORE" 2>/dev/null || echo "active")"
+  if [ "$status" = "frozen" ] && [ -t 0 ]; then
+    printf '  %sUser is currently FROZEN. Unfreeze now? [y/N]: %s' "$C_AMBER" "$C_RESET"
+    local ans
+    read -r ans || ans="n"
+    if [[ "$ans" =~ ^[Yy]$ ]]; then
+      cmd_unfreeze "$name"
+    fi
+  fi
+}
+
+cmd_extend() { # $1 name  $2 days
+  local name="$1" days="${2:-30}" backup new current_exp exp_ts new_exp
+  store_require
+  user_exists "$name" || { warn "User '$name' not found."; return 1; }
+  [[ "$days" =~ ^[1-9][0-9]*$ ]] || { warn "Days must be a positive integer."; return 1; }
+
+  current_exp="$(jq -r --arg n "$name" '.[] | select(.name == $n) | (.expiry // "")' "$STORE" 2>/dev/null || echo "")"
+  local base_ts=0
+  if [ -n "$current_exp" ] && [ "$current_exp" != "never" ]; then
+    exp_ts="$(date -d "$current_exp 23:59:59" +%s 2>/dev/null || date -jf '%Y-%m-%d %H:%M:%S' "$current_exp 23:59:59" +%s 2>/dev/null || date -d "$current_exp" +%s 2>/dev/null || echo 0)"
+    if [ "$exp_ts" -gt "$(date +%s)" ]; then
+      base_ts="$exp_ts"
+    fi
+  fi
+
+  if [ "$base_ts" -gt 0 ]; then
+    new_exp="$(date -d "@$(( base_ts + days * 86400 ))" '+%Y-%m-%d' 2>/dev/null || date -r "$(( base_ts + days * 86400 ))" '+%Y-%m-%d' 2>/dev/null || echo "")"
+  else
+    new_exp="$(date -d "+${days} days" '+%Y-%m-%d' 2>/dev/null || date -v "+${days}d" '+%Y-%m-%d' 2>/dev/null || echo "")"
+  fi
+
+  backup="$(mktemp)"
+  new="$(mktemp)"
+  store_write_backup "$backup"
+  jq --arg n "$name" --arg e "$new_exp" \
+    'map(if .name == $n then .expiry = $e else . end)' "$STORE" > "$new"
+  install -m 0600 "$new" "$STORE"
+  rm -f "$new" "$backup"
+
+  log "Expiration for $name extended by $days days -> $new_exp"
+
+  local status
+  status="$(jq -r --arg n "$name" '.[] | select(.name == $n) | (.status // "active")' "$STORE" 2>/dev/null || echo "active")"
+  if [ "$status" = "frozen" ] && [ -t 0 ]; then
+    printf '  %sUser is currently FROZEN. Unfreeze now? [y/N]: %s' "$C_AMBER" "$C_RESET"
+    local ans
+    read -r ans || ans="n"
+    if [[ "$ans" =~ ^[Yy]$ ]]; then
+      cmd_unfreeze "$name"
+    fi
+  fi
+}
+
+cmd_set_expiry() { # $1 name  $2 expiry_date (YYYY-MM-DD or never)
+  local name="$1" exp_input="${2:-never}" backup new
+  store_require
+  user_exists "$name" || { warn "User '$name' not found."; return 1; }
+
+  local final_exp=""
+  if [ "$exp_input" != "never" ] && [ -n "$exp_input" ]; then
+    if [[ ! "$exp_input" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+      warn "Date format must be YYYY-MM-DD (e.g. 2026-12-31) or 'never'."
+      return 1
+    fi
+    final_exp="$exp_input"
+  fi
+
+  backup="$(mktemp)"
+  new="$(mktemp)"
+  store_write_backup "$backup"
+  jq --arg n "$name" --arg e "$final_exp" \
+    'map(if .name == $n then .expiry = $e else . end)' "$STORE" > "$new"
+  install -m 0600 "$new" "$STORE"
+  rm -f "$new" "$backup"
+
+  log "Expiration date for $name set to: ${final_exp:-never}"
+}
+
+cmd_check() {
+  local quota_bin="/usr/local/bin/mubx-quota"
+  [ -x "$quota_bin" ] || quota_bin="$(dirname "${BASH_SOURCE[0]}")/mubx-quota"
+  if [ -x "$quota_bin" ]; then
+    "$quota_bin" check "$@"
+  else
+    warn "mubx-quota binary not found."
+  fi
+}
+
+cmd_reset_quota() { # $1 name
+  local name="$1" pattern
+  store_require
+  user_exists "$name" || { warn "User '$name' not found."; return 1; }
+  pattern="user>>>${name}@${DOMAIN:-mubx}>>>traffic>>>"
+  xray api statsquery --server=127.0.0.1:10085 --pattern="$pattern" --reset=true >/dev/null 2>&1 || true
+  log "Usage statistics for $name have been reset to 0."
+}
+
+cmd_remove() { # $1 name
+  local name="$1" backup new
+  store_require
+  if ! user_exists "$name"; then
+    printf '  %s↳ No Xray identity found for %s%s\n' "$C_SLATE" "$name" "$C_RESET"
+    return 0
+  fi
+  [ "$name" != "admin" ] || {
+    die "Refusing to remove 'admin' (carries legacy shared identity)."
+  }
+  backup="$(mktemp)"
+  new="$(mktemp)"
+  store_write_backup "$backup"
+  jq --arg n "$name" 'del(.[] | select(.name == $n))' "$STORE" > "$new"
+  install -m 0600 "$new" "$STORE"
+  rm -f "$new"
+  if ! reload_xray; then
+    install -m 0600 "$backup" "$STORE"
+    rm -f "$backup"
+    return 1
+  fi
+  rm -f "$backup"
+  log "User $name revoked; UUID no longer authenticates."
+  tok="$(cat "${MUBX_SUB_TOKEN_DIR:-/etc/mubx/sub-tokens}/$name" 2>/dev/null || true)"
+  [ -z "$tok" ] || rm -rf "${MUBX_SUB_DIR:-/var/www/mubx-sub}/$tok"
+  rm -f "${MUBX_SUB_TOKEN_DIR:-/etc/mubx/sub-tokens}/$name" "${MUBX_SS2022_DIR:-/etc/mubx/ss2022-keys}/$name"
+}
+
+cmd_usage() { # $1 name (optional)
+  store_require
+  local name="${1:-}" pattern out
+  if [ -z "$name" ]; then
+    mubx_box_top "XRAY TRAFFIC & QUOTA TELEMETRY" "ALL USERS"
+    jq -r '.[].name' "$STORE" | while read -r n; do
+      cmd_usage "$n"
+    done
+    mubx_box_bot
+    return
+  fi
+  user_exists "$name" || { warn "User '$name' does not exist."; return 1; }
+  
+  local up_val=0 down_val=0 total_val=0 quota_gb=0 status="active"
+  status="$(jq -r --arg n "$name" '.[] | select(.name == $n) | (.status // "active")' "$STORE" 2>/dev/null || echo "active")"
+  quota_gb="$(jq -r --arg n "$name" '.[] | select(.name == $n) | (.quota_gb // 0)' "$STORE" 2>/dev/null || echo 0)"
+
+  query_stat() {
+    local pat="$1" res="" attempts=0
+    while [ "$attempts" -lt 3 ]; do
+      res="$(xray api statsquery --server=127.0.0.1:10085 --pattern="$pat" 2>/dev/null || true)"
+      if [ -n "$res" ]; then
+        local val
+        val="$(printf '%s\n' "$res" | jq -r '.stat[]? | select(.name == $p) | .value' --arg p "$pat" 2>/dev/null | head -n 1 || echo 0)"
+        if [ -n "$val" ] && [ "$val" != "null" ]; then
+          echo "$val"
+          return
+        fi
+      fi
+      attempts=$(( attempts + 1 ))
+      [ "$attempts" -lt 3 ] && sleep 0.2
+    done
+    echo 0
+  }
+
+  up_val="$(query_stat "user>>>${name}@${DOMAIN:-mubx}>>>traffic>>>uplink")"
+  [ -n "$up_val" ] && [ "$up_val" != "null" ] || up_val=0
+
+  down_val="$(query_stat "user>>>${name}@${DOMAIN:-mubx}>>>traffic>>>downlink")"
+  [ -n "$down_val" ] && [ "$down_val" != "null" ] || down_val=0
+  
+  total_val=$(( up_val + down_val ))
+
+  fmt_bytes() {
+    local b="${1:-0}"
+    if [ "$b" -ge 1073741824 ]; then
+      LC_ALL=C awk -v b="$b" 'BEGIN {printf "%.2f GB", b/1073741824}'
+    elif [ "$b" -ge 1048576 ]; then
+      LC_ALL=C awk -v b="$b" 'BEGIN {printf "%.2f MB", b/1048576}'
+    elif [ "$b" -ge 1024 ]; then
+      LC_ALL=C awk -v b="$b" 'BEGIN {printf "%.2f KB", b/1024}'
+    else
+      printf '%d B' "$b"
+    fi
+  }
+
+  local right_str=""
+  if [ "$quota_gb" -gt 0 ]; then
+    local quota_bytes=$(( quota_gb * 1073741824 ))
+    local pct=$(( (total_val * 100) / quota_bytes ))
+    local bar; bar="$(mubx_bar "$pct" 10)"
+    if [ "$status" = "frozen" ]; then
+      right_str="$(printf '%s %s/%d GB %s(FROZEN)%s' "$bar" "$(fmt_bytes "$total_val")" "$quota_gb" "$C_CORAL" "$C_RESET")"
+    else
+      right_str="$(printf '%s %s/%d GB (%d%%)' "$bar" "$(fmt_bytes "$total_val")" "$quota_gb" "$pct")"
+    fi
+  else
+    right_str="$(printf '▲ %-8s  ▼ %-8s %s(Unlimited)%s' "$(fmt_bytes "$up_val")" "$(fmt_bytes "$down_val")" "$C_SLATE" "$C_RESET")"
+  fi
+
+  mubx_put "$(printf '  %s%-12s%s %s' "$C_BRIGHT" "$name" "$C_RESET" "$right_str")"
+}
+
+interactive() {
+  local action input name days quota
+  while true; do
+    mubx_clear
+    mubx_box_top "MUB-X IDENTITY STORE" "USERS & QUOTAS"
+    mubx_kvrow "Store Path" "$STORE"
+    mubx_kvrow "User Count" "$(mubx_users_count "$STORE")"
+    mubx_box_bot
+    printf '\n'
+    
+    cmd_list
+    printf '\n  %s[a]%s Add   %s[e]%s Extend Expiry   %s[g]%s Set Quota   %s[p]%s Protocols   %s[r]%s Remove\n  %s[f]%s Freeze   %s[u]%s Unfreeze   %s[s]%s Stats   %s[c]%s Check Watchdog   %s[z]%s Reset   %s[q]%s Exit\n\n' \
+      "$C_ELECTRIC" "$C_RESET" "$C_AMBER" "$C_RESET" "$C_PURPLE" "$C_RESET" "$C_ELECTRIC" "$C_RESET" "$C_CORAL" "$C_RESET" \
+      "$C_CORAL" "$C_RESET" "$C_MINT" "$C_RESET" "$C_ELECTRIC" "$C_RESET" "$C_MINT" "$C_RESET" "$C_SLATE" "$C_RESET" "$C_SLATE" "$C_RESET"
+    printf '  %s❯%s ' "$C_ELECTRIC" "$C_RESET"
+    read -r action || break
+    local act_lower
+    act_lower="$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')"
+    case "$act_lower" in
+      a|add)
+        printf '  Username: '
+        read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
+        printf '  Expiry days (blank = never): '
+        read -r days
+        printf '  Data quota in GB (0 = unlimited): '
+        read -r quota
+        local protos_choice='["all"]'
+        if declare -F mubx_proto_picker >/dev/null 2>&1; then
+          protos_choice="$(mubx_proto_picker)"
+        fi
+        mubx_with_users_lock cmd_add "$name" "$days" "$quota" "$protos_choice" || true
+        ;;
+      e|extend|expiry)
+        printf '  Username or # to extend or set expiry: '
+        read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
+        name="$(resolve_name "$name")"
+        printf '  Action: [1] Add days  [2] Set explicit date (YYYY-MM-DD)  [3] Remove expiry (never) [1]: '
+        local exp_act
+        read -r exp_act || exp_act="1"
+        case "${exp_act:-1}" in
+          1)
+            printf '  Number of days to extend: '
+            local add_d
+            read -r add_d || add_d="30"
+            mubx_with_users_lock cmd_extend "$name" "$add_d" || true
+            ;;
+          2)
+            printf '  Expiration date (YYYY-MM-DD): '
+            local set_d
+            read -r set_d
+            mubx_with_users_lock cmd_set_expiry "$name" "$set_d" || true
+            ;;
+          3)
+            mubx_with_users_lock cmd_set_expiry "$name" "never" || true
+            ;;
+        esac
+        ;;
+      g|quota)
+        printf '  Username or # to set data quota: '
+        read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
+        printf '  Data quota in GB (0 = unlimited): '
+        local set_q
+        read -r set_q || set_q="0"
+        mubx_with_users_lock cmd_quota "$(resolve_name "$name")" "$set_q" || true
+        ;;
+      c|check)
+        printf '\n'
+        cmd_check || true
+        ;;
+      p|proto|protocols)
+        printf '  Username or # to configure protocols: '
+        read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
+        mubx_with_users_lock cmd_proto "$(resolve_name "$name")" || true
+        ;;
+      r|remove)
+        printf '  Username or # to remove: '
+        read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
+        mubx_with_users_lock cmd_remove "$(resolve_name "$name")" || true
+        ;;
+      f|freeze)
+        printf '  Username or # to freeze: '
+        read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
+        mubx_with_users_lock cmd_freeze "$(resolve_name "$name")" || true
+        ;;
+      u|unfreeze)
+        printf '  Username or # to unfreeze: '
+        read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
+        mubx_with_users_lock cmd_unfreeze "$(resolve_name "$name")" || true
+        ;;
+      s|stats|usage)
+        printf '  Username or # for stats (blank for all): '
+        read -r name
+        if [ -n "$name" ]; then
+          name="$(resolve_name "$name")"
+        fi
+        printf '\n'
+        cmd_usage "$name" || true
+        ;;
+      z|reset)
+        printf '  Username or # to reset usage stats: '
+        read -r name
+        [ -n "$name" ] || { warn "Username cannot be empty."; continue; }
+        mubx_with_users_lock cmd_reset_quota "$(resolve_name "$name")" || true
+        ;;
+      q|quit|0) exit 0 ;;
+    esac
+    if [ -t 0 ]; then
+      printf '\n'
+      read -r -p "  Press Enter to continue... " _ || true
+    fi
+  done
+}
+
+cmd="${1:-interactive}"
+case "$cmd" in
+  list) cmd_list ;;
+  add) mubx_with_users_lock cmd_add "${2:?usage: mubx-users add <name> [days] [quota_gb] [protocols]}" "${3:-}" "${4:-0}" "${5:-all}" ;;
+  quota) mubx_with_users_lock cmd_quota "${2:?usage: mubx-users quota <name> <gb>}" "${3:-0}" ;;
+  extend) mubx_with_users_lock cmd_extend "${2:?usage: mubx-users extend <name> [days]}" "${3:-30}" ;;
+  set-expiry|expiry) mubx_with_users_lock cmd_set_expiry "${2:?usage: mubx-users set-expiry <name> <date|never>}" "${3:-never}" ;;
+  check) cmd_check "${@:2}" ;;
+  proto|protocols) mubx_with_users_lock cmd_proto "${2:?usage: mubx-users proto <name> [protocols]}" "${3:-}" ;;
+  remove) mubx_with_users_lock cmd_remove "${2:?usage: mubx-users remove <name>}" ;;
+  freeze) mubx_with_users_lock cmd_freeze "${2:?usage: mubx-users freeze <name>}" ;;
+  unfreeze) mubx_with_users_lock cmd_unfreeze "${2:?usage: mubx-users unfreeze <name>}" ;;
+  reset-quota|reset) mubx_with_users_lock cmd_reset_quota "${2:?usage: mubx-users reset-quota <name>}" ;;
+  usage|stats) mubx_with_users_lock cmd_usage "${2:-}" ;;
+  interactive) interactive ;;
+  *) echo "Unknown command: $cmd (use list/add/quota/extend/set-expiry/check/proto/remove/freeze/unfreeze/reset-quota/usage)" >&2; exit 1 ;;
+esac
+
+
