@@ -26,9 +26,12 @@ for svc in "${SERVICES[@]}"; do systemctl is-active --quiet "$svc" 2>/dev/null &
 saved_list="$BK/manifest"
 backup_path() { local path="$1"; [ -e "$path" ] || [ -L "$path" ] || return 0; install -d -m 0755 "$BK$(dirname "$path")"; cp -aP "$path" "$BK$path"; printf '%s\n' "$path" >> "$saved_list"; }
 restore_activity() { local svc; for svc in "${SERVICES[@]}"; do systemctl cat "$svc.service" >/dev/null 2>&1 || continue; if [ "${was_active[$svc]}" -eq 1 ]; then systemctl start "$svc" || true; else systemctl stop "$svc" 2>/dev/null || true; fi; done; }
-stage_bin() { local src="$1" dst="/usr/local/bin/$(basename "$src")"; install -m 0755 "$src" "$dst.tmp.$$"; mv -f "$dst.tmp.$$" "$dst"; }
+stage_bin() { local src="$1" dst="/usr/local/bin/$(basename "$src")" tmp; tmp="$(mktemp "${dst}.XXXXXX")"; install -m 0755 "$src" "$tmp"; mv -f -- "$tmp" "$dst"; }
 update_success=0
-on_exit() { local status=$?; if [ "$update_success" -eq 0 ]; then echo "[!] Update failed; restoring the previous files and service state." >&2; if [ -f "$saved_list" ]; then while IFS= read -r path; do [ -n "$path" ] || continue; [ -e "$BK$path" ] || [ -L "$BK$path" ] || continue; install -d -m 0755 "$(dirname "$path")" 2>/dev/null || true; rm -f "$path"; cp -aP "$BK$path" "$path" 2>/dev/null || true; done < "$saved_list"; fi; systemctl daemon-reload || true; restore_activity; fi; exit "$status"; }
+OLD_HEAD="$(git -C "$ROOT" rev-parse HEAD)"
+OLD_BRANCH="$(git -C "$ROOT" symbolic-ref --short -q HEAD || true)"
+STASH_CREATED=0
+on_exit() { local status=$?; if [ "$update_success" -eq 0 ]; then echo "[!] Update failed; restoring the previous files and service state." >&2; if [ -f "$saved_list" ]; then while IFS= read -r path; do [ -n "$path" ] || continue; [ -e "$BK$path" ] || [ -L "$BK$path" ] || continue; install -d -m 0755 "$(dirname "$path")" 2>/dev/null || true; rm -f -- "$path"; cp -aP "$BK$path" "$path" 2>/dev/null || true; done < "$saved_list"; fi; git -C "$ROOT" reset --hard "$OLD_HEAD" 2>/dev/null || true; if [ -n "$OLD_BRANCH" ]; then git -C "$ROOT" checkout -B "$OLD_BRANCH" "$OLD_HEAD" 2>/dev/null || true; else git -C "$ROOT" checkout --detach "$OLD_HEAD" 2>/dev/null || true; fi; systemctl daemon-reload || true; restore_activity; fi; exit "$status"; }
 trap on_exit EXIT
 FORCE_UPDATE=0
 for arg in "$@"; do case "$arg" in --force|-f) FORCE_UPDATE=1 ;; -h|--help) echo "Usage: mubx-update [--force|-f]"; exit 0 ;; esac; done
@@ -40,22 +43,24 @@ if [ -e "$ROOT/.git/index.lock" ]; then
     exit 1
   fi
   echo "[*] Removing stale git index lock."
-  rm -f "$ROOT/.git/index.lock"
+  rm -f -- "$ROOT/.git/index.lock"
 fi
-timeout 25 git -C "$ROOT" fetch origin main
-git -C "$ROOT" checkout -B main origin/main
-if ! git -C "$ROOT" diff --quiet 2>/dev/null || ! git -C "$ROOT" diff --cached --quiet 2>/dev/null; then
+if ! git -C "$ROOT" diff --quiet 2>/dev/null || ! git -C "$ROOT" diff --cached --quiet 2>/dev/null || [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
   if [ "$FORCE_UPDATE" -eq 1 ]; then
     printf '%s[!]%s Local modifications detected; creating stash before reset.\n' "$C_CORAL" "$C_RESET"
     git -C "$ROOT" stash push -u -m "mubx-update-backup-$(date +%s)"
+    STASH_CREATED=1
   else
     printf '%s[!]%s Uncommitted local changes detected in %s.\n' "$C_CORAL" "$C_RESET" "$ROOT" >&2
     echo "    Re-run with --force to overwrite them." >&2
     exit 1
   fi
 fi
+timeout 25 git -C "$ROOT" fetch origin main
+git -C "$ROOT" checkout -B main origin/main
 git -C "$ROOT" reset --hard origin/main
-ls -dt /etc/mubx/update-backups/* 2>/dev/null | tail -n +4 | xargs rm -rf 2>/dev/null || true
+mapfile -t old_backups < <(find /etc/mubx/update-backups -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk 'NR > 3 {sub(/^[^ ]+ /,""); print}')
+for dir in "${old_backups[@]}"; do [ -n "$dir" ] && rm -rf -- "$dir"; done
 for f in "$ROOT"/bin/*; do [ -f "$f" ] || continue; backup_path "/usr/local/bin/$(basename "$f")"; done
 for f in "$ROOT"/lib/*.sh; do [ -f "$f" ] || continue; backup_path "/usr/local/lib/mubx/$(basename "$f")"; done
 for f in "$ROOT"/systemd/*.service "$ROOT"/systemd/*.timer; do [ -f "$f" ] || continue; backup_path "/etc/systemd/system/$(basename "$f")"; done
@@ -76,7 +81,7 @@ source ./lib/render.sh
 [ ! -r "$ROOT/lib/subscribe.sh" ] || source "$ROOT/lib/subscribe.sh"
 mubx_users_seed
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"; on_exit' EXIT
+trap 'rm -rf -- "$tmp"; on_exit' EXIT
 mubx_xray_render configs/xray.json "$tmp/xray.json"
 mubx_haproxy_render configs/haproxy.cfg "$tmp/haproxy.cfg"
 mubx_nginx_render configs/nginx.conf "$tmp/nginx.conf"
@@ -91,7 +96,7 @@ install -m 0644 "$tmp/haproxy.cfg" /etc/haproxy/haproxy.cfg
 install -m 0644 "$tmp/nginx.conf" /etc/nginx/nginx.conf
 if [ -s "$tmp/singbox.json" ]; then install -d -m 0755 /etc/sing-box; install -m 0600 "$tmp/singbox.json" /etc/sing-box/config.json; fi
 if [ -s "$tmp/hysteria.yaml" ] && [ -d /etc/hysteria ]; then install -m 0600 "$tmp/hysteria.yaml" /etc/hysteria/config.yaml; fi
-rm -rf "$tmp"
+rm -rf -- "$tmp"
 if [ ! -s /etc/mubx/myip ]; then myip="$(curl -4 -fsS --max-time 2 https://ifconfig.me 2>/dev/null || curl -4 -fsS --max-time 2 https://api.ipify.org 2>/dev/null || true)"; [ -n "$myip" ] && printf '%s\n' "$myip" > /etc/mubx/myip; fi
 if [ -r "$ROOT/lib/subscribe.sh" ] && [ -f /etc/mubx/users.json ]; then source "$ROOT/lib/subscribe.sh"; load_mubx_env 2>/dev/null || true; while IFS= read -r sub_user; do [ -n "$sub_user" ] || continue; mubx_sub_generate "$sub_user" >/dev/null; done < <(jq -r '.[].name' /etc/mubx/users.json); fi
 if [ -d "$ROOT/systemd" ]; then install -m 0644 "$ROOT"/systemd/*.service /etc/systemd/system/; install -m 0644 "$ROOT"/systemd/*.timer /etc/systemd/system/ 2>/dev/null || true; systemctl daemon-reload; fi
