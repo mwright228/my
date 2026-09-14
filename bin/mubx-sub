@@ -9,18 +9,36 @@ if [ -r /usr/local/lib/mubx/common.sh ]; then
   source /usr/local/lib/mubx/common.sh
   source /usr/local/lib/mubx/render.sh
   source /usr/local/lib/mubx/subscribe.sh
-elif [ -r "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" ]; then
+else
   source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
   source "$(dirname "${BASH_SOURCE[0]}")/../lib/render.sh"
   source "$(dirname "${BASH_SOURCE[0]}")/../lib/subscribe.sh"
 fi
 load_mubx_env 2>/dev/null || true
 
+TX_ACTIVE=0
+if [ "${MUBX_USERS_TX_ACTIVE:-0}" != "1" ]; then
+  if [ -r /usr/local/lib/mubx/mubx-transaction.sh ]; then
+    source /usr/local/lib/mubx/mubx-transaction.sh
+  else
+    source "$(dirname "${BASH_SOURCE[0]}")/../lib/mubx-transaction.sh"
+  fi
+  mubx_tx_begin sub
+  mubx_tx_snapshot_tree "${MUBX_SUB_DIR:-/var/www/mubx-sub}"
+  mubx_tx_snapshot_tree "${MUBX_SS2022_DIR:-/etc/mubx/ss2022-keys}"
+  mubx_tx_snapshot_tree "${MUBX_SUB_TOKEN_DIR:-/etc/mubx/sub-tokens}"
+  TX_ACTIVE=1
+  sub_tx_exit() {
+    local status=$?
+    if [ "$status" -eq 0 ]; then mubx_tx_commit; else mubx_tx_abort || true; fi
+    exit "$status"
+  }
+  trap sub_tx_exit EXIT
+fi
+
 STORE="${MUBX_USERS_FILE:-/etc/mubx/users.json}"
 
-nginx_has_sub_location() {
-  grep -q 'location /sub/' /etc/nginx/nginx.conf 2>/dev/null
-}
+nginx_has_sub_location() { grep -q 'location /sub/' /etc/nginx/nginx.conf 2>/dev/null; }
 
 show_user_sub() {
   local name="$1" url token
@@ -29,11 +47,11 @@ show_user_sub() {
   printf '  %s%-14s%s %s%s%s\n' "$C_BRIGHT" "$name" "$C_RESET" "$C_ELECTRIC" "$url" "$C_RESET"
   if [ -n "$token" ] && [ -n "${DOMAIN:-}" ]; then
     if mubx_user_has_proto "$name" "openvpn"; then
-      printf '  %s%-14s%s %s↳ OpenVPN TCP (1194):%s https://%s/sub/%s/openvpn-tcp.ovpn\n' "" "" "" "$C_SLATE" "$C_RESET" "$DOMAIN" "$token"
-      printf '  %s%-14s%s %s↳ OpenVPN UDP (2200):%s https://%s/sub/%s/openvpn-udp.ovpn\n' "" "" "" "$C_SLATE" "$C_RESET" "$DOMAIN" "$token"
+      printf '  %s↳ OpenVPN TCP (1194):%s https://%s/sub/%s/openvpn-tcp.ovpn\n' "$C_SLATE" "$C_RESET" "$DOMAIN" "$token"
+      printf '  %s↳ OpenVPN UDP (2200):%s https://%s/sub/%s/openvpn-udp.ovpn\n' "$C_SLATE" "$C_RESET" "$DOMAIN" "$token"
     fi
     if mubx_user_has_proto "$name" "wireguard"; then
-      printf '  %s%-14s%s %s↳ WireGuard (51820): %s https://%s/sub/%s/wireguard.conf\n' "" "" "" "$C_SLATE" "$C_RESET" "$DOMAIN" "$token"
+      printf '  %s↳ WireGuard (51820):%s https://%s/sub/%s/wireguard.conf\n' "$C_SLATE" "$C_RESET" "$DOMAIN" "$token"
     fi
   fi
 }
@@ -46,16 +64,10 @@ printf '\n'
 
 case "${1:-}" in
   '')
-    if [ ! -f "$STORE" ]; then
-      warn "No user store at $STORE; nothing to publish."
-      exit 1
-    fi
+    [ -f "$STORE" ] || { warn "No user store at $STORE; nothing to publish."; exit 1; }
     printf '  %s%-14s %s%s\n' "$C_PURPLE" "ACCOUNT" "UNIVERSAL BASE64 / CLASH / SING-BOX SUBSCRIPTION URL" "$C_RESET"
     mubx_rule
-    while IFS= read -r name; do
-      [ -n "$name" ] || continue
-      show_user_sub "$name"
-    done < <(jq -r '.[].name' "$STORE")
+    while IFS= read -r name; do [ -n "$name" ] || continue; show_user_sub "$name"; done < <(jq -r '.[].name' "$STORE")
     ;;
   help|-h|--help)
     echo "Usage: mubx-sub [user]"
@@ -63,10 +75,7 @@ case "${1:-}" in
     echo "  With no argument, every user in the store is regenerated."
     ;;
   *)
-    if [ ! -f "$STORE" ]; then
-      warn "No user store at $STORE; nothing to publish."
-      exit 1
-    fi
+    [ -f "$STORE" ] || { warn "No user store at $STORE; nothing to publish."; exit 1; }
     show_user_sub "$1"
     ;;
 esac
@@ -76,4 +85,3 @@ if ! nginx_has_sub_location; then
   warn "nginx.conf lacks the /sub/ location - run mubx-update to re-render."
 fi
 printf '\n'
-
