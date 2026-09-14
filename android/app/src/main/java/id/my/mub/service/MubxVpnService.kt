@@ -156,7 +156,7 @@ class MubxVpnService : VpnService() {
 
     private suspend fun cleanupResources() { withContext(NonCancellable) { lifecycleMutex.withLock { cleanupResourcesLocked() } } }
 
-    private fun cleanupResourcesLocked() {
+    private suspend fun cleanupResourcesLocked() {
         try { NativeCoreBridge.stopTunRouter(); NativeCoreBridge.stopTunnel(); vpnInterface.getAndSet(null)?.let { runCatching { it.close() } } }
         catch (e: Throwable) { LogRepository.log("VPN", "Cleanup error: ${e.message}", LogLevel.WARN) }
     }
