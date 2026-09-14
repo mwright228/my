@@ -9,14 +9,13 @@ SERVICES=(haproxy nginx xray dropbear wstunnel hysteria zivpn singbox mubx-chame
 source "$ROOT/lib/common.sh"
 source "$ROOT/lib/mubx-transaction.sh"
 
+unit_name(){ case "$1" in *.timer|*.service) printf '%s' "$1";; *) printf '%s.service' "$1";; esac; }
 usage(){ echo "Usage: mubx-update [--force|-f]"; }
 FORCE=0
 for arg in "$@"; do case "$arg" in --force|-f) FORCE=1;; -h|--help) usage; exit 0;; *) echo "[!] Unknown option: $arg" >&2; usage >&2; exit 2;; esac; done
-
 canonical_repo_url(){ printf '%s\n' "$1" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#^[^/@]*@##' -e 's#\.git$##' -e 's#/$##'; }
 origin="$(git -C "$ROOT" remote get-url origin 2>/dev/null || true)"
 [ "$(canonical_repo_url "$origin")" = "$(canonical_repo_url "$REPO_URL")" ] || { echo "[!] Refusing update: origin does not match $REPO_URL." >&2; exit 1; }
-
 if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
   [ "$FORCE" -eq 1 ] || { echo "[!] Local changes detected; commit them or rerun with --force." >&2; exit 1; }
   git -C "$ROOT" stash push -u -m "mubx-update-backup-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -45,8 +44,7 @@ mubx_tx_snapshot_tree /etc/mubx/sub-tokens
 for path in /usr/local/etc/xray/config.json /etc/haproxy/haproxy.cfg /etc/nginx/nginx.conf /etc/sing-box/config.json /etc/hysteria/config.yaml /etc/mubx/domain /usr/local/etc/xray/domain /usr/local/bin/reality-fronts /usr/local/lib/mubx/reality-build.sh /etc/systemd/system/dnstt.service /usr/local/bin/dnstt-server /usr/local/bin/dnstt-client /etc/dnstt/dnstt.priv /etc/dnstt/dnstt.pub /etc/squid/squid.conf; do mubx_tx_snapshot "$path"; done
 
 TMP="$(mktemp -d)"
-cleanup(){ rm -rf -- "$TMP"; }
-trap cleanup EXIT
+trap 'rm -rf -- "$TMP"' EXIT
 failed=1
 rollback(){
   local status=$?
@@ -110,7 +108,8 @@ fi
 
 for svc in "${SERVICES[@]}"; do
   [ "${was_active[$svc]}" -eq 1 ] || continue
-  systemctl cat "$svc.service" >/dev/null 2>&1 || continue
+  unit="$(unit_name "$svc")"
+  systemctl cat "$unit" >/dev/null 2>&1 || continue
   timeout 10 systemctl restart "$svc" >/dev/null
   systemctl is-active --quiet "$svc"
 done
