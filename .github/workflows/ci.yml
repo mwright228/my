@@ -50,7 +50,7 @@ jobs:
       - name: Lint shell scripts with shellcheck
         run: |
           scripts=()
-          for f in install.sh bin/* lib/*.sh; do
+          for f in install.sh bin/* lib/*.sh tests/*.sh; do
             [ -f "$f" ] || continue
             if file "$f" | grep -qE 'ELF|Mach-O|binary' && ! file "$f" | grep -q 'text'; then
               continue
@@ -75,8 +75,19 @@ jobs:
       - name: Run Go vet
         run: go vet ./...
 
+      - name: Run Go staticcheck
+        run: |
+          go run honnef.co/go/tools/cmd/staticcheck@v0.6.1 ./...
+
       - name: Run Go race tests
         run: go test -race ./src/tbrutal/...
+
+      - name: Compile all supported Linux architectures
+        run: |
+          GOOS=linux GOARCH=amd64 go build ./...
+          GOOS=linux GOARCH=arm64 go build ./...
+          GOOS=linux GOARCH=arm GOARM=7 go build ./...
+          GOOS=linux GOARCH=386 go build ./...
 
       - name: Run Go vulnerability scan
         run: |
@@ -85,6 +96,11 @@ jobs:
 
       - name: Run unit tests with pytest
         run: pytest -v tests/
+
+      - name: Run transaction regression tests
+        run: |
+          chmod +x tests/mubx-transaction-test.sh
+          tests/mubx-transaction-test.sh
 
       - name: Run comprehensive repository checks
         run: bash .github/ci-check.sh
