@@ -12,6 +12,10 @@ if [ "${MUBX_USERS_TX_ACTIVE:-0}" != "1" ]; then
   if declare -F mubx_tx_begin >/dev/null 2>&1; then
     export MUBX_USERS_TX_ACTIVE=1
     mubx_tx_begin users || exit $?
+    mubx_tx_snapshot "${MUBX_USERS_FILE:-/etc/mubx/users.json}"
+    mubx_tx_snapshot_tree "${MUBX_SUB_DIR:-/var/www/mubx-sub}"
+    mubx_tx_snapshot_tree "${MUBX_SS2022_DIR:-/etc/mubx/ss2022-keys}"
+    mubx_tx_snapshot_tree "${MUBX_SUB_TOKEN_DIR:-/etc/mubx/sub-tokens}"
   fi
 fi
 
@@ -20,24 +24,13 @@ mubx_users_atomic_install() {
   while [ "$#" -gt 0 ]; do
     arg="$1"
     case "$arg" in
-      -m)
-        [ "$#" -ge 2 ] || { echo "[!] install -m requires a mode." >&2; return 1; }
-        mode="$2"; shift 2 ;;
-      --mode=*)
-        mode="${arg#--mode=}"; shift ;;
-      -D|-v|-b|-C|-p|-s)
-        shift ;;
-      -o|-g|-t)
-        [ "$#" -ge 2 ] || { echo "[!] install option $arg requires an argument." >&2; return 1; }
-        shift 2 ;;
-      --)
-        shift
-        while [ "$#" -gt 0 ]; do src="$dst"; dst="$1"; shift; done
-        ;;
-      -*)
-        shift ;;
-      *)
-        src="$dst"; dst="$arg"; shift ;;
+      -m) [ "$#" -ge 2 ] || { echo "[!] install -m requires a mode." >&2; return 1; }; mode="$2"; shift 2 ;;
+      --mode=*) mode="${arg#--mode=}"; shift ;;
+      -D|-v|-b|-C|-p|-s) shift ;;
+      -o|-g|-t) [ "$#" -ge 2 ] || { echo "[!] install option $arg requires an argument." >&2; return 1; }; shift 2 ;;
+      --) shift; while [ "$#" -gt 0 ]; do src="$dst"; dst="$1"; shift; done ;;
+      -*) shift ;;
+      *) src="$dst"; dst="$arg"; shift ;;
     esac
   done
   [ -n "$src" ] && [ -n "$dst" ] || { echo "[!] Invalid install invocation for user-store transaction." >&2; return 1; }
@@ -81,8 +74,6 @@ cp() {
         command cp "$@"
       fi
       ;;
-    *)
-      command cp "$@"
-      ;;
+    *) command cp "$@" ;;
   esac
 }
