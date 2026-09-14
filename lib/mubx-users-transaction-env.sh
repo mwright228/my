@@ -2,13 +2,9 @@
 # BASH_ENV hook used only by mubx-users-legacy.
 # Bash reads BASH_ENV for non-interactive scripts before executing the script.
 
-# Serialize the entire user mutation, including config rendering/reload, so two
-# concurrent add/remove/proto operations cannot overwrite each other's state.
 if [ "${MUBX_USERS_TX_ACTIVE:-0}" != "1" ]; then
   _MUBX_TX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   if [ -r "$_MUBX_TX_ROOT/mubx-transaction.sh" ]; then
-    # The installed hook lives beside the transaction helper in the repository;
-    # production installs copy both to /usr/local/lib/mubx.
     source "$_MUBX_TX_ROOT/mubx-transaction.sh"
   elif [ -r /usr/local/lib/mubx/mubx-transaction.sh ]; then
     source /usr/local/lib/mubx/mubx-transaction.sh
@@ -26,58 +22,33 @@ mubx_users_atomic_install() {
     case "$arg" in
       -m)
         [ "$#" -ge 2 ] || { echo "[!] install -m requires a mode." >&2; return 1; }
-        mode="$2"
-        shift 2
-        ;;
+        mode="$2"; shift 2 ;;
       --mode=*)
-        mode="${arg#--mode=}"
-        shift
-        ;;
+        mode="${arg#--mode=}"; shift ;;
       -D|-v|-b|-C|-p|-s)
-        shift
-        ;;
+        shift ;;
       -o|-g|-t)
-        # These options consume a following argument. The users store is always
-        # root-owned in production, so only parsing is needed here.
         [ "$#" -ge 2 ] || { echo "[!] install option $arg requires an argument." >&2; return 1; }
-        shift 2
-        ;;
+        shift 2 ;;
       --)
         shift
-        while [ "$#" -gt 0 ]; do
-          src="$dst"
-          dst="$1"
-          shift
-        done
+        while [ "$#" -gt 0 ]; do src="$dst"; dst="$1"; shift; done
         ;;
       -*)
-        shift
-        ;;
+        shift ;;
       *)
-        src="$dst"
-        dst="$arg"
-        shift
-        ;;
+        src="$dst"; dst="$arg"; shift ;;
     esac
   done
-
-  [ -n "$src" ] && [ -n "$dst" ] || {
-    echo "[!] Invalid install invocation for user-store transaction." >&2
-    return 1
-  }
+  [ -n "$src" ] && [ -n "$dst" ] || { echo "[!] Invalid install invocation for user-store transaction." >&2; return 1; }
   [ -f "$src" ] || { echo "[!] User-store source missing: $src" >&2; return 1; }
-
   dir="$(dirname -- "$dst")"
   command install -d -m 0700 -- "$dir"
   tmp="$(mktemp "$dir/.users.json.XXXXXX")"
   cleanup() { rm -f -- "$tmp"; }
   trap cleanup RETURN
-
   command install -m "$mode" -- "$src" "$tmp"
-  command jq empty "$tmp" >/dev/null 2>&1 || {
-    echo "[!] Refusing to activate invalid users JSON." >&2
-    return 1
-  }
+  command jq empty "$tmp" >/dev/null 2>&1 || { echo "[!] Refusing to activate invalid users JSON." >&2; return 1; }
   command sync -f "$tmp"
   command mv -f -- "$tmp" "$dst"
   command sync -d "$dir"
@@ -94,13 +65,12 @@ install() {
   command install "$@"
 }
 
-# Make legacy reload_xray's live-file cp operations atomic without changing its
-# backup copies. Only exact production config destinations are intercepted.
 cp() {
   local argc="$#" dst="" src="" mode="0600"
+  local -a args=("$@")
   [ "$argc" -ge 2 ] || { command cp "$@"; return $?; }
-  dst="${!argc}"
-  src="${!((argc-1))}"
+  dst="${args[$((argc - 1))]}"
+  src="${args[$((argc - 2))]}"
   case "$dst" in
     /usr/local/etc/xray/config.json|/etc/nginx/nginx.conf|/etc/sing-box/config.json)
       [ -f "$src" ] || { echo "[!] Atomic config source missing: $src" >&2; return 1; }
