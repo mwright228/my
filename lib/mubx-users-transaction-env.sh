@@ -2,6 +2,23 @@
 # BASH_ENV hook used only by mubx-users-legacy.
 # Bash reads BASH_ENV for non-interactive scripts before executing the script.
 
+# Serialize the entire user mutation, including config rendering/reload, so two
+# concurrent add/remove/proto operations cannot overwrite each other's state.
+if [ "${MUBX_USERS_TX_ACTIVE:-0}" != "1" ]; then
+  _MUBX_TX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [ -r "$_MUBX_TX_ROOT/mubx-transaction.sh" ]; then
+    # The installed hook lives beside the transaction helper in the repository;
+    # production installs copy both to /usr/local/lib/mubx.
+    source "$_MUBX_TX_ROOT/mubx-transaction.sh"
+  elif [ -r /usr/local/lib/mubx/mubx-transaction.sh ]; then
+    source /usr/local/lib/mubx/mubx-transaction.sh
+  fi
+  if declare -F mubx_tx_begin >/dev/null 2>&1; then
+    export MUBX_USERS_TX_ACTIVE=1
+    mubx_tx_begin users || exit $?
+  fi
+fi
+
 mubx_users_atomic_install() {
   local mode="0600" dir tmp src="" dst="" arg
   while [ "$#" -gt 0 ]; do
@@ -15,6 +32,15 @@ mubx_users_atomic_install() {
       --mode=*)
         mode="${arg#--mode=}"
         shift
+        ;;
+      -D|-v|-b|-C|-p|-s)
+        shift
+        ;;
+      -o|-g|-t)
+        # These options consume a following argument. The users store is always
+        # root-owned in production, so only parsing is needed here.
+        [ "$#" -ge 2 ] || { echo "[!] install option $arg requires an argument." >&2; return 1; }
+        shift 2
         ;;
       --)
         shift
@@ -66,4 +92,27 @@ install() {
     return $?
   fi
   command install "$@"
+}
+
+# Make legacy reload_xray's live-file cp operations atomic without changing its
+# backup copies. Only exact production config destinations are intercepted.
+cp() {
+  local argc="$#" dst="" src="" mode="0600"
+  [ "$argc" -ge 2 ] || { command cp "$@"; return $?; }
+  dst="${!argc}"
+  src="${!((argc-1))}"
+  case "$dst" in
+    /usr/local/etc/xray/config.json|/etc/nginx/nginx.conf|/etc/sing-box/config.json)
+      [ -f "$src" ] || { echo "[!] Atomic config source missing: $src" >&2; return 1; }
+      [ -e "$dst" ] && mode="$(stat -c '%a' -- "$dst" 2>/dev/null || printf '0600')"
+      if declare -F mubx_tx_atomic_install >/dev/null 2>&1; then
+        mubx_tx_atomic_install "$src" "$dst" "$mode"
+      else
+        command cp "$@"
+      fi
+      ;;
+    *)
+      command cp "$@"
+      ;;
+  esac
 }
