@@ -51,6 +51,27 @@ android {
     }
 }
 
+// libmubxcore.so (the Go-based VPN/protocol engine, JNI-bridged via
+// NativeCoreBridge.kt) is not built by Gradle/AGP itself — it's cross-compiled
+// separately with the Android NDK + Go/CGO. Historically that step was a
+// manual, undocumented prerequisite: skipping it produces an app that installs
+// and looks fine but where every "Connect" attempt fails with "Native VPN core
+// is unavailable", because System.loadLibrary("mubxcore") has nothing to load.
+// Wiring it into preBuild means a normal `./gradlew assembleDebug` either
+// produces a working native core or fails loudly with an actionable message,
+// instead of silently shipping a VPN app that can't VPN.
+// build-native.sh itself decides whether to skip (MUBX_SKIP_NATIVE_BUILD=1)
+// or fail loudly (missing NDK/Go) — this task just makes sure it always runs.
+val buildNativeCore by tasks.registering(Exec::class) {
+    description = "Cross-compiles libmubxcore.so via ../build-native.sh"
+    workingDir = rootDir
+    commandLine("bash", "build-native.sh")
+}
+
+tasks.named("preBuild") {
+    dependsOn(buildNativeCore)
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

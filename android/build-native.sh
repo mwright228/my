@@ -22,11 +22,30 @@ if [[ -z "$NDK_PATH" ]]; then
 fi
 
 if [[ -z "$NDK_PATH" || ! -d "$NDK_PATH" ]]; then
-    echo "[!] WARNING: ANDROID_NDK_HOME not found in environment."
-    echo "[!] Please set ANDROID_NDK_HOME or install NDK via Android Studio SDK Manager."
-    echo "[!] Architecture scaffolding is complete and ready."
-    echo "[!] Example: export ANDROID_NDK_HOME=\$HOME/Library/Android/sdk/ndk/27.1.12297006"
-    exit 0
+    echo "[!] ERROR: ANDROID_NDK_HOME not found in environment." >&2
+    echo "[!] Please set ANDROID_NDK_HOME or install NDK via Android Studio SDK Manager." >&2
+    echo "[!] Example: export ANDROID_NDK_HOME=\$HOME/Library/Android/sdk/ndk/27.1.12297006" >&2
+    echo "[!] Without this, libmubxcore.so is never built and the app installs" >&2
+    echo "[!] fine but every VPN connection attempt fails with 'Native VPN core" >&2
+    echo "[!] is unavailable' — there is no separate broken feature to chase," >&2
+    echo "[!] the native core itself was never compiled." >&2
+    echo "[!] To intentionally skip this (UI-only work), set MUBX_SKIP_NATIVE_BUILD=1." >&2
+    if [[ "${MUBX_SKIP_NATIVE_BUILD:-0}" == "1" ]]; then
+        echo "[!] MUBX_SKIP_NATIVE_BUILD=1 set — continuing without a native core." >&2
+        exit 0
+    fi
+    exit 1
+fi
+
+if ! command -v go >/dev/null 2>&1; then
+    echo "[!] ERROR: 'go' is not on PATH — Go 1.22+ is required to cross-compile" >&2
+    echo "[!] libmubxcore.so from src/tbrutal/bridge/cmd/libmubxcore." >&2
+    echo "[!] Install Go, or set MUBX_SKIP_NATIVE_BUILD=1 to skip (UI-only work)." >&2
+    if [[ "${MUBX_SKIP_NATIVE_BUILD:-0}" == "1" ]]; then
+        echo "[!] MUBX_SKIP_NATIVE_BUILD=1 set — continuing without a native core." >&2
+        exit 0
+    fi
+    exit 1
 fi
 
 echo "[*] Using NDK at: $NDK_PATH"
