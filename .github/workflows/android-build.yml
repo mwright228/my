@@ -75,7 +75,8 @@ jobs:
             - **Authentic Camouflage**: Opens as a genuine, local note-taking app with search, markdown notes, and local storage.
             - **Discreet Unlock**: Long-press "QuickNotes" title or tap "Cloud Sync & Backup" to reveal the proxy controls.
             - **Minimalist One-Button UI**: Clean status card, large Start/Stop switch, and 1-tap clipboard import.
-            - **Every MUB-X Protocol Supported**: Native client dialers for VLESS (WS & TCP), Trojan, VMess, Shadowsocks, SSH HTTP Custom, ZiVPN UDP, and T-Brutal.
+            - **Protocols**: native client dialers for VLESS (WS, HTTPUpgrade, xHTTP, gRPC, TCP), VMess, Trojan, Shadowsocks (raw TCP, WS plugin, and SS-2022), ShadowTLS v3, Hysteria 2, TUIC v5, Chameleon HTTP CONNECT, the SSH/HTTP injector, and T-Brutal.
+            - **Not yet wired**: ZivPN (the client does not speak the server's password handshake), plus AmneziaWG, WireGuard and OpenVPN, which are full-tunnel protocols this SOCKS5-based core does not carry.
             - **DNS-over-Tunnel**: Resolves hostnames through the encrypted proxy tunnel, solving "connected but no internet" on restricted mobile networks.
           files: QuickNotes.apk
         env:

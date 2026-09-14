@@ -7,6 +7,13 @@ import java.util.Locale
 enum class ProtocolType(val displayName: String, val badge: String) {
     VLESS_WS("VLESS (WebSocket)", "CDN / TLS"),
     VLESS_TCP("VLESS (Direct TCP)", "Direct TLS"),
+    VLESS_HTTPUPGRADE("VLESS (HTTPUpgrade)", "HTTP Upgrade"),
+    VLESS_XHTTP("VLESS (xHTTP)", "xHTTP"),
+    VLESS_GRPC("VLESS (gRPC)", "gRPC"),
+    VMESS_WS("VMess (WebSocket)", "VMess AEAD"),
+    TROJAN_WS("Trojan (WebSocket)", "Trojan TLS"),
+    TUIC("TUIC v5", "QUIC / UDP"),
+    CHAMELEON_HTTP("Chameleon HTTP Proxy", "HTTP CONNECT"),
     SHADOWSOCKS_2022("Shadowsocks", "AEAD Cipher"),
     ZIVPN_UDP("ZiVPN (UDP Custom)", "UDP Obfuscation"),
     SSH_PAYLOAD("SSH / HTTP Injector", "Payload Injection"),

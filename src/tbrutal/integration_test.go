@@ -60,6 +60,9 @@ func TestEndToEndProxy(t *testing.T) {
 		ListenAddr: serverLn.Addr().String(),
 		UsersFile:  usersFile,
 		RateMbps:   0,
+		// The echo target lives on loopback, which the default SSRF guard
+		// rejects; relax it only for this end-to-end proxy test.
+		AllowLocalTargets: true,
 	})
 
 	go func() {
@@ -191,6 +194,9 @@ func TestEndToEndProxyRawSNI(t *testing.T) {
 		ListenAddr: serverLn.Addr().String(),
 		UsersFile:  usersFile,
 		RateMbps:   0,
+		// The echo target lives on loopback, which the default SSRF guard
+		// rejects; relax it only for this end-to-end proxy test.
+		AllowLocalTargets: true,
 	})
 
 	go func() {

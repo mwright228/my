@@ -38,11 +38,30 @@ fun WardenXrayEditor(
                 ProtocolType.SHADOWSOCKS_2022 -> "Shadowsocks"
                 ProtocolType.T_BRUTAL -> "T-Brutal"
                 ProtocolType.SHADOWTLS_V3 -> "ShadowTLS"
+                ProtocolType.VMESS_WS -> "VMess"
+                ProtocolType.TROJAN_WS -> "Trojan"
+                ProtocolType.TUIC -> "TUIC"
+                ProtocolType.CHAMELEON_HTTP -> "Chameleon"
                 else -> "VLESS"
             }
         )
     }
-    var transport by remember { mutableStateOf(if (initialProfile?.protocol == ProtocolType.VLESS_TCP) "TCP" else "WS") }
+    var transport by remember {
+        mutableStateOf(
+            when (initialProfile?.protocol) {
+                ProtocolType.VLESS_GRPC -> "gRPC"
+                ProtocolType.VLESS_XHTTP -> "XHTTP"
+                ProtocolType.VLESS_HTTPUPGRADE -> "HTTPUpgrade"
+                ProtocolType.VLESS_TCP -> "TCP"
+                else -> "WS"
+            }
+        )
+    }
+    // NOTE: the Chameleon case below only ever reads back a profile created
+    // elsewhere (subscription import / config editor) so re-saving from this
+    // Xray-focused editor cannot silently rewrite it as VLESS. Chameleon is
+    // deliberately not offered in `protocols` because its credentials are
+    // Proxy-Authorization user:secret, not an Xray transport.
     var security by remember { mutableStateOf(if (initialProfile?.serverPort == 443 || initialProfile?.serverPort == 8443) "TLS" else "None") }
 
     var remarks by remember { mutableStateOf(initialProfile?.name ?: "warden-new-profile") }
@@ -65,9 +84,9 @@ fun WardenXrayEditor(
         )
     }
 
-    val protocols = listOf("VLESS", "VMess", "Trojan", "Shadowsocks", "T-Brutal", "ShadowTLS")
-    val transports = listOf("TCP", "WS", "gRPC", "HTTP/2", "XHTTP", "mKCP")
-    val securities = listOf("Reality", "TLS", "AnyTLS", "None")
+    val protocols = listOf("VLESS", "VMess", "Trojan", "Shadowsocks", "T-Brutal", "ShadowTLS", "TUIC")
+    val transports = listOf("WS", "HTTPUpgrade", "XHTTP", "gRPC", "TCP")
+    val securities = listOf("TLS", "None")
 
     Dialog(
         onDismissRequest = onClose,
@@ -215,10 +234,19 @@ fun WardenXrayEditor(
                     onClick = {
                         val portInt = port.toIntOrNull() ?: 443
                         val pType = when (protocol) {
+                            "VMess" -> ProtocolType.VMESS_WS
+                            "Trojan" -> ProtocolType.TROJAN_WS
                             "T-Brutal" -> ProtocolType.T_BRUTAL
                             "ShadowTLS" -> ProtocolType.SHADOWTLS_V3
                             "Shadowsocks" -> ProtocolType.SHADOWSOCKS_2022
-                            else -> if (transport == "WS") ProtocolType.VLESS_WS else ProtocolType.VLESS_TCP
+                            "Chameleon" -> ProtocolType.CHAMELEON_HTTP
+                            else -> when (transport) {
+                                "gRPC" -> ProtocolType.VLESS_GRPC
+                                "XHTTP" -> ProtocolType.VLESS_XHTTP
+                                "HTTPUpgrade" -> ProtocolType.VLESS_HTTPUPGRADE
+                                "TCP" -> ProtocolType.VLESS_TCP
+                                else -> ProtocolType.VLESS_WS
+                            }
                         }
                         val prof = (initialProfile ?: VpnProfile()).copy(
                             name = remarks.ifBlank { "warden-profile" },
@@ -228,7 +256,15 @@ fun WardenXrayEditor(
                             protocol = pType,
                             userUUID = if (protocol == "Shadowsocks" || protocol == "ShadowTLS") password.trim() else uuid.trim(),
                             bugHostSNI = sni.trim(),
-                            wsPath = if (protocol == "T-Brutal") path.trim().ifBlank { "/tbrutal" } else path.trim(),
+                            wsPath = when (protocol) {
+                                "T-Brutal" -> path.trim().ifBlank { "/tbrutal" }
+                                "VMess" -> path.trim().ifBlank { "/vmess-ws" }
+                                "Trojan" -> path.trim().ifBlank { "/trojan-ws" }
+                                else -> if (transport == "HTTPUpgrade") path.trim().ifBlank { "/vless-httpupgrade" }
+                                else if (transport == "XHTTP") path.trim().ifBlank { "/vless-xhttp" }
+                                else if (transport == "gRPC") path.trim().ifBlank { "/vless-grpc" }
+                                else path.trim()
+                            },
                             wsHost = hostHeader.trim(),
                             vlessFlow = flow.trim(),
                             ssCipher = method.trim(),

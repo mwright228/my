@@ -200,11 +200,23 @@ func (uc *UniversalClient) handleSocksConnection(clientConn net.Conn) {
 	<-errChan
 }
 
+// bufferedConn is a net.Conn whose reads come from a reader that may already
+// hold tunnel bytes captured while parsing a handshake response off the wire.
+// Returning the raw conn there would silently drop those bytes.
+type bufferedConn struct {
+	net.Conn
+	reader io.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
+
 // dialUpstream connects to the server and executes the appropriate protocol handshake.
 func (uc *UniversalClient) dialUpstream(atyp byte, targetHost string, targetPort uint16, rawAddr []byte) (net.Conn, error) {
 	proto := strings.ToUpper(strings.TrimSpace(uc.cfg.Protocol))
 
 	switch {
+	case strings.Contains(proto, "CHAMELEON") || strings.Contains(proto, "HTTP_PROXY") || strings.Contains(proto, "HTTPPROXY"):
+		return uc.dialChameleon(targetHost, targetPort)
 	case strings.Contains(proto, "VLESS"):
 		return uc.dialVLESS(atyp, targetHost, targetPort, rawAddr)
 	case strings.Contains(proto, "TROJAN"):
@@ -215,6 +227,61 @@ func (uc *UniversalClient) dialUpstream(atyp byte, targetHost string, targetPort
 		// Default to VLESS / Direct SOCKS
 		return uc.dialVLESS(atyp, targetHost, targetPort, rawAddr)
 	}
+}
+
+// dialChameleon opens an authenticated HTTP CONNECT tunnel through the MUBX
+// Chameleon universal payload proxy (public ports 8080 / 3128 / 8888).
+// Chameleon only relays to an external host when the request carries
+// Proxy-Authorization: Basic <base64(user:uuid)> validated against the server's
+// user store; without it the proxy answers 407 for any non-local target.
+func (uc *UniversalClient) dialChameleon(targetHost string, targetPort uint16) (net.Conn, error) {
+	serverAddr := uc.cfg.ServerAddr
+	if !hasPort(serverAddr) {
+		serverAddr = net.JoinHostPort(serverAddr, "8080")
+	}
+
+	user, pass := parseSSHUserPass(uc.cfg.Token)
+	target := net.JoinHostPort(targetHost, fmt.Sprintf("%d", targetPort))
+
+	conn, err := uc.dialPhysical(serverAddr)
+	if err != nil {
+		return nil, fmt.Errorf("chameleon dial %s failed: %w", serverAddr, err)
+	}
+
+	auth := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+	req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\n"+
+		"Host: %s\r\n"+
+		"Proxy-Authorization: Basic %s\r\n"+
+		"Proxy-Connection: Keep-Alive\r\n"+
+		"User-Agent: Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36\r\n"+
+		"\r\n", target, target, auth)
+
+	if _, err := conn.Write([]byte(req)); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("chameleon CONNECT write failed: %w", err)
+	}
+
+	reader := bufio.NewReader(conn)
+	statusLine, err := reader.ReadString('\n')
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("chameleon CONNECT response failed: %w", err)
+	}
+	if !strings.Contains(statusLine, " 200") &&
+		!strings.Contains(strings.ToLower(statusLine), "established") {
+		_ = conn.Close()
+		return nil, fmt.Errorf("chameleon proxy refused CONNECT to %s: %s", target, strings.TrimSpace(statusLine))
+	}
+
+	// Drain the response headers up to the blank line.
+	for {
+		line, rErr := reader.ReadString('\n')
+		if rErr != nil || strings.TrimSpace(line) == "" {
+			break
+		}
+	}
+
+	return &bufferedConn{Conn: conn, reader: reader}, nil
 }
 
 var physDnsCache sync.Map // host -> IP string
@@ -587,7 +654,7 @@ func (uc *UniversalClient) getSSHClient() (*ssh.Client, error) {
 				break
 			}
 		}
-		underlyingConn = rawConn
+		underlyingConn = &bufferedConn{Conn: rawConn, reader: reader}
 	}
 
 	c, chans, reqs, err := ssh.NewClientConn(underlyingConn, serverAddr, sshConfig)

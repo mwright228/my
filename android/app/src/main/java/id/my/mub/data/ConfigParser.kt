@@ -166,13 +166,25 @@ object ConfigParser {
             val type = uri.getQueryParameter("type") ?: "tcp"
             val fragment = uri.fragment ?: "MUBX-VLESS"
 
-            val proto = if (type.contains("ws", ignoreCase = true)) {
-                ProtocolType.VLESS_WS
-            } else {
-                ProtocolType.VLESS_TCP
+            // Each server-rendered VLESS transport maps to its own protocol so
+            // the native engine builds the matching outbound instead of
+            // defaulting every non-WS link to a plain TCP session.
+            val proto = when {
+                type.contains("httpupgrade", ignoreCase = true) -> ProtocolType.VLESS_HTTPUPGRADE
+                type.contains("xhttp", ignoreCase = true) -> ProtocolType.VLESS_XHTTP
+                type.contains("grpc", ignoreCase = true) -> ProtocolType.VLESS_GRPC
+                type.contains("ws", ignoreCase = true) -> ProtocolType.VLESS_WS
+                else -> ProtocolType.VLESS_TCP
             }
 
-            val path = uri.getQueryParameter("path") ?: "/vless-ws"
+            // gRPC links carry the service name instead of a path.
+            val serviceName = uri.getQueryParameter("serviceName") ?: uri.getQueryParameter("servicename")
+            val defaultPath = if (proto == ProtocolType.VLESS_GRPC) {
+                "/${serviceName?.takeIf { it.isNotBlank() } ?: "vless-grpc"}"
+            } else {
+                "/vless-ws"
+            }
+            val path = uri.getQueryParameter("path") ?: defaultPath
             val headerHost = uri.getQueryParameter("host") ?: ""
             val flow = uri.getQueryParameter("flow") ?: "none"
             val insecureParam = uri.getQueryParameter("allowInsecure") ?: uri.getQueryParameter("insecure")
@@ -212,6 +224,8 @@ object ConfigParser {
             val id = json.optString("id", "")
             val sni = json.optString("sni", json.optString("host", add))
             val ps = json.optString("ps", "MUBX-VMess")
+            val wsPath = json.optString("path").ifBlank { "/vmess-ws" }
+            val wsHost = json.optString("host", add)
             val allowInsecure = json.optBoolean("insecure", false) || (sni.isNotBlank() && !sni.equals(add, ignoreCase = true))
 
             VpnProfile(
@@ -221,9 +235,13 @@ object ConfigParser {
                 serverPort = port,
                 bugHostSNI = sni,
                 userUUID = id,
-                protocol = ProtocolType.VLESS_WS,
+                // A VMess URI used to be stored as VLESS, so the native engine
+                // built a VLESS outbound that the VMess inbound always rejected.
+                protocol = ProtocolType.VMESS_WS,
                 poolConcurrency = 2,
                 brutalRateMbps = 0,
+                wsPath = wsPath,
+                wsHost = wsHost,
                 allowInsecureTLS = allowInsecure
             )
         } catch (e: Exception) {
@@ -253,9 +271,13 @@ object ConfigParser {
                 serverPort = port,
                 bugHostSNI = sni,
                 userUUID = pass,
-                protocol = ProtocolType.VLESS_TCP,
+                // Trojan used to be stored as VLESS, so the engine never spoke
+                // the Trojan handshake the server's trojan-ws inbound expects.
+                protocol = ProtocolType.TROJAN_WS,
                 poolConcurrency = 2,
                 brutalRateMbps = 0,
+                wsPath = uri.getQueryParameter("path") ?: "/trojan-ws",
+                wsHost = uri.getQueryParameter("host") ?: host,
                 allowInsecureTLS = allowInsecure
             )
         } catch (e: Exception) {
@@ -355,7 +377,8 @@ object ConfigParser {
                 serverPort = port,
                 bugHostSNI = sni,
                 userUUID = userInfo.substringBefore(":"),
-                protocol = ProtocolType.HYSTERIA_2,
+                udpObfsPassword = userInfo.substringAfter(":", ""),
+                protocol = ProtocolType.TUIC,
                 poolConcurrency = 4,
                 brutalRateMbps = 100
             )
@@ -370,6 +393,13 @@ object ConfigParser {
             val host = uri.host ?: ""
             val port = if (uri.port > 0) uri.port else 8080
             val fragment = uri.fragment ?: "MUBX-Chameleon"
+            // Chameleon links carry "<user>:<uuid>" credentials which the proxy
+            // validates as Proxy-Authorization: Basic before it relays
+            // anything off-box. This used to be stored as SSH, so the app sent
+            // an SSH handshake at an HTTP proxy.
+            val credentials = uri.userInfo ?: ""
+            val user = credentials.substringBefore(":")
+            val secret = credentials.substringAfter(":", "")
 
             VpnProfile(
                 name = fragment,
@@ -377,8 +407,10 @@ object ConfigParser {
                 serverIp = host,
                 serverPort = port,
                 bugHostSNI = "",
-                userUUID = uri.userInfo ?: "",
-                protocol = ProtocolType.SSH_PAYLOAD,
+                userUUID = secret,
+                sshUser = user,
+                sshPassword = secret,
+                protocol = ProtocolType.CHAMELEON_HTTP,
                 poolConcurrency = 2,
                 brutalRateMbps = 40
             )

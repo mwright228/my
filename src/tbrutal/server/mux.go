@@ -26,6 +26,7 @@ type Session struct {
 	conn       net.Conn
 	authStore  *auth.Store
 	pacer      *pacer.Pacer
+	allowLocal bool
 	writeMu    sync.Mutex
 	streamsMu  sync.RWMutex
 	streams    map[uint32]*Stream
@@ -33,13 +34,17 @@ type Session struct {
 	closeChan  chan struct{}
 }
 
-func NewSession(conn net.Conn, authStore *auth.Store, p *pacer.Pacer) *Session {
+// NewSession builds a multiplexed session. allowLocal relaxes the destination
+// policy so loopback/private targets are reachable (test-only; see
+// server.Config.AllowLocalTargets).
+func NewSession(conn net.Conn, authStore *auth.Store, p *pacer.Pacer, allowLocal bool) *Session {
 	return &Session{
-		conn:      conn,
-		authStore: authStore,
-		pacer:     p,
-		streams:   make(map[uint32]*Stream),
-		closeChan: make(chan struct{}),
+		conn:       conn,
+		authStore:  authStore,
+		pacer:      p,
+		allowLocal: allowLocal,
+		streams:    make(map[uint32]*Stream),
+		closeChan:  make(chan struct{}),
 	}
 }
 
@@ -103,13 +108,13 @@ func isBlockedIP(ip net.IP) bool {
 		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
 }
 
-func resolvePublicTarget(host string, port uint16) (string, error) {
+func resolveTarget(host string, port uint16, allowLocal bool) (string, error) {
 	if host == "" || port == 0 {
 		return "", fmt.Errorf("invalid target")
 	}
 
 	if ip := net.ParseIP(host); ip != nil {
-		if isBlockedIP(ip) {
+		if !allowLocal && isBlockedIP(ip) {
 			return "", fmt.Errorf("target address is not allowed")
 		}
 		return net.JoinHostPort(ip.String(), fmt.Sprintf("%d", port)), nil
@@ -123,7 +128,7 @@ func resolvePublicTarget(host string, port uint16) (string, error) {
 	}
 
 	for _, ip := range ips {
-		if !isBlockedIP(ip) {
+		if allowLocal || !isBlockedIP(ip) {
 			// Dial the validated address rather than the original hostname so a
 			// private/loopback DNS answer cannot be selected by a later re-resolution.
 			return net.JoinHostPort(ip.String(), fmt.Sprintf("%d", port)), nil
@@ -166,7 +171,7 @@ func (s *Session) handleConnect(frame *protocol.Frame) {
 	}
 	s.streamsMu.Unlock()
 
-	target, err := resolvePublicTarget(host, port)
+	target, err := resolveTarget(host, port, s.allowLocal)
 	if err != nil {
 		resp, _ := protocol.NewFrame(protocol.CmdConnectResp, frame.StreamID, []byte{protocol.RespDialFailed})
 		_ = s.sendFrame(resp)

@@ -536,6 +536,52 @@ assert (h, p, ic) == ("127.0.0.1", 2222, True), (h, p, ic)
 print("  Chameleon payload parser OK (split, front-inject, CONNECT, HTTP URL, IPv6, X-Target, local-normalizer, carrier-defaults)")
 PY
 
+say "Go core (build, vet, tests)"
+# The Android JNI shim (src/tbrutal/bridge/cmd/libmubxcore) needs the NDK
+# headers and is built by android/build-native.sh; every other package is
+# host-buildable and must pass here.
+if ! command -v go >/dev/null 2>&1; then
+  echo "  (go toolchain not installed; skipping)"
+else
+  # The embedded sing-box in src/tbrutal/bridge links via //go:linkname to
+  # net.errNoSuchInterface, which Go >= 1.23 removed, so the bridge *test
+  # binary* only links on the release android-build.yml already pins for the
+  # APK. Override with MUBX_GO_TOOLCHAIN to test against a different release.
+  go_toolchain="${MUBX_GO_TOOLCHAIN:-go1.22.12}"
+  if GOTOOLCHAIN="$go_toolchain" go version >/dev/null 2>&1; then
+    go_run() { GOTOOLCHAIN="$go_toolchain" go "$@"; }
+  else
+    echo "  (GOTOOLCHAIN=$go_toolchain unavailable; using the local go toolchain)"
+    go_run() { go "$@"; }
+  fi
+
+  go_pkgs="$(go_run list ./src/... 2>/dev/null | grep -v '/cmd/libmubxcore$' || true)"
+  # ./src/tbrutal holds only the end-to-end integration test, so it can be
+  # tested but has nothing for `go build` to compile.
+  build_pkgs="$(go_run list -f '{{if .GoFiles}}{{.ImportPath}}{{end}}' ./src/... 2>/dev/null |
+    grep -v '/cmd/libmubxcore$' | grep . || true)"
+  if [ -z "$go_pkgs" ] || [ -z "$build_pkgs" ]; then
+    echo "go list ./src/... produced no packages"
+    fail=1
+  else
+    go_run build $build_pkgs || fail=1
+    go_run vet $go_pkgs || fail=1
+    go_test_out="$(go_run test $go_pkgs 2>&1)"
+    go_test_rc=$?
+    printf '%s\n' "$go_test_out" | grep -E '^(ok|FAIL|---|\?)' || true
+    if [ "$go_test_rc" -ne 0 ]; then
+      if printf '%s' "$go_test_out" | grep -q 'invalid reference to net\.'; then
+        echo "  (bridge test binary needs Go 1.22; skipping its tests on this toolchain)"
+        for pkg in ./src/tbrutal ./src/tbrutal/auth ./src/tbrutal/pacer ./src/tbrutal/protocol; do
+          go_run test "$pkg" || fail=1
+        done
+      else
+        fail=1
+      fi
+    fi
+  fi
+fi
+
 say "Unit test suite (tests/)"
 if ! python3 -m unittest discover tests/ -v; then
   echo "UNIT TESTS FAILED"

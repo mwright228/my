@@ -69,21 +69,38 @@ object NativeCoreBridge {
             }
             val effectiveSni = if (profile.bugHostSNI.isNotBlank()) profile.bugHostSNI else profile.serverHost
             val effectiveHostHeader = if (profile.wsHost.isNotBlank()) profile.wsHost else profile.serverHost
-            val effectiveToken = if (profile.protocol == id.my.mub.data.ProtocolType.SHADOWSOCKS_2022 || profile.protocol == id.my.mub.data.ProtocolType.SHADOWTLS_V3) {
-                profile.userUUID
-            } else if (profile.protocol == id.my.mub.data.ProtocolType.SSH_PAYLOAD) {
-                "${profile.sshUser}:${profile.sshPassword}"
-            } else {
-                profile.userUUID
+            val effectiveToken = when (profile.protocol) {
+                id.my.mub.data.ProtocolType.SHADOWSOCKS_2022,
+                id.my.mub.data.ProtocolType.SHADOWTLS_V3 -> profile.userUUID
+                // SSH and Chameleon both authenticate with "user:secret".
+                id.my.mub.data.ProtocolType.SSH_PAYLOAD,
+                id.my.mub.data.ProtocolType.CHAMELEON_HTTP -> "${profile.sshUser}:${profile.sshPassword}"
+                else -> profile.userUUID
             }
 
             val isRawMode = profile.protocol == id.my.mub.data.ProtocolType.T_BRUTAL &&
                     (profile.customPayload.equals("raw", ignoreCase = true) || profile.wsPath.equals("raw", ignoreCase = true))
 
+            // The WS-family transports all carry their route in the link, so a
+            // blank path falls back to the route the matching server inbound
+            // answers on. Shadowsocks keeps its v2ray-plugin route (or none at
+            // all for raw SS), and ShadowTLS passes its SS-2022 cipher here.
             val effectivePayload = when (profile.protocol) {
                 id.my.mub.data.ProtocolType.SHADOWTLS_V3 -> profile.ssCipher.ifBlank { "2022-blake3-aes-256-gcm" }
-                id.my.mub.data.ProtocolType.T_BRUTAL -> if (profile.wsPath.isNotBlank()) profile.wsPath else if (profile.customPayload.isNotBlank()) profile.customPayload else "/tbrutal"
-                id.my.mub.data.ProtocolType.VLESS_WS -> if (profile.wsPath.isNotBlank()) profile.wsPath else if (profile.customPayload.isNotBlank()) profile.customPayload else "/vless-ws"
+                id.my.mub.data.ProtocolType.T_BRUTAL ->
+                    profile.wsPath.ifBlank { profile.customPayload }.ifBlank { "/tbrutal" }
+                id.my.mub.data.ProtocolType.VLESS_WS ->
+                    profile.wsPath.ifBlank { profile.customPayload }.ifBlank { "/vless-ws" }
+                id.my.mub.data.ProtocolType.VLESS_HTTPUPGRADE ->
+                    profile.wsPath.ifBlank { profile.customPayload }.ifBlank { "/vless-httpupgrade" }
+                id.my.mub.data.ProtocolType.VLESS_XHTTP ->
+                    profile.wsPath.ifBlank { profile.customPayload }.ifBlank { "/vless-xhttp" }
+                id.my.mub.data.ProtocolType.VLESS_GRPC ->
+                    profile.wsPath.ifBlank { profile.customPayload }.ifBlank { "/vless-grpc" }
+                id.my.mub.data.ProtocolType.VMESS_WS ->
+                    profile.wsPath.ifBlank { profile.customPayload }.ifBlank { "/vmess-ws" }
+                id.my.mub.data.ProtocolType.TROJAN_WS ->
+                    profile.wsPath.ifBlank { profile.customPayload }.ifBlank { "/trojan-ws" }
                 else -> profile.customPayload
             }
 

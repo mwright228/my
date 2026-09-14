@@ -158,24 +158,31 @@ func (c *SingBoxClient) Start() (int, error) {
 		insecure = true
 	}
 
-	path := c.cfg.Path
-	if path == "" && c.cfg.CustomPayload != "" && strings.HasPrefix(c.cfg.CustomPayload, "/") {
-		path = c.cfg.CustomPayload
+	// rawPath is the path the link actually carried. Shadowsocks WS links put
+	// their v2ray-plugin route here (/ss-<user> or /ss22-<user>); raw-SS links
+	// carry none and must stay free of any WebSocket transport.
+	rawPath := c.cfg.Path
+	if rawPath == "" && strings.HasPrefix(c.cfg.CustomPayload, "/") {
+		rawPath = c.cfg.CustomPayload
 	}
+	if rawPath != "" && !strings.HasPrefix(rawPath, "/") {
+		rawPath = "/" + rawPath
+	}
+
+	// VLESS-family transports need a concrete path; the server's WS inbound
+	// answers on /vless-ws.
+	path := rawPath
 	if path == "" {
 		path = "/vless-ws"
 	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
 
-	protoUpper := strings.ToUpper(strings.TrimSpace(c.cfg.Protocol))
+	proto := strings.ToUpper(strings.TrimSpace(c.cfg.Protocol))
 
 	// 3. Build outbound configuration
 	var outboundsList []map[string]any
 
-	switch {
-	case strings.Contains(protoUpper, "SHADOWTLS") || strings.Contains(protoUpper, "STLS"):
+	switch proto {
+	case "SHADOWTLS_V3":
 		stlsPass := c.cfg.ObfsKey
 		if stlsPass == "" {
 			stlsPass = c.cfg.Token
@@ -211,7 +218,7 @@ func (c *SingBoxClient) Start() (int, error) {
 			},
 		}
 
-	case strings.Contains(protoUpper, "HYSTERIA2") || strings.Contains(protoUpper, "HYSTERIA_2"):
+	case "HYSTERIA_2":
 		rate := c.cfg.RateMbps
 		if rate <= 0 {
 			rate = 50
@@ -236,7 +243,7 @@ func (c *SingBoxClient) Start() (int, error) {
 			},
 		}
 
-	case strings.Contains(protoUpper, "TUIC"):
+	case "TUIC":
 		outboundsList = []map[string]any{
 			{
 				"type":               "tuic",
@@ -254,23 +261,29 @@ func (c *SingBoxClient) Start() (int, error) {
 			},
 		}
 
-	case strings.Contains(protoUpper, "SHADOWSOCKS") || protoUpper == "SS" || strings.HasPrefix(protoUpper, "SS_") || strings.HasPrefix(protoUpper, "SHADOWSOCKS"):
+	case "SHADOWSOCKS_2022":
 		cipher := c.cfg.ObfsKey
 		if cipher == "" {
-			cipher = "2022-blake3-aes-128-gcm"
+			cipher = "2022-blake3-aes-256-gcm"
 		}
-		outboundsList = []map[string]any{
-			{
-				"type":        "shadowsocks",
-				"tag":         "proxy",
-				"server":      host,
-				"server_port": serverPort,
-				"method":      cipher,
-				"password":    c.cfg.Token,
-			},
+		ss := map[string]any{
+			"type":        "shadowsocks",
+			"tag":         "proxy",
+			"server":      host,
+			"server_port": serverPort,
+			"method":      cipher,
+			"password":    c.cfg.Token,
 		}
+		// A v2ray-plugin path makes this Shadowsocks-over-WebSocket+TLS (the
+		// nginx /ss-<user> and /ss22-<user> routes); without one it is the raw
+		// Shadowsocks TCP inbound on 443 or 8388+ and carries no transport.
+		if rawPath != "" {
+			ss["plugin"] = "v2ray-plugin"
+			ss["plugin_opts"] = "tls;host=" + effectiveHostHeader + ";path=" + rawPath + ";mux=0"
+		}
+		outboundsList = []map[string]any{ss}
 
-	case strings.Contains(protoUpper, "TROJAN"):
+	case "TROJAN_WS":
 		outboundsList = []map[string]any{
 			{
 				"type":        "trojan",
@@ -293,7 +306,7 @@ func (c *SingBoxClient) Start() (int, error) {
 			},
 		}
 
-	case strings.Contains(protoUpper, "VMESS"):
+	case "VMESS_WS":
 		outboundsList = []map[string]any{
 			{
 				"type":        "vmess",
@@ -313,8 +326,48 @@ func (c *SingBoxClient) Start() (int, error) {
 			},
 		}
 
-	case strings.Contains(protoUpper, "REALITY") || strings.Contains(protoUpper, "VLESS_TCP"):
-		// VLESS Reality
+	case "VLESS_WS", "VLESS_TCP", "VLESS_HTTPUPGRADE", "VLESS_XHTTP", "VLESS_GRPC":
+		// Every VLESS transport the server renders, selected by exact identity.
+		// MUB-X retired Reality, so there is no Reality branch and no placeholder
+		// key material in the client any more.
+		var transport map[string]any
+		switch proto {
+		case "VLESS_HTTPUPGRADE":
+			transport = map[string]any{
+				"type":    "httpupgrade",
+				"path":    path,
+				"headers": map[string]any{"Host": effectiveHostHeader},
+			}
+		case "VLESS_XHTTP":
+			transport = map[string]any{
+				"type":    "xhttp",
+				"path":    path,
+				"headers": map[string]any{"Host": effectiveHostHeader},
+			}
+		case "VLESS_GRPC":
+			transport = map[string]any{
+				"type":         "grpc",
+				"service_name": strings.TrimPrefix(path, "/"),
+			}
+		case "VLESS_TCP":
+			transport = map[string]any{"type": "tcp"}
+		default:
+			transport = map[string]any{
+				"type":    "ws",
+				"path":    path,
+				"headers": map[string]any{"Host": effectiveHostHeader},
+			}
+		}
+
+		tlsOpts := map[string]any{
+			"enabled":     c.cfg.UseTLS,
+			"server_name": effectiveSni,
+			"insecure":    insecure,
+		}
+		if c.cfg.UseTLS {
+			tlsOpts["utls"] = map[string]any{"enabled": true, "fingerprint": "chrome"}
+		}
+
 		outboundsList = []map[string]any{
 			{
 				"type":        "vless",
@@ -322,50 +375,13 @@ func (c *SingBoxClient) Start() (int, error) {
 				"server":      host,
 				"server_port": serverPort,
 				"uuid":        c.cfg.Token,
-				"flow":        "xtls-rprx-vision",
-				"tls": map[string]any{
-					"enabled":     true,
-					"server_name": effectiveSni,
-					"reality": map[string]any{
-						"enabled":    true,
-						"public_key": "8sV9mQ1xkZ2p8sV9mQ1xkZ2p8sV9mQ1xkZ2p8sV9mQ1x",
-						"short_id":   "4a2e",
-					},
-					"utls": map[string]any{
-						"enabled":     true,
-						"fingerprint": "chrome",
-					},
-				},
+				"tls":         tlsOpts,
+				"transport":   transport,
 			},
 		}
 
 	default:
-		// Default: VLESS WebSocket over TLS/Cloudflare CDN
-		outboundsList = []map[string]any{
-			{
-				"type":        "vless",
-				"tag":         "proxy",
-				"server":      host,
-				"server_port": serverPort,
-				"uuid":        c.cfg.Token,
-				"tls": map[string]any{
-					"enabled":     true,
-					"server_name": effectiveSni,
-					"insecure":    insecure,
-					"utls": map[string]any{
-						"enabled":     true,
-						"fingerprint": "chrome",
-					},
-				},
-				"transport": map[string]any{
-					"type": "ws",
-					"path": path,
-					"headers": map[string]any{
-						"Host": effectiveHostHeader,
-					},
-				},
-			},
-		}
+		return 0, fmt.Errorf("sing-box has no outbound for protocol %q", c.cfg.Protocol)
 	}
 
 	// 4. Construct complete sing-box configuration

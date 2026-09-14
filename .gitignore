@@ -1,0 +1,16 @@
+.aider*
+
+# Local agent/tool state
+.freebuff/
+
+# Generated repository dumps (repomix) - never commit these
+repomix-output.xml
+
+# Android / Gradle / native build outputs
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/jniLibs/
+*.apk
+*.aab

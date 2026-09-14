@@ -89,7 +89,9 @@ type BugHostResult struct {
 	ErrorMsg   string
 }
 
-// StartTunnel initializes the selected protocol engine (T-Brutal or ZiVPN UDP) and local SOCKS5 engine.
+// StartTunnel brings up the engine that owns cfg.Protocol (T-Brutal, ZiVPN UDP,
+// the SSH/HTTP injector, or the sing-box family) plus its local SOCKS5 listener,
+// and returns the loopback port that listener bound.
 func StartTunnel(cfg BridgeConfig) (int, error) {
 	activeMu.Lock()
 	defer activeMu.Unlock()
@@ -105,77 +107,20 @@ func StartTunnel(cfg BridgeConfig) (int, error) {
 		cfg.SocksListenAddr = "127.0.0.1:0" // Dynamic ephemeral port
 	}
 
-	// 1. ZiVPN UDP Protocol Mode
-	if strings.EqualFold(cfg.Protocol, "ZIVPN_UDP") || strings.EqualFold(cfg.Protocol, "ZIVPN") {
-		host, _, err := net.SplitHostPort(cfg.ServerAddr)
-		if err != nil {
-			host = cfg.ServerAddr
-		}
-		zc := NewZiVPNClient(host, host, cfg.PortHopRange, cfg.ObfsKey, cfg.SocksListenAddr)
-		if err := zc.Start(); err != nil {
-			return 0, fmt.Errorf("failed to start ZiVPN client: %w", err)
-		}
-		addr := zc.ListenerAddr()
-		tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
-		if err != nil {
-			zc.Stop()
-			return 0, fmt.Errorf("failed to resolve socks address: %w", err)
-		}
-		socksPort = tcpAddr.Port
-		activeZiVPN = zc
-		runningStatus.Store(true)
-		return socksPort, nil
+	engine, err := engineFor(cfg.Protocol)
+	if err != nil {
+		return 0, err
+	}
+	switch engine {
+	case engineZiVPN:
+		return startZiVPN(cfg)
+	case engineUniversal:
+		return startUniversal(cfg)
+	case engineSingBox:
+		return startSingBox(cfg)
 	}
 
-	// 2. Production-Grade Sing-Box Core (VLESS, Reality, Hysteria2, TUIC, Shadowsocks, ShadowTLS, Trojan, VMess)
-	protoUpper := strings.ToUpper(strings.TrimSpace(cfg.Protocol))
-	if strings.Contains(protoUpper, "VLESS") ||
-		strings.Contains(protoUpper, "REALITY") ||
-		strings.Contains(protoUpper, "HYSTERIA") ||
-		strings.Contains(protoUpper, "TUIC") ||
-		strings.Contains(protoUpper, "TROJAN") ||
-		strings.Contains(protoUpper, "VMESS") ||
-		strings.Contains(protoUpper, "SHADOWSOCKS") ||
-		strings.Contains(protoUpper, "SHADOWTLS") ||
-		strings.Contains(protoUpper, "STLS") ||
-		strings.Contains(protoUpper, "SS") {
-
-		sbc := NewSingBoxClient(cfg)
-		p, err := sbc.Start()
-		if err != nil {
-			LogMsg("WARN", fmt.Sprintf("Sing-Box start note: %v. Falling back to universal client...", err))
-			uc := NewUniversalClient(cfg)
-			p2, err2 := uc.Start()
-			if err2 != nil {
-				return 0, fmt.Errorf("failed to start %s client: %w", cfg.Protocol, err2)
-			}
-			socksPort = p2
-			activeUniversal = uc
-		} else {
-			socksPort = p
-			activeSingBox = sbc
-		}
-		runningStatus.Store(true)
-		return socksPort, nil
-	}
-
-	// 2b. SSH / HTTP Injector Mode
-	if strings.Contains(protoUpper, "SSH") ||
-		strings.Contains(protoUpper, "CUSTOM") ||
-		strings.Contains(protoUpper, "INJECTOR") {
-
-		uc := NewUniversalClient(cfg)
-		p, err := uc.Start()
-		if err != nil {
-			return 0, fmt.Errorf("failed to start %s injector client: %w", cfg.Protocol, err)
-		}
-		socksPort = p
-		activeUniversal = uc
-		runningStatus.Store(true)
-		return socksPort, nil
-	}
-
-	// 3. Default: T-Brutal Wire-Speed Paced Mode
+	// T-Brutal Wire-Speed Paced Mode
 	if cfg.PoolSize <= 0 {
 		cfg.PoolSize = 1
 	}
@@ -214,6 +159,102 @@ func StartTunnel(cfg BridgeConfig) (int, error) {
 
 	socksPort = tcpAddr.Port
 	activeClient = c
+	runningStatus.Store(true)
+	return socksPort, nil
+}
+
+// engineKind identifies the client engine that speaks a protocol.
+type engineKind int
+
+const (
+	engineTBrutal engineKind = iota
+	engineZiVPN
+	engineUniversal
+	engineSingBox
+)
+
+// engineFor maps a protocol identity to the engine that owns it. It is the
+// single place that decides which engine speaks a protocol.
+//
+// This used to be a chain of strings.Contains checks, which routed
+// "SSH_PAYLOAD" into the "SS" branch (it contains the substring "SS") and
+// built a VLESS outbound instead of an SSH tunnel, while "AMNEZIA_WG" matched
+// no branch at all and silently came up as T-Brutal. The match is exact now,
+// and an unrecognized identity is rejected so the wrong engine can never
+// manufacture a tunnel for a protocol it does not speak.
+func engineFor(protocol string) (engineKind, error) {
+	switch strings.ToUpper(strings.TrimSpace(protocol)) {
+	case "ZIVPN_UDP", "ZIVPN":
+		return engineZiVPN, nil
+	case "SSH_PAYLOAD", "SSH", "SSH_INJECTOR", "CUSTOM", "INJECTOR",
+		"CHAMELEON_HTTP", "CHAMELEON":
+		return engineUniversal, nil
+	case "VLESS_WS", "VLESS_TCP", "VLESS_HTTPUPGRADE", "VLESS_XHTTP", "VLESS_GRPC",
+		"VMESS_WS", "TROJAN_WS", "TUIC", "HYSTERIA_2", "SHADOWSOCKS_2022", "SHADOWTLS_V3":
+		return engineSingBox, nil
+	case "T_BRUTAL", "TBRUTAL", "":
+		// Empty protocol is the legacy T-Brutal link.
+		return engineTBrutal, nil
+	default:
+		return 0, fmt.Errorf("unsupported protocol %q: no client engine is available", protocol)
+	}
+}
+
+// startZiVPN brings up the ZiVPN UDP engine and its local SOCKS5 listener.
+func startZiVPN(cfg BridgeConfig) (int, error) {
+	host, _, err := net.SplitHostPort(cfg.ServerAddr)
+	if err != nil {
+		host = cfg.ServerAddr
+	}
+	zc := NewZiVPNClient(host, host, cfg.PortHopRange, cfg.ObfsKey, cfg.SocksListenAddr)
+	if err := zc.Start(); err != nil {
+		return 0, fmt.Errorf("failed to start ZiVPN client: %w", err)
+	}
+	tcpAddr, err := net.ResolveTCPAddr("tcp", zc.ListenerAddr())
+	if err != nil {
+		zc.Stop()
+		return 0, fmt.Errorf("failed to resolve socks address: %w", err)
+	}
+	socksPort = tcpAddr.Port
+	activeZiVPN = zc
+	runningStatus.Store(true)
+	return socksPort, nil
+}
+
+// startUniversal brings up the SSH / HTTP-injector engine and its local
+// SOCKS5 listener.
+func startUniversal(cfg BridgeConfig) (int, error) {
+	uc := NewUniversalClient(cfg)
+	p, err := uc.Start()
+	if err != nil {
+		return 0, fmt.Errorf("failed to start %s injector client: %w", cfg.Protocol, err)
+	}
+	socksPort = p
+	activeUniversal = uc
+	runningStatus.Store(true)
+	return socksPort, nil
+}
+
+// startSingBox brings up the embedded sing-box engine, falling back to the
+// universal client when sing-box rejects the configuration.
+func startSingBox(cfg BridgeConfig) (int, error) {
+	sbc := NewSingBoxClient(cfg)
+	p, err := sbc.Start()
+	if err == nil {
+		socksPort = p
+		activeSingBox = sbc
+		runningStatus.Store(true)
+		return socksPort, nil
+	}
+
+	LogMsg("WARN", fmt.Sprintf("Sing-Box start note: %v. Falling back to universal client...", err))
+	uc := NewUniversalClient(cfg)
+	p2, err2 := uc.Start()
+	if err2 != nil {
+		return 0, fmt.Errorf("failed to start %s client: %w (sing-box: %v)", cfg.Protocol, err2, err)
+	}
+	socksPort = p2
+	activeUniversal = uc
 	runningStatus.Store(true)
 	return socksPort, nil
 }

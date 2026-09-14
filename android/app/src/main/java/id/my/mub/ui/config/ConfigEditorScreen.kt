@@ -186,11 +186,18 @@ fun ConfigEditorScreen(
 
                 val selectableProtocols = listOf(
                     ProtocolType.VLESS_WS,
+                    ProtocolType.VLESS_HTTPUPGRADE,
+                    ProtocolType.VLESS_XHTTP,
+                    ProtocolType.VLESS_GRPC,
                     ProtocolType.VLESS_TCP,
+                    ProtocolType.VMESS_WS,
+                    ProtocolType.TROJAN_WS,
                     ProtocolType.SHADOWTLS_V3,
                     ProtocolType.T_BRUTAL,
                     ProtocolType.SHADOWSOCKS_2022,
                     ProtocolType.HYSTERIA_2,
+                    ProtocolType.TUIC,
+                    ProtocolType.CHAMELEON_HTTP,
                     ProtocolType.SSH_PAYLOAD,
                     ProtocolType.ZIVPN_UDP
                 )

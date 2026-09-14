@@ -23,6 +23,11 @@ type Config struct {
 	ListenAddr string
 	UsersFile  string
 	RateMbps   int
+	// AllowLocalTargets permits CONNECT streams to loopback/private/link-local
+	// destinations. It exists so tests can exercise the full proxy data path
+	// against a local echo server; production deployments must leave it false
+	// to keep the SSRF / open-relay protection in resolveTarget.
+	AllowLocalTargets bool
 }
 
 type prefixConn struct {
@@ -83,6 +88,7 @@ type Server struct {
 	listener   net.Listener
 	chanLn     *chanListener
 	closed     atomic.Bool
+	allowLocal bool
 }
 
 func NewServer(cfg Config) *Server {
@@ -90,9 +96,10 @@ func NewServer(cfg Config) *Server {
 	if cfg.UsersFile == "" { cfg.UsersFile = "/etc/mubx/users.json" }
 
 	s := &Server{
-		cfg:       cfg,
-		authStore: auth.NewStore(cfg.UsersFile),
-		pacer:     pacer.NewPacer(cfg.RateMbps),
+		cfg:        cfg,
+		authStore:  auth.NewStore(cfg.UsersFile),
+		pacer:      pacer.NewPacer(cfg.RateMbps),
+		allowLocal: cfg.AllowLocalTargets,
 	}
 
 	mux := http.NewServeMux()
@@ -150,7 +157,7 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	if _, err := buf.WriteString(resp); err != nil { _ = conn.Close(); return }
 	if err := buf.Flush(); err != nil { _ = conn.Close(); return }
 
-	go NewSession(conn, s.authStore, s.pacer).Handle()
+	go NewSession(conn, s.authStore, s.pacer, s.allowLocal).Handle()
 }
 
 func (s *Server) Start() error {
@@ -189,7 +196,7 @@ func (s *Server) dispatchConn(conn net.Conn) {
 			_ = tc.SetKeepAlive(true)
 			_ = tc.SetKeepAlivePeriod(30 * time.Second)
 		}
-		go NewSession(wrapped, s.authStore, s.pacer).Handle()
+		go NewSession(wrapped, s.authStore, s.pacer, s.allowLocal).Handle()
 		return
 	}
 
