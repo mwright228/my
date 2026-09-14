@@ -67,6 +67,28 @@ jobs:
       - name: Build optimized Android release APK
         working-directory: ./android
         run: ./gradlew clean assembleRelease --stacktrace
+      - name: Verify unsigned APK 16KB ZIP alignment
+        run: |
+          ZIPALIGN="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n1)/zipalign"
+          test -x "$ZIPALIGN"
+          "$ZIPALIGN" -c -P 16 -v 4 android/app/build/outputs/apk/release/app-release-unsigned.apk
+      - name: Verify native ELF LOAD alignment is at least 16KB
+        run: |
+          apk=android/app/build/outputs/apk/release/app-release-unsigned.apk
+          tmp="$RUNNER_TEMP/mubx-apk"
+          rm -rf "$tmp"
+          mkdir -p "$tmp"
+          unzip -q "$apk" 'lib/*.so' -d "$tmp"
+          found=0
+          while IFS= read -r -d '' so; do
+            found=1
+            bad="$(readelf -lW "$so" | awk '$1 == "LOAD" {print $NF}' | grep -vE '^0x(4000|8000|10000|20000|40000|80000|100000)$' || true)"
+            if [ -n "$bad" ]; then
+              echo "[!] $so has a LOAD segment below 16KB alignment: $bad" >&2
+              exit 1
+            fi
+          done < <(find "$tmp/lib" -type f -name '*.so' -print0)
+          test "$found" -eq 1
       - name: Prepare unsigned release artifact
         run: cp android/app/build/outputs/apk/release/app-release-unsigned.apk MUB-X-release-unsigned.apk
       - name: Upload unsigned release artifact
@@ -128,10 +150,15 @@ jobs:
           MUBX_KEYSTORE_PATH: ${{ runner.temp }}/mubx/release.keystore
           MUBX_KEYSTORE_PASSWORD: ${{ secrets.MUBX_ANDROID_KEYSTORE_PASSWORD }}
           MUBX_KEY_ALIAS: ${{ secrets.MUBX_ANDROID_KEY_ALIAS }}
-          MUBX_KEY_PASSWORD: ${{ secrets.MUBX_ANDROID_KEY_PASSWORD }}
+          MUBX_KEY_PASSWORD: ${{ secrets.MUBX_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
           ./gradlew clean testReleaseUnitTest lintRelease assembleRelease --stacktrace
+      - name: Verify signed APK 16KB ZIP alignment
+        run: |
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          ZIPALIGN="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n1)/zipalign"
+          "$ZIPALIGN" -c -P 16 -v 4 "$apk"
       - name: Verify APK is signed
         run: |
           test -f android/app/build/outputs/apk/release/app-release.apk
