@@ -1,20 +1,46 @@
 #!/usr/bin/env bash
 # BASH_ENV hook used only by mubx-users-legacy.
 # Bash reads BASH_ENV for non-interactive scripts before executing the script.
-# See GNU Bash Startup Files documentation.
 
 mubx_users_atomic_install() {
-  local src="$1" dst="$2" mode="0600" dir tmp
-  shift 2 || true
+  local mode="0600" dir tmp src="" dst="" arg
   while [ "$#" -gt 0 ]; do
-    case "$1" in
-      -m) mode="$2"; shift 2 ;;
-      --mode=*) mode="${1#--mode=}"; shift ;;
-      *) shift ;;
+    arg="$1"
+    case "$arg" in
+      -m)
+        [ "$#" -ge 2 ] || { echo "[!] install -m requires a mode." >&2; return 1; }
+        mode="$2"
+        shift 2
+        ;;
+      --mode=*)
+        mode="${arg#--mode=}"
+        shift
+        ;;
+      --)
+        shift
+        while [ "$#" -gt 0 ]; do
+          src="$dst"
+          dst="$1"
+          shift
+        done
+        ;;
+      -*)
+        shift
+        ;;
+      *)
+        src="$dst"
+        dst="$arg"
+        shift
+        ;;
     esac
   done
 
+  [ -n "$src" ] && [ -n "$dst" ] || {
+    echo "[!] Invalid install invocation for user-store transaction." >&2
+    return 1
+  }
   [ -f "$src" ] || { echo "[!] User-store source missing: $src" >&2; return 1; }
+
   dir="$(dirname -- "$dst")"
   command install -d -m 0700 -- "$dir"
   tmp="$(mktemp "$dir/.users.json.XXXXXX")"
