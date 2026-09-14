@@ -21,6 +21,16 @@ if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
   git -C "$ROOT" stash push -u -m "mubx-update-backup-$(date -u +%Y%m%dT%H%M%SZ)"
 fi
 
+# Recover only an actually stale Git index lock. Never remove a lock held by
+# a live process: doing so could corrupt the repository.
+if [ -e "$ROOT/.git/index.lock" ]; then
+  if command -v fuser >/dev/null 2>&1 && fuser "$ROOT/.git/index.lock" >/dev/null 2>&1; then
+    echo "[!] Git index is locked by a live process; refusing concurrent update." >&2
+    exit 75
+  fi
+  rm -f -- "$ROOT/.git/index.lock"
+fi
+
 OLD_HEAD="$(git -C "$ROOT" rev-parse HEAD)"
 OLD_BRANCH="$(git -C "$ROOT" symbolic-ref --short -q HEAD || true)"
 was_active=(); was_enabled=()
